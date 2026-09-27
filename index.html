@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Vō Studio</title>
+  <meta name="description" content="Vō Studio es una agencia de marketing y partner estratégico. Estrategia, marca, contenido y performance para marcas que quieren crecer con dirección." />
+  <meta property="og:title" content="Vō Studio — Agencia de marketing y partner estratégico" />
+  <meta property="og:description" content="Estrategia, marca, contenido y performance para marcas que quieren crecer con dirección." />
+  <meta name="theme-color" content="#F3F3F0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..600;1,6..96,400..600&family=Schibsted+Grotesk:wght@400..600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <a class="skip" href="#contenido">Saltar al contenido</a>
+
+  <header class="nav" data-nav>
+    <a class="nav__logo" href="#top" aria-label="Vō Studio, inicio">
+      <span class="wordmark"><span class="wordmark__vo">V<span class="macron">o</span>.</span><span class="wordmark__studio">Studio</span></span>
+    </a>
+    <nav class="nav__links" aria-label="Principal">
+      <a href="#servicios">Servicios</a>
+      <a href="#proyectos">Proyectos</a>
+      <a href="#metodo">Método</a>
+      <a href="#estudio">Estudio</a>
+    </nav>
+    <a class="btn btn--pill nav__cta" href="#contacto"><span>Hablemos</span><i aria-hidden="true">→</i></a>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-controls="menu" data-menu-toggle>
+      <span class="sr">Abrir menú</span><i></i><i></i>
+    </button>
+  </header>
+
+  <div class="menu" id="menu" hidden data-menu>
+    <nav aria-label="Menú móvil">
+      <a href="#servicios">Servicios</a>
+      <a href="#proyectos">Proyectos</a>
+      <a href="#metodo">Método</a>
+      <a href="#estudio">Estudio</a>
+      <a href="#contacto">Contacto</a>
+    </nav>
+  </div>
+
+  <main id="contenido">
+    <!-- HERO -->
+    <section class="hero" id="top">
+      <div class="hero__stage" aria-hidden="true">
+        <canvas class="hero__canvas" data-scene></canvas>
+        <div class="hero__fallback">ō</div>
+        <div class="hero__shadow" data-depth="0.15"></div>
+      </div>
+
+      <div class="hero__meta wrap">
+        <span class="label">Agencia de marketing<br />&amp; partner estratégico</span>
+        <span class="label hero__status"><i class="dot"></i>Agenda abierta · Q1 2027</span>
+      </div>
+
+      <h1 class="hero__title wrap" data-hero-title>
+        <span class="line"><span>Marcas con</span></span>
+        <span class="line line--indent"><span><em>dirección</em>,</span></span>
+        <span class="line"><span>crecimiento</span></span>
+        <span class="line line--indent2"><span>con criterio.</span></span>
+      </h1>
+
+      <div class="hero__foot wrap">
+        <p class="hero__lede">Pensamos el negocio, construimos la marca y la llevamos al mercado. Trabajamos al lado de tu equipo, como un socio que responde por los resultados.</p>
+        <a class="hero__scroll label" href="#manifiesto">Scroll <i aria-hidden="true">↓</i></a>
+      </div>
+    </section>
+
+    <!-- MARQUEE -->
+    <div class="marquee" aria-label="Capacidades">
+      <div class="marquee__track" data-marquee>
+        <span>Estrategia</span><b>ō</b><span>Branding</span><b>ō</b><span>Contenido</span><b>ō</b><span>Social media</span><b>ō</b><span>Performance</span><b>ō</b><span>Web</span><b>ō</b>
+        <span aria-hidden="true">Estrategia</span><b aria-hidden="true">ō</b><span aria-hidden="true">Branding</span><b aria-hidden="true">ō</b><span aria-hidden="true">Contenido</span><b aria-hidden="true">ō</b><span aria-hidden="true">Social media</span><b aria-hidden="true">ō</b><span aria-hidden="true">Performance</span><b aria-hidden="true">ō</b><span aria-hidden="true">Web</span><b aria-hidden="true">ō</b>
+      </div>
+    </div>
+
+    <!-- MANIFIESTO -->
+    <section class="manifesto wrap" id="manifiesto">
+      <span class="label manifesto__label">(Estudio)</span>
+      <p class="manifesto__text" data-words>
+        No somos un proveedor más. Nos sentamos del mismo lado de la mesa, entendemos cómo gana plata tu negocio y diseñamos la marca y el marketing para que eso pase. Menos ruido, más dirección.
+      </p>
+      <div class="manifesto__aside">
+        <p>Somos un equipo chico y senior de estrategia, diseño y performance. Cada cuenta tiene una persona que la lidera de punta a punta.</p>
+        <a class="link" href="#metodo">Cómo trabajamos <i aria-hidden="true">→</i></a>
+      </div>
+    </section>
+
+    <!-- SERVICIOS -->
+    <section class="services" id="servicios">
+      <div class="wrap">
+        <header class="section-head">
+          <span class="label">(Servicios)</span>
+          <h2 class="section-title">Lo que hacemos,<br /><em>de punta a punta.</em></h2>
+        </header>
+
+        <ul class="svc" role="list">
+          <li class="svc__item" data-svc>
+            <button class="svc__row" type="button" aria-expanded="false">
+              <span class="svc__name">Estrategia de marca</span>
+              <span class="svc__tags label">Posicionamiento · Propuesta de valor · Arquitectura</span>
+              <span class="svc__icon" aria-hidden="true"></span>
+            </button>
+            <div class="svc__body"><div>
+              <p>Definimos dónde jugar y cómo ganar. Investigación de mercado y audiencia, posicionamiento, mensajes clave y un plan de marketing con objetivos medibles.</p>
+              <ul class="chips"><li>Workshops con dirección</li><li>Brand platform</li><li>Plan anual de marketing</li></ul>
+            </div></div>
+          </li>
+          <li class="svc__item" data-svc>
+            <button class="svc__row" type="button" aria-expanded="false">
+              <span class="svc__name">Identidad y branding</span>
+              <span class="svc__tags label">Naming · Identidad visual · Sistema de marca</span>
+              <span class="svc__icon" aria-hidden="true"></span>
+            </button>
+            <div class="svc__body"><div>
+              <p>Construimos marcas que se reconocen al primer vistazo y funcionan en cada punto de contacto, del packaging al feed.</p>
+              <ul class="chips"><li>Logo y sistema visual</li><li>Tono de voz</li><li>Brandbook</li></ul>
+            </div></div>
+          </li>
+          <li class="svc__item" data-svc>
+            <button class="svc__row" type="button" aria-expanded="false">
+              <span class="svc__name">Contenido y redes</span>
+              <span class="svc__tags label">Social media · Producción · Comunidad</span>
+              <span class="svc__icon" aria-hidden="true"></span>
+            </button>
+            <div class="svc__body"><div>
+              <p>Líneas editoriales, producción de foto y video, gestión de comunidad y creadores. Contenido que suma a la marca y al negocio a la vez.</p>
+              <ul class="chips"><li>Calendario editorial</li><li>Producción audiovisual</li><li>Influencer marketing</li></ul>
+            </div></div>
+          </li>
+          <li class="svc__item" data-svc>
+            <button class="svc__row" type="button" aria-expanded="false">
+              <span class="svc__name">Performance y growth</span>
+              <span class="svc__tags label">Paid media · CRO · Analítica</span>
+              <span class="svc__icon" aria-hidden="true"></span>
+            </button>
+            <div class="svc__body"><div>
+              <p>Campañas en Meta, Google y TikTok con foco en costo por adquisición y retorno. Medimos todo y ajustamos cada semana.</p>
+              <ul class="chips"><li>Campañas pagas</li><li>Tableros de KPIs</li><li>Tests A/B</li></ul>
+            </div></div>
+          </li>
+          <li class="svc__item" data-svc>
+            <button class="svc__row" type="button" aria-expanded="false">
+              <span class="svc__name">Web y experiencias digitales</span>
+              <span class="svc__tags label">Sitios · E‑commerce · Landing pages</span>
+              <span class="svc__icon" aria-hidden="true"></span>
+            </button>
+            <div class="svc__body"><div>
+              <p>Sitios rápidos, medibles y con carácter. Desde una landing de campaña hasta un e‑commerce completo.</p>
+              <ul class="chips"><li>Diseño UX/UI</li><li>Desarrollo</li><li>SEO técnico</li></ul>
+            </div></div>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- PROYECTOS -->
+    <section class="work" id="proyectos">
+      <div class="wrap">
+        <header class="section-head section-head--split">
+          <div>
+            <span class="label">(Proyectos seleccionados)</span>
+            <h2 class="section-title">Trabajo que<br /><em>se nota.</em></h2>
+          </div>
+          <p class="section-note">Una muestra de cómo combinamos estrategia, marca y performance en cada proyecto.</p>
+        </header>
+
+        <!-- Proyectos de ejemplo: reemplazar arte, títulos y textos por casos reales. -->
+        <div class="work__grid">
+          <a class="card card--a" href="#contacto" data-depth="0.06" data-cursor="Ver caso">
+            <div class="card__media" data-tilt>
+              <div class="art art--a"><span class="art__word">Brote</span><span class="art__circle"></span></div>
+            </div>
+            <div class="card__info">
+              <h3>Café de especialidad</h3>
+              <span class="label">Rebranding · Lanzamiento</span>
+            </div>
+          </a>
+          <a class="card card--b" href="#contacto" data-depth="-0.08" data-cursor="Ver caso">
+            <div class="card__media" data-tilt>
+              <div class="art art--b"><span class="art__grid"></span><span class="art__word">Norte</span></div>
+            </div>
+            <div class="card__info">
+              <h3>Estudio de arquitectura</h3>
+              <span class="label">Identidad · Web</span>
+            </div>
+          </a>
+          <a class="card card--c" href="#contacto" data-depth="0.1" data-cursor="Ver caso">
+            <div class="card__media" data-tilt>
+              <div class="art art--c"><span class="art__bars"><i></i><i></i><i></i><i></i></span><span class="art__word">+ventas</span></div>
+            </div>
+            <div class="card__info">
+              <h3>E‑commerce de indumentaria</h3>
+              <span class="label">Performance · CRO</span>
+            </div>
+          </a>
+          <a class="card card--d" href="#contacto" data-depth="-0.04" data-cursor="Ver caso">
+            <div class="card__media" data-tilt>
+              <div class="art art--d"><span class="art__word">Casa<br />Alba</span><span class="art__sun"></span></div>
+            </div>
+            <div class="card__info">
+              <h3>Hotel boutique</h3>
+              <span class="label">Contenido · Redes</span>
+            </div>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- MÉTODO (secuencia real: el orden importa) -->
+    <section class="method" id="metodo">
+      <div class="wrap">
+        <header class="section-head">
+          <span class="label">(Método)</span>
+          <h2 class="section-title">Cómo trabaja<br /><em>un partner.</em></h2>
+        </header>
+        <ol class="steps" role="list">
+          <li class="step">
+            <span class="step__n">01</span>
+            <h3>Diagnóstico</h3>
+            <p>Entendemos el negocio, los números y la competencia. Auditamos marca, canales y resultados actuales.</p>
+            <span class="label step__time">2–3 semanas</span>
+          </li>
+          <li class="step">
+            <span class="step__n">02</span>
+            <h3>Estrategia</h3>
+            <p>Posicionamiento, objetivos y un plan con prioridades claras. Todo aterrizado en presupuesto y plazos.</p>
+            <span class="label step__time">2–4 semanas</span>
+          </li>
+          <li class="step">
+            <span class="step__n">03</span>
+            <h3>Ejecución</h3>
+            <p>Marca, contenido, campañas y web. Un solo equipo coordinado, sin pasar la pelota entre proveedores.</p>
+            <span class="label step__time">Continuo</span>
+          </li>
+          <li class="step">
+            <span class="step__n">04</span>
+            <h3>Medición y ajuste</h3>
+            <p>Reportes mensuales con lo que funcionó, lo que no y qué hacemos después. Sin métricas de vanidad.</p>
+            <span class="label step__time">Mensual</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ESTUDIO -->
+    <section class="studio wrap" id="estudio">
+      <div class="studio__art" aria-hidden="true">
+        <div class="layer layer--1" data-depth="-0.12"></div>
+        <div class="layer layer--2" data-depth="0.05"><span>V</span></div>
+        <div class="layer layer--3" data-depth="0.18"><span>ō.</span></div>
+      </div>
+      <div class="studio__copy">
+        <span class="label">(Por qué Vō)</span>
+        <h2 class="section-title">Pensamos como<br /><em>dueños.</em></h2>
+        <ul class="reasons" role="list">
+          <li><strong>Seniors en cada cuenta.</strong> Las personas que te venden el proyecto son las que lo hacen.</li>
+          <li><strong>Estrategia y ejecución juntas.</strong> La idea y la campaña salen del mismo equipo.</li>
+          <li><strong>Resultados a la vista.</strong> Tableros compartidos y objetivos acordados desde el día uno.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- CONTACTO -->
+    <section class="contact" id="contacto">
+      <div class="wrap contact__inner">
+        <span class="label">(Contacto)</span>
+        <h2 class="contact__title"><span>¿Tenés un</span> <span><em>proyecto?</em></span></h2>
+        <form class="form" data-form novalidate>
+          <div class="field">
+            <label for="f-nombre">Nombre</label>
+            <input id="f-nombre" name="nombre" type="text" autocomplete="name" required />
+          </div>
+          <div class="field">
+            <label for="f-email">Email</label>
+            <input id="f-email" name="email" type="email" autocomplete="email" required />
+          </div>
+          <div class="field">
+            <label for="f-empresa">Empresa</label>
+            <input id="f-empresa" name="empresa" type="text" autocomplete="organization" />
+          </div>
+          <fieldset class="field field--full">
+            <legend>¿Qué necesitás?</legend>
+            <div class="choices">
+              <label><input id="f-s1" type="checkbox" name="servicio" value="Estrategia" /><span>Estrategia</span></label>
+              <label><input id="f-s2" type="checkbox" name="servicio" value="Branding" /><span>Branding</span></label>
+              <label><input id="f-s3" type="checkbox" name="servicio" value="Contenido" /><span>Contenido y redes</span></label>
+              <label><input id="f-s4" type="checkbox" name="servicio" value="Performance" /><span>Performance</span></label>
+              <label><input id="f-s5" type="checkbox" name="servicio" value="Web" /><span>Web</span></label>
+            </div>
+          </fieldset>
+          <div class="field field--full">
+            <label for="f-mensaje">Contanos del proyecto</label>
+            <textarea id="f-mensaje" name="mensaje" rows="3" required></textarea>
+          </div>
+          <div class="form__foot">
+            <p class="form__status" role="status" aria-live="polite" data-form-status></p>
+            <button class="btn btn--pill btn--light" type="submit"><span>Enviar</span><i aria-hidden="true">→</i></button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer__top">
+      <p class="footer__claim">Agencia de marketing y partner estratégico.</p>
+      <nav class="footer__links" aria-label="Pie de página">
+        <a href="#servicios">Servicios</a>
+        <a href="#proyectos">Proyectos</a>
+        <a href="#metodo">Método</a>
+        <a href="#contacto">Contacto</a>
+      </nav>
+      <nav class="footer__links" aria-label="Redes">
+        <a href="#" data-todo>Instagram</a>
+        <a href="#" data-todo>LinkedIn</a>
+        <a href="#" data-todo>Behance</a>
+      </nav>
+    </div>
+    <div class="footer__mark wrap" aria-hidden="true">
+      <span class="wordmark wordmark--giant"><span class="wordmark__vo">V<span class="macron">o</span>.</span><span class="wordmark__studio">Studio</span></span>
+    </div>
+    <div class="wrap footer__base">
+      <span class="label">© 2026 Vō Studio</span>
+      <a class="label" href="#top">Volver arriba ↑</a>
+    </div>
+  </footer>
+
+  <div class="cursor" aria-hidden="true" data-cursor-el><span></span></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
