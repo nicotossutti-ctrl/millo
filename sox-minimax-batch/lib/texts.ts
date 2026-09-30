@@ -19,14 +19,16 @@ const s = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
 // Igual que s() pero respeta los saltos de línea (las descripciones vienen en párrafos).
 const para = (v: unknown) =>
   String(v ?? '').replace(/\r/g, '').split('\n').map((l) => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
-const codes = (v: unknown) => s(v).toUpperCase().split(/\s*[·,|/]\s*/).filter(Boolean);
+// Códigos sin espacios: el catálogo escribe "SOX X COVE 2" y las fotos "SOXXCOVE2".
+const code = (v: unknown) => s(v).toUpperCase().replace(/\s+/g, '');
+const codes = (v: unknown) => s(v).split(/\s*[·,|/]\s*/).map(code).filter(Boolean);
 
 /** Códigos que existen en el catálogo SOX (para validar uniones tipo TE215 → TE215C). */
 export async function catalogCodes(): Promise<Set<string>> {
   const id = process.env.DRIVE_CATALOG_FILE_ID;
   if (!id) return new Set();
   const sheets = await workbook(id);
-  return new Set(Object.values(sheets).flat().map((r) => s(r.Codigo).toUpperCase()).filter(Boolean));
+  return new Set(Object.values(sheets).flat().map((r) => code(r.Codigo)).filter(Boolean));
 }
 
 /** Busca la publicación x1 del SKU en PF_Master (hoja PUBLICACIONES_OBJETIVO). */
@@ -40,7 +42,7 @@ export function fromMaster(sheets: Record<string, Row[]>, sku: string) {
 
 /** Datos técnicos del catálogo SOX (el texto largo del catálogo viene cortado del PDF, no se usa). */
 export function fromCatalog(sheets: Record<string, Row[]>, sku: string) {
-  const rows = Object.values(sheets).flat().filter((r) => s(r.Codigo).toUpperCase() === sku);
+  const rows = Object.values(sheets).flat().filter((r) => code(r.Codigo) === sku);
   const row = rows.find((r) => s(r.Tipo_Pack).toLowerCase() === 'unitario') || rows[0];
   if (!row) return null;
   return {

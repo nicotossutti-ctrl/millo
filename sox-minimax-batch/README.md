@@ -5,10 +5,11 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
 ## Qué hace, exactamente
 
 1. **Escanea todo el Drive** desde la carpeta raíz y agrupa las fotos por el **nombre del archivo** (`TE132B-C1-NEGRO-01.webp` → SKU TE132B, color Negro). No importa en qué carpeta estén.
-   - Descarta las `ALL` (la foto con todas juntas), las texturas y las carpetas "Fotos en contexto".
-   - De cada color usa **una sola foto**: la `-01` si hay varios ángulos.
-   - Si el color tiene versión **fondo oscuro** (`-DARK`), usa esas. Si al SKU le falta la versión oscura de algún color, usa las originales para que no falte ninguno. En la pantalla lo podés cambiar.
-   - Las tomas `REFLECTIVO` se usan sólo si ese color no tiene otra foto.
+   - Usa **sólo las fotos originales**: las `-DARK` (fondo oscuro) no se usan. Si un color existe sólo en DARK, la pantalla lo avisa.
+   - Descarta las `ALL` y las de `PACK` (fotos grupales), las copias (`(1)`, `- copia`), las texturas y las carpetas "Fotos en contexto".
+   - De cada color usa **una sola foto**: la `-01` si hay varios ángulos. Las tomas `-OFF` / `REFLECTIVO` se usan sólo si ese color no tiene otra.
+   - Productos de un solo color sin color en el nombre (`DE450C-01.webp`, `FU36B-FRENTE.webp`) salen como una variante "Único" (FRENTE es la vista principal).
+   - Prefijos como `DAMA`/`HOMBRE` quedan en la etiqueta: "Negro (Dama)".
    - Códigos sin letra final: fotos `TE215-…` se suman a `TE215C` **sólo si** `TE215` no existe en el catálogo SOX y `TE215C` sí (lo marca en pantalla). Si hace falta forzar una unión, variable `SKU_ALIASES` (ej. `TE215=TE215C`).
    - En cada SKU ves las miniaturas y **podés sacar variantes con un clic** antes de generar.
 2. **Prepara cada foto en 9:16** (1080×1920), estirando el fondo de la misma foto, sin franjas negras.
@@ -34,6 +35,7 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
 **Control de gasto**
 - Antes de generar te muestra el costo estimado y te pide confirmación.
 - Los SKUs que ya tienen video en TERMINADOS se marcan y se ocultan.
+- **Procesar N pendientes** sólo incluye SKUs que existen en el catálogo SOX. Los que aparecen como "fuera del catálogo" (por ejemplo la línea reflectiva que no está en PV 26/27) se pueden procesar uno por uno.
 - Nunca se vuelve a pagar un clip que ya salió bien: si se corta algo (cerraste la pestaña, falló una variante, venció el link de un clip), **Reintentar** regenera sólo lo que falta o falló. Queda guardado en ese navegador.
 
 ---

@@ -31,7 +31,7 @@ async function finishedSkus(outputId: string) {
   return done;
 }
 
-export type ScannedProduct = Product & { done: boolean };
+export type ScannedProduct = Product & { done: boolean; inCatalog: boolean };
 
 export async function scanProducts(rootId: string, outputId?: string): Promise<ScannedProduct[]> {
   const skip = new Set(outputId ? [outputId] : []);
@@ -42,5 +42,6 @@ export async function scanProducts(rootId: string, outputId?: string): Promise<S
   const unique = images.filter((f) => (seen.has(f.name) ? false : (seen.add(f.name), true)));
   const products = groupProducts(unique, { knownCodes, aliases: parseAliases(process.env.SKU_ALIASES) });
   const done = outputId ? await finishedSkus(outputId) : new Set<string>();
-  return products.map((p) => ({ ...p, done: done.has(p.sku) }));
+  // Si el catálogo no se pudo leer no se marca nada como "fuera del catálogo".
+  return products.map((p) => ({ ...p, done: done.has(p.sku), inCatalog: !knownCodes.size || knownCodes.has(p.sku) }));
 }

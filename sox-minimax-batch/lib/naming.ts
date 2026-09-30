@@ -1,9 +1,15 @@
 // Interpreta los nombres de archivo de las fotos. Ejemplos reales del Drive:
 //   TE132B-C1-NEGRO-01.webp        foto original, ángulo 01 del color C1
-//   TE132B-C1-NEGRO-DARK.png       misma variante, versión fondo oscuro
+//   TE132B-C1-NEGRO-DARK.png       versión fondo oscuro (NO se usa, sólo se reporta)
 //   TE132B-ALL.webp / -ALL-DARK    foto con todas las variantes (se descarta)
-//   CI35C-C1-BLANCO-REFLECTIVO-DARK.png   toma con flash del mismo color (se usa sólo si no hay otra)
-//   TE260C-NEGRO-DARK.png          variante sin número de color
+//   CI35C-C2-NEGRO-01-OFF.webp     toma alternativa (luz apagada) del mismo color: sólo si no hay otra
+//   CI35C-C1-BLANCO-REFLECTIVO-DARK.png   idem, con flash
+//   DE450C-01.webp                 producto de un solo color, sin color en el nombre → variante "Único"
+//   CI35C.webp                     foto general sin color: se descarta si el SKU tiene colores
+//   NI322C-C3-VERDE AGUA-01.webp   colores con espacio = con guion
+//   FU36B-FRENTE.webp / -TALÓN     vistas de un mismo producto: FRENTE es la principal
+//   DE170C-DAMA-C1-NEGRO-01.webp   prefijo antes del color → "Negro (Dama)"
+//   Se descartan: copias "(1)" / "- copia", fotos de PACK, nombres en minúscula (descargas).
 
 export type ParsedImage = {
   sku: string;
@@ -11,51 +17,64 @@ export type ParsedImage = {
   label: string; // lo que se muestra, ej. "Negro"
   order: number; // número de color (C1 → 1) para ordenar
   dark: boolean;
-  reflective: boolean;
+  alt: boolean; // toma alternativa (OFF / REFLECTIVO)
   angle: number; // 01, 02, 03… (0 si no tiene)
 };
 
 const SKU_RE = /^[A-ZÑ]+\d+[A-Z]?$/;
+// Vistas que no son colores: FRENTE es la toma principal, el resto son alternativas.
+const MAIN_VIEW = new Set(['FRENTE']);
+const ALT_VIEWS = new Set(['TALÓN', 'TALON', 'LATERAL', 'PERFIL', 'DETALLE', 'RELLENO', 'ESPALDA', 'SUELA', 'PLANTA', 'COSTADO']);
+// Fotos grupales o de pack: no son una variante.
+const GROUP = new Set(['ALL', 'PACK', 'TRIPACK', 'PACKS']);
 
 export function parseImageName(fileName: string): ParsedImage | null {
   const base = fileName.normalize('NFC').replace(/\.[a-z0-9]+$/i, '').trim();
-  if (/[_\s()]/.test(base.split('-')[0] || '')) return null;
-  const tokens = base.split('-').map((t) => t.trim().toUpperCase()).filter(Boolean);
+  const first = base.split('-')[0] || '';
+  // Copias ("(1)", "- copia"), nombres con _ o en minúscula (descargas de la web) no son fotos de catálogo.
+  if (/[_\s()]/.test(first) || first !== first.toUpperCase() || /\(\d+\)|\bcopia\b/i.test(base)) return null;
+  const tokens = base.split(/[-\s]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
   const sku = tokens.shift();
   if (!sku || !SKU_RE.test(sku)) return null;
-  if (tokens.includes('ALL')) return null;
+  if (tokens.some((t) => GROUP.has(t))) return null;
 
   let dark = false;
-  let reflective = false;
+  let alt = false;
   let angle = 0;
   const rest: string[] = [];
   for (const t of tokens) {
     if (t === 'DARK') dark = true;
-    else if (t === 'REFLECTIVO') reflective = true;
+    else if (t === 'REFLECTIVO' || t === 'OFF' || ALT_VIEWS.has(t)) alt = true;
+    else if (MAIN_VIEW.has(t)) continue;
     else rest.push(t);
   }
   if (rest.length && /^\d{1,2}$/.test(rest[rest.length - 1])) angle = Number(rest.pop());
-  if (!rest.length) return null;
+  if (!rest.length) return { sku, key: UNICO, label: 'Único', order: 0, dark, alt, angle };
 
   const key = rest.join('-');
-  const m = /^C(\d+)$/.exec(rest[0]);
-  const order = m ? Number(m[1]) : 99;
-  const words = m ? rest.slice(1) : rest;
-  const label = (words.length ? words : rest).map(titleCase).join(' ');
-  return { sku, key, label, order, dark, reflective, angle };
+  // El número de color (C1, C2…) puede venir después de un prefijo, ej. DAMA-C1-NEGRO.
+  // Si hay dos (DE170C-C2-C1-NEGRO-AMARILLO: modelo C2, color C1), el color es el último.
+  const ci = rest.map((w) => /^C\d+$/.test(w)).lastIndexOf(true);
+  const order = ci >= 0 ? Number(rest[ci].slice(1)) : 99;
+  const prefix = ci > 0 ? rest.slice(0, ci) : [];
+  const words = ci >= 0 ? rest.slice(ci + 1) : rest;
+  const color = (words.length ? words : rest).map(titleCase).join(' ');
+  const label = prefix.length ? `${color} (${prefix.map(titleCase).join(' ')})` : color;
+  return { sku, key, label, order, dark, alt, angle };
 }
+
+export const UNICO = 'UNICO';
 
 export function titleCase(w: string) {
   return w.charAt(0) + w.slice(1).toLowerCase();
 }
 
 export type FileRef = { id: string; name: string };
-export type Variant = { key: string; label: string; order: number; fileId: string; fileName: string; reflective: boolean };
+export type Variant = { key: string; label: string; order: number; fileId: string; fileName: string; alt: boolean };
 export type Product = {
   sku: string;
-  sets: { oscuro: Variant[]; original: Variant[] };
-  source: 'oscuro' | 'original';
-  missingInDark: string[]; // variantes que tienen foto original pero no versión oscura
+  variants: Variant[]; // sólo fotos originales: las -DARK no se usan
+  onlyInDark: string[]; // colores que existen sólo como -DARK (no entran en el video; se avisan)
   mergedFrom: string[]; // códigos de foto que se unieron a este SKU (ej. TE215 → TE215C)
 };
 
@@ -91,26 +110,26 @@ export function parseAliases(spec?: string): Record<string, string> {
 type Candidate = FileRef & ParsedImage;
 
 function better(a: Candidate, b: Candidate) {
-  // Preferimos: no reflectiva, ángulo más bajo (01), nombre más corto.
-  if (a.reflective !== b.reflective) return a.reflective ? b : a;
+  // Preferimos: toma normal (no OFF/REFLECTIVO), ángulo más bajo (01), nombre más corto.
+  if (a.alt !== b.alt) return a.alt ? b : a;
   const aa = a.angle || 99;
   const ba = b.angle || 99;
   if (aa !== ba) return aa < ba ? a : b;
   return a.name.length <= b.name.length ? a : b;
 }
 
-function pickVariants(cands: Candidate[]): Variant[] {
+function pickVariants(all: Candidate[]): Variant[] {
+  // Una foto sin color (CI35C.webp) sólo cuenta si el SKU no tiene colores (producto de un solo color).
+  const colored = all.filter((c) => c.key !== UNICO);
+  const cands = colored.length ? colored : all;
   const byKey = new Map<string, Candidate>();
   for (const c of cands) {
     const cur = byKey.get(c.key);
     byKey.set(c.key, cur ? better(cur, c) : c);
   }
-  // Si existe la versión normal de un color, descartamos la toma reflectiva de ese mismo color.
-  const normalKeys = new Set([...byKey.values()].filter((c) => !c.reflective).map((c) => c.key));
   return [...byKey.values()]
-    .filter((c) => !c.reflective || !normalKeys.has(c.key))
     .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key, 'es'))
-    .map((c) => ({ key: c.key, label: c.label, order: c.order, fileId: c.id, fileName: c.name, reflective: c.reflective }));
+    .map((c) => ({ key: c.key, label: c.label, order: c.order, fileId: c.id, fileName: c.name, alt: c.alt }));
 }
 
 export function groupProducts(files: FileRef[], opts: GroupOptions = {}): Product[] {
@@ -128,19 +147,12 @@ export function groupProducts(files: FileRef[], opts: GroupOptions = {}): Produc
 
   const out: Product[] = [];
   for (const [sku, cands] of bySku) {
-    const oscuro = pickVariants(cands.filter((c) => c.dark));
-    const original = pickVariants(cands.filter((c) => !c.dark));
-    if (!oscuro.length && !original.length) continue;
-    const darkLabels = new Set(oscuro.map((v) => v.label));
-    const missingInDark = oscuro.length ? original.filter((v) => !darkLabels.has(v.label)).map((v) => v.label) : [];
-    out.push({
-      sku,
-      sets: { oscuro, original },
-      // Fondo oscuro sólo si están todos los colores; si no, el video quedaría con colores de menos.
-      source: oscuro.length && (!missingInDark.length || !original.length) ? 'oscuro' : 'original',
-      missingInDark,
-      mergedFrom: [...(merged.get(sku) || [])],
-    });
+    const variants = pickVariants(cands.filter((c) => !c.dark));
+    const have = new Set(variants.map((v) => v.label));
+    // En productos de un solo color ("Único") la DARK es el mismo producto: no hay nada que avisar.
+    const single = variants.length === 1 && variants[0].key === UNICO;
+    const onlyInDark = single ? [] : [...new Set(pickVariants(cands.filter((c) => c.dark)).map((v) => v.label))].filter((l) => l !== 'Único' && !have.has(l));
+    out.push({ sku, variants, onlyInDark, mergedFrom: [...(merged.get(sku) || [])] });
   }
   return out.sort((a, b) => a.sku.localeCompare(b.sku, 'es', { numeric: true }));
 }

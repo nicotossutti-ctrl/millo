@@ -1,17 +1,16 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-type Variant = { key: string; label: string; fileId: string; fileName: string; reflective: boolean };
+type Variant = { key: string; label: string; fileId: string; fileName: string; alt: boolean };
 type Product = {
   sku: string;
-  sets: { oscuro: Variant[]; original: Variant[] };
-  source: 'oscuro' | 'original';
-  missingInDark: string[];
+  variants: Variant[];
+  onlyInDark: string[];
   mergedFrom: string[];
   done: boolean;
+  inCatalog: boolean;
 };
-type Source = 'oscuro' | 'original';
-type Sel = { source: Source; off: string[] };
+type Sel = { off: string[] };
 type Motion = { peak: number; end: number };
 type Item = {
   fileId: string;
@@ -105,10 +104,10 @@ export default function Page() {
     return run;
   }
 
-  const selOf = (p: Product): Sel => sel[p.sku] || { source: p.source, off: [] };
+  const selOf = (p: Product): Sel => ({ off: sel[p.sku]?.off || [] });
   const variantsOf = (p: Product) => {
     const s = selOf(p);
-    return (p.sets[s.source] || []).filter((v) => !s.off.includes(v.key));
+    return p.variants.filter((v) => !s.off.includes(v.key));
   };
   const secondsFor = (n: number) => clipTable[n] || Math.min(15, Math.max(4, Math.round(15 / Math.max(1, n))));
 
@@ -236,7 +235,8 @@ export default function Page() {
   }
 
   async function runBatch() {
-    const todo = shown.filter((p) => !p.done && variantsOf(p).length);
+    // El lote sólo incluye SKUs del catálogo SOX; los demás se procesan de a uno si hace falta.
+    const todo = shown.filter((p) => !p.done && p.inCatalog && variantsOf(p).length);
     if (!todo.length) return alert('No hay SKUs pendientes en la lista.');
     const total = todo.reduce((a, p) => a + planFor(p).cost, 0);
     if (!confirm(`Se van a procesar ${todo.length} SKUs.\nCosto estimado en MiniMax: ${usd(total)} (sin contar reintentos).\n\n¿Arrancamos?`)) return;
@@ -277,14 +277,15 @@ export default function Page() {
     alert(ok ? (j.hasScript ? `TXT de ${p.sku} actualizado con tu guion.` : `TXT de ${p.sku} actualizado, pero no encontré un Google Doc llamado ${p.sku}.`) : j.error);
   }
 
-  const pendingCost = shown.filter((p) => !p.done).reduce((a, p) => a + planFor(p, jobs).cost, 0);
+  const pending = shown.filter((p) => !p.done && p.inCatalog && p.variants.length);
+  const pendingCost = pending.reduce((a, p) => a + planFor(p, jobs).cost, 0);
   const ready = status?.connected && !status.missing.length;
 
   return (
     <main>
       <h1>SOX · Videos 360°</h1>
       <p>
-        Drive → una foto por color (sin las ALL) → MiniMax gira cada media una vuelta → se ajusta la velocidad para que el total dure 15 s → MP4 vertical + TXT en
+        Drive → una foto original por color (sin ALL ni DARK) → MiniMax gira cada media una vuelta → se ajusta la velocidad para que el total dure 15 s → MP4 vertical + TXT en
         <b> TERMINADOS - VIDEOS</b>.
       </p>
 
@@ -331,8 +332,8 @@ export default function Page() {
           </div>
           <div className="row" style={{ marginTop: 12 }}>
             {!batch ? (
-              <button disabled={!shown.some((p) => !p.done)} onClick={runBatch}>
-                Procesar {shown.filter((p) => !p.done).length} pendientes · ≈ {usd(pendingCost)}
+              <button disabled={!pending.length} onClick={runBatch}>
+                Procesar {pending.length} pendientes · ≈ {usd(pendingCost)}
               </button>
             ) : (
               <button className="secondary" onClick={() => (stopRef.current = true)}>
@@ -361,7 +362,7 @@ export default function Page() {
             <tbody>
               {shown.map((p) => {
                 const s = selOf(p);
-                const set = p.sets[s.source];
+                const set = p.variants;
                 const job = jobs[p.sku];
                 const busy = running.has(p.sku);
                 const plan = planFor(p, jobs);
@@ -383,13 +384,10 @@ export default function Page() {
                       <b>{p.sku}</b>
                       <br />
                       {p.done && <span className="badge ok">terminado</span>}
-                      {p.sets.oscuro.length > 0 && p.sets.original.length > 0 ? (
-                        <select value={s.source} disabled={busy} onChange={(e) => patchSel(p.sku, { source: e.target.value as Source, off: [] })}>
-                          <option value="oscuro">fondo oscuro</option>
-                          <option value="original">fotos originales</option>
-                        </select>
-                      ) : (
-                        <small>{s.source === 'oscuro' ? 'fondo oscuro' : 'fotos originales'}</small>
+                      {!p.inCatalog && (
+                        <span className="badge warn" title="Este código no está en el catálogo SOX: no entra en el lote, se puede procesar solo">
+                          fuera del catálogo
+                        </span>
                       )}
                       {p.mergedFrom.length > 0 && (
                         <>
@@ -416,7 +414,10 @@ export default function Page() {
                           );
                         })}
                       </div>
-                      {s.source === 'oscuro' && p.missingInDark.length > 0 && <small className="warn">Sin versión oscura: {p.missingInDark.join(', ')}</small>}
+                      {!set.length && <small className="err">Sin fotos originales (sólo hay versión DARK, que no se usa).</small>}
+                      {set.length > 0 && p.onlyInDark.length > 0 && (
+                        <small className="warn">Sólo en DARK, no entran en el video: {p.onlyInDark.join(', ')}</small>
+                      )}
                       {clips.length > 0 && (
                         <div className="clips">
                           <small>Clips generados (pasá el mouse para verlos · ↻ marca uno para regenerar sólo ese):</small>
