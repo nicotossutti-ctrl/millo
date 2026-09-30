@@ -56,7 +56,37 @@ export type Product = {
   sets: { oscuro: Variant[]; original: Variant[] };
   source: 'oscuro' | 'original';
   missingInDark: string[]; // variantes que tienen foto original pero no versión oscura
+  mergedFrom: string[]; // códigos de foto que se unieron a este SKU (ej. TE215 → TE215C)
 };
+
+export type GroupOptions = {
+  /** Códigos que existen en el catálogo SOX. Sin esto no se une ningún código. */
+  knownCodes?: Set<string>;
+  /** Uniones explícitas, ej. { TE215: 'TE215C' }. Tienen prioridad. */
+  aliases?: Record<string, string>;
+};
+
+/**
+ * Algunas fotos vienen sin la letra final (TE215-…) y el artículo es TE215C.
+ * Sólo se une si TE215 NO es un código del catálogo y hay exactamente un código TE215<letra>.
+ */
+export function resolveSku(sku: string, opts: GroupOptions): string {
+  const alias = opts.aliases?.[sku];
+  if (alias) return alias;
+  const known = opts.knownCodes;
+  if (!known?.size || known.has(sku) || !/\d$/.test(sku)) return sku;
+  const matches = [...known].filter((k) => k.length === sku.length + 1 && k.startsWith(sku) && /[A-Z]$/.test(k));
+  return matches.length === 1 ? matches[0] : sku;
+}
+
+export function parseAliases(spec?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of (spec || '').split(/[,;\s]+/)) {
+    const [from, to] = pair.split(/[=:>]+/).map((x) => x?.trim().toUpperCase());
+    if (from && to) out[from] = to;
+  }
+  return out;
+}
 
 type Candidate = FileRef & ParsedImage;
 
@@ -83,25 +113,17 @@ function pickVariants(cands: Candidate[]): Variant[] {
     .map((c) => ({ key: c.key, label: c.label, order: c.order, fileId: c.id, fileName: c.name, reflective: c.reflective }));
 }
 
-export function groupProducts(files: FileRef[]): Product[] {
+export function groupProducts(files: FileRef[], opts: GroupOptions = {}): Product[] {
   const bySku = new Map<string, Candidate[]>();
+  const merged = new Map<string, Set<string>>();
   for (const f of files) {
     const p = parseImageName(f.name);
     if (!p) continue;
-    const list = bySku.get(p.sku) || [];
-    list.push({ ...f, ...p });
-    bySku.set(p.sku, list);
-  }
-
-  // Algunas fotos originales vienen sin la letra final (TE215-…) y las oscuras con ella (TE215C-…).
-  for (const sku of [...bySku.keys()]) {
-    if (!/\d$/.test(sku)) continue;
-    const withLetter = [...bySku.keys()].filter((k) => k.length === sku.length + 1 && k.startsWith(sku) && /[A-Z]$/.test(k));
-    if (withLetter.length === 1) {
-      const target = withLetter[0];
-      bySku.set(target, [...bySku.get(target)!, ...bySku.get(sku)!.map((c) => ({ ...c, sku: target }))]);
-      bySku.delete(sku);
-    }
+    const sku = resolveSku(p.sku, opts);
+    if (sku !== p.sku) merged.set(sku, (merged.get(sku) || new Set()).add(p.sku));
+    const list = bySku.get(sku) || [];
+    list.push({ ...f, ...p, sku });
+    bySku.set(sku, list);
   }
 
   const out: Product[] = [];
@@ -117,6 +139,7 @@ export function groupProducts(files: FileRef[]): Product[] {
       // Fondo oscuro sólo si están todos los colores; si no, el video quedaría con colores de menos.
       source: oscuro.length && (!missingInDark.length || !original.length) ? 'oscuro' : 'original',
       missingInDark,
+      mergedFrom: [...(merged.get(sku) || [])],
     });
   }
   return out.sort((a, b) => a.sku.localeCompare(b.sku, 'es', { numeric: true }));

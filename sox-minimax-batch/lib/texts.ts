@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { downloadFile } from './google';
+import { downloadFile, exportText, query, q } from './google';
 
 export type Row = Record<string, unknown>;
 const cache = new Map<string, { at: number; sheets: Record<string, Row[]> }>();
@@ -20,6 +20,14 @@ const s = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
 const para = (v: unknown) =>
   String(v ?? '').replace(/\r/g, '').split('\n').map((l) => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 const codes = (v: unknown) => s(v).toUpperCase().split(/\s*[·,|/]\s*/).filter(Boolean);
+
+/** Códigos que existen en el catálogo SOX (para validar uniones tipo TE215 → TE215C). */
+export async function catalogCodes(): Promise<Set<string>> {
+  const id = process.env.DRIVE_CATALOG_FILE_ID;
+  if (!id) return new Set();
+  const sheets = await workbook(id);
+  return new Set(Object.values(sheets).flat().map((r) => s(r.Codigo).toUpperCase()).filter(Boolean));
+}
 
 /** Busca la publicación x1 del SKU en PF_Master (hoja PUBLICACIONES_OBJETIVO). */
 export function fromMaster(sheets: Record<string, Row[]>, sku: string) {
@@ -44,25 +52,54 @@ export function fromCatalog(sheets: Record<string, Row[]>, sku: string) {
   };
 }
 
+/**
+ * Tu guion hablado: un Google Doc con el nombre exacto del SKU (como los de la carpeta CLIPS).
+ * Si hay varios, usa el último modificado.
+ */
+export async function scriptFor(sku: string, alsoNames: string[] = []) {
+  const names = [sku, ...alsoNames].map((n) => `name = '${q(n)}'`).join(' or ');
+  const docs = await query(`trashed=false and mimeType='application/vnd.google-apps.document' and (${names})`, 'id,name,modifiedTime');
+  docs.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
+  for (const d of docs) {
+    const text = para(await exportText(d.id));
+    if (text) return text;
+  }
+  return null;
+}
+
 const sheetsOf = async (id?: string) => (id ? workbook(id).catch(() => null) : null);
 
 /** Arma el TXT que acompaña al video. Si una fuente falla, sigue con lo que haya. */
-export async function productText(sku: string, colors: string[]) {
-  const [masterSheets, catalogSheets] = await Promise.all([sheetsOf(process.env.DRIVE_TEXTS_FILE_ID), sheetsOf(process.env.DRIVE_CATALOG_FILE_ID)]);
-  return composeText(sku, colors, masterSheets && fromMaster(masterSheets, sku), catalogSheets && fromCatalog(catalogSheets, sku));
+export async function productText(sku: string, colors: string[], alsoNames: string[] = []) {
+  const [masterSheets, catalogSheets, script] = await Promise.all([
+    sheetsOf(process.env.DRIVE_TEXTS_FILE_ID),
+    sheetsOf(process.env.DRIVE_CATALOG_FILE_ID),
+    scriptFor(sku, alsoNames).catch(() => null),
+  ]);
+  const text = composeText(sku, colors, script, masterSheets && fromMaster(masterSheets, sku), catalogSheets && fromCatalog(catalogSheets, sku));
+  return { text, hasScript: !!script };
 }
 
-export function composeText(sku: string, colors: string[], master: ReturnType<typeof fromMaster>, cat: ReturnType<typeof fromCatalog>) {
+export function composeText(
+  sku: string,
+  colors: string[],
+  script: string | null,
+  master: ReturnType<typeof fromMaster>,
+  cat: ReturnType<typeof fromCatalog>,
+) {
   const title = master?.title || (cat?.name ? `Medias SOX ${titleCase(cat.name)}` : `Medias SOX ${sku}`);
-  const lines = [title, `Código: ${sku}${cat?.name ? ` · Modelo: ${cat.name}` : ''}`, `Colores del video: ${colors.join(', ')}`, ''];
+  const lines = [`${sku} · ${title}`];
+  if (colors.length) lines.push(`Colores del video: ${colors.join(', ')}`);
+  lines.push('', 'GUION', script || `(Todavía no hay guion. Escribilo en un Google Doc llamado ${sku} y tocá "Actualizar TXT".)`);
+
   if (master?.description) {
-    lines.push(master.description);
+    lines.push('', 'DESCRIPCIÓN MERCADO LIBRE', master.description);
   } else if (cat) {
+    lines.push('', 'DATOS DEL PRODUCTO');
     if (cat.category) lines.push(`Categoría: ${cat.category}`);
     if (cat.length) lines.push(`Largo: ${cat.length}`);
     if (cat.sizes) lines.push(`Talles: ${cat.sizes}`);
     if (cat.composition) lines.push(`Composición: ${cat.composition}`);
-    lines.push('', 'Palermo Fitness. Si tenés dudas sobre el producto o el talle, consultanos.');
   }
   return lines.join('\n').trim() + '\n';
 }

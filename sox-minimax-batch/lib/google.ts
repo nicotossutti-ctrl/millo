@@ -93,6 +93,7 @@ export type DriveItem = {
   mimeType: string;
   parents?: string[];
   thumbnailLink?: string;
+  modifiedTime?: string;
 };
 
 /** Lista archivos con una query de Drive, recorriendo todas las páginas. */
@@ -115,7 +116,7 @@ export async function query(q: string, fields = 'id,name,mimeType,parents'): Pro
   return all;
 }
 
-const q = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+export const q = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 /** Igual que query() pero para muchos padres a la vez, en tandas para no pasarse del largo de URL. */
 export async function queryInParents(parentIds: string[], extra: string, fields?: string) {
@@ -135,6 +136,12 @@ export async function listChildren(folderId: string) {
 export async function downloadFile(fileId: string): Promise<Buffer> {
   const res = await gfetch(`/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`);
   return Buffer.from(await res.arrayBuffer());
+}
+
+/** Texto plano de un Google Doc. */
+export async function exportText(fileId: string) {
+  const res = await gfetch(`/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`);
+  return (await res.text()).replace(/^\uFEFF/, '');
 }
 
 export async function getFile(fileId: string, fields = 'id,name,mimeType,thumbnailLink') {

@@ -9,12 +9,19 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
    - De cada color usa **una sola foto**: la `-01` si hay varios ángulos.
    - Si el color tiene versión **fondo oscuro** (`-DARK`), usa esas. Si al SKU le falta la versión oscura de algún color, usa las originales para que no falte ninguno. En la pantalla lo podés cambiar.
    - Las tomas `REFLECTIVO` se usan sólo si ese color no tiene otra foto.
+   - Códigos sin letra final: fotos `TE215-…` se suman a `TE215C` **sólo si** `TE215` no existe en el catálogo SOX y `TE215C` sí (lo marca en pantalla). Si hace falta forzar una unión, variable `SKU_ALIASES` (ej. `TE215=TE215C`).
    - En cada SKU ves las miniaturas y **podés sacar variantes con un clic** antes de generar.
 2. **Prepara cada foto en 9:16** (1080×1920), estirando el fondo de la misma foto, sin franjas negras.
-3. **MiniMax H3 768P** anima cada foto: la media da **una vuelta completa de 360°** y termina de frente (se le pasa la misma foto como primer y último cuadro).
-4. **Arma el video de 15 s exactos**: cada variante ocupa 15 / N segundos. El clip se **acelera o frena, no se recorta**, así la vuelta siempre queda entera. Corte seco entre colores, sin audio.
+3. **MiniMax H3 768P** anima cada foto pidiendo una vuelta de 360°. Se le pasa la misma foto como primer y último cuadro para que termine de frente: **eso ayuda pero no garantiza los 360°**, por eso:
+   - En la fila del SKU ves cada clip generado (pasá el mouse para reproducirlo).
+   - Si uno no te gusta, **↻ regenera sólo ese clip** (USD 0,32 con 4 s) y se vuelve a armar el video.
+   - Un aviso aproximado marca clips para mirar primero: **⚠ casi quieta** o **⚠ no termina de frente**. Detecta esos dos casos; no confirma que el giro sea completo.
+4. **Arma el video de 15 s exactos**: cada variante ocupa 15 / N segundos. El clip se **acelera o frena, no se recorta**, así no se pierde el final de la vuelta. Corte seco entre colores, sin audio. El armado se hace de a un SKU por vez (medido: 13–18 s con 1 CPU para 2 a 7 variantes, ~0,7 GB de RAM).
 5. **Sube MP4 + TXT** a `TERMINADOS - VIDEOS/<SKU>/`. Si ya existían, los reemplaza.
-6. El TXT sale de **PF_Master_v11 → PUBLICACIONES_OBJETIVO** (título y `Descripcion_conversion` de la publicación x1). Si el SKU no está ahí, arma un texto con los datos técnicos del catálogo SOX.
+6. **El TXT** tiene dos partes:
+   - **GUION**: tu texto hablado, tomado del **Google Doc que se llame igual que el SKU** (como los de la carpeta CLIPS: `TE215C`, `TE251C`…). Si todavía no existe, lo deja indicado.
+   - **DESCRIPCIÓN MERCADO LIBRE**: título y `Descripcion_conversion` de **PF_Master_v11 → PUBLICACIONES_OBJETIVO** (publicación x1).
+   - **Actualizar TXT** rehace sólo el TXT, sin costo (por ejemplo después de escribir el guion).
 
 | Variantes | Segundos por color en el video | Segundos que se le piden a MiniMax | Costo aprox. (USD 0,08/s) |
 |---|---|---|---|
@@ -27,7 +34,7 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
 **Control de gasto**
 - Antes de generar te muestra el costo estimado y te pide confirmación.
 - Los SKUs que ya tienen video en TERMINADOS se marcan y se ocultan.
-- Si se corta algo (cerraste la pestaña, falló el armado, falló una variante), al volver a tocar **Procesar/Reintentar** reutiliza lo que ya se generó y sólo regenera lo que falta. Queda guardado en ese navegador.
+- Nunca se vuelve a pagar un clip que ya salió bien: si se corta algo (cerraste la pestaña, falló una variante, venció el link de un clip), **Reintentar** regenera sólo lo que falta o falló. Queda guardado en ese navegador.
 
 ---
 
@@ -107,11 +114,11 @@ npx vercel@latest --prod
 - **Error de Google `redirect_uri_mismatch`**: la URL del paso 3 tiene que ser idéntica a `NEXT_PUBLIC_BASE_URL` + `/api/auth/google/callback`.
 - **"Sesión de Google vencida"** (pasa cada 7 días mientras la app está en modo prueba): tocá "Conectar Google" otra vez.
 - **Una variante falla en MiniMax** (moderación, saldo): tocá **Reintentar**; sólo regenera esa.
-- **La media no gira completa o queda casi quieta**: destildá "forzar que termine de frente" y probá de nuevo ese SKU.
+- **Un clip no gira bien**: ↻ en ese clip y "Regenerar 1 clip". Si pasa seguido (media casi quieta), destildá "forzar que termine de frente" y probá de nuevo.
 
 ## Opcionales
 
-`MINIMAX_MODEL` (default `MiniMax-H3`), `MINIMAX_RESOLUTION` (`768P` o `2K`), `MINIMAX_PRICE_PER_SECOND` (para el estimado; 2K es 0.13), `MINIMAX_BASE_URL` (default `https://api.minimax.io`).
+`SKU_ALIASES` (uniones manuales de códigos, ej. `TE215=TE215C,XX10=XX10B`), `MINIMAX_MODEL` (default `MiniMax-H3`), `MINIMAX_RESOLUTION` (`768P` o `2K`), `MINIMAX_PRICE_PER_SECOND` (para el estimado; 2K es 0.13), `MINIMAX_BASE_URL` (default `https://api.minimax.io`).
 
 ## Local
 

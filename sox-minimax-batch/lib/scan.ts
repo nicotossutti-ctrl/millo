@@ -1,5 +1,6 @@
 import { FOLDER_MIME, query, queryInParents } from './google';
-import { groupProducts, type Product } from './naming';
+import { groupProducts, parseAliases, type Product } from './naming';
+import { catalogCodes } from './texts';
 
 // Carpetas que no son fotos de producto.
 const SKIP_FOLDER = /contexto|textura/i;
@@ -34,12 +35,12 @@ export type ScannedProduct = Product & { done: boolean };
 
 export async function scanProducts(rootId: string, outputId?: string): Promise<ScannedProduct[]> {
   const skip = new Set(outputId ? [outputId] : []);
-  const folders = await folderTree(rootId, skip);
+  const [folders, knownCodes] = await Promise.all([folderTree(rootId, skip), catalogCodes().catch(() => new Set<string>())]);
   const images = await queryInParents(folders, `mimeType contains 'image/'`, 'id,name,mimeType,parents');
   // La misma foto puede aparecer en más de una carpeta (atajos/copias): dedupe por nombre.
   const seen = new Set<string>();
   const unique = images.filter((f) => (seen.has(f.name) ? false : (seen.add(f.name), true)));
-  const products = groupProducts(unique);
+  const products = groupProducts(unique, { knownCodes, aliases: parseAliases(process.env.SKU_ALIASES) });
   const done = outputId ? await finishedSkus(outputId) : new Set<string>();
   return products.map((p) => ({ ...p, done: done.has(p.sku) }));
 }

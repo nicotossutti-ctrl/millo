@@ -30,3 +30,8 @@ td select { margin-top:6px; font-size:12px; padding:4px 6px; }
 .variant img { width:64px; height:64px; object-fit:cover; border-radius:6px; background:#1b2128; }
 .variant.off { opacity:.3; text-decoration:line-through; }
 @media (max-width: 720px) { th:nth-child(3), td:nth-child(3) { display:none; } }
+.clips { margin-top:10px; }
+.clip video, .clip .placeholder { width:64px; height:114px; object-fit:cover; border-radius:6px; background:#1b2128; cursor:pointer; }
+.clip { width:84px; }
+button.redo { padding:2px 8px; font-size:12px; background:#222a32; color:#e9edf1; border:1px solid #34404a; }
+button.link { background:none; border:0; color:#9cc7ff; padding:6px 0 0; font-weight:500; font-size:12px; display:block; }

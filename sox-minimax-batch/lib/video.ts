@@ -14,14 +14,47 @@ function ffmpegBin() {
   return p;
 }
 
-function run(args: string[]) {
-  return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
-    const p = spawn(ffmpegBin(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
+function run(args: string[], keepStdout = false) {
+  return new Promise<{ code: number; stderr: string; stdout: Buffer }>((resolve, reject) => {
+    const p = spawn(ffmpegBin(), args, { stdio: ['ignore', keepStdout ? 'pipe' : 'ignore', 'pipe'] });
     let stderr = '';
-    p.stderr.on('data', (d) => (stderr += d.toString()));
+    const out: Buffer[] = [];
+    p.stdout?.on('data', (d: Buffer) => out.push(d));
+    p.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
     p.on('error', reject);
-    p.on('close', (code) => resolve({ code: code ?? 1, stderr }));
+    p.on('close', (code) => resolve({ code: code ?? 1, stderr, stdout: Buffer.concat(out) }));
   });
+}
+
+/** Qué clips no se pudieron bajar (índices), para regenerar sólo esos. */
+export class ClipDownloadError extends Error {
+  constructor(public indices: number[]) {
+    super(`No se pudieron bajar ${indices.length} clip(s) de MiniMax; puede haber vencido el link`);
+  }
+}
+
+export type Motion = { peak: number; end: number };
+
+/**
+ * Indicador aproximado de giro: cuánto cambia la imagen respecto del primer cuadro.
+ * peak bajo = la media casi no se movió; end alto = no volvió a quedar de frente.
+ * No prueba que haya dado exactamente 360°, sirve para saber qué clips mirar primero.
+ */
+export async function motionOf(file: string): Promise<Motion> {
+  const w = 36;
+  const h = 64;
+  const { code, stdout } = await run(['-v', 'error', '-i', file, '-vf', `fps=8,scale=${w}:${h},format=gray`, '-f', 'rawvideo', '-'], true);
+  const size = w * h;
+  const frames = Math.floor(stdout.length / size);
+  if (code !== 0 || frames < 2) return { peak: 0, end: 0 };
+  const diff = (i: number) => {
+    let sum = 0;
+    for (let k = 0; k < size; k++) sum += Math.abs(stdout[i * size + k] - stdout[k]);
+    return sum / size;
+  };
+  let peak = 0;
+  for (let i = 1; i < frames; i++) peak = Math.max(peak, diff(i));
+  return { peak: Math.round(peak * 10) / 10, end: Math.round(diff(frames - 1) * 10) / 10 };
 }
 
 async function durationOf(file: string) {
@@ -35,19 +68,22 @@ async function durationOf(file: string) {
  * Une los clips con corte seco en un MP4 vertical 1080x1920 de exactamente `totalSeconds`.
  * Cada clip se acelera o se frena (no se recorta) para que la vuelta completa entre en su tramo.
  */
-export async function makeFinalVideo(urls: string[], totalSeconds = 15): Promise<Buffer> {
+export async function makeFinalVideo(urls: string[], totalSeconds = 15): Promise<{ video: Buffer; motion: Motion[] }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sox-video-'));
   try {
-    const files = await Promise.all(
+    const downloads = await Promise.allSettled(
       urls.map(async (url, i) => {
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`No se pudo bajar el clip ${i + 1} de MiniMax (${res.status}); puede haber vencido el link`);
+        if (!res.ok) throw new Error(String(res.status));
         const file = path.join(dir, `clip${i}.mp4`);
         await fs.writeFile(file, Buffer.from(await res.arrayBuffer()));
         return file;
       }),
     );
-    const durations = await Promise.all(files.map(durationOf));
+    const bad = downloads.flatMap((d, i) => (d.status === 'rejected' ? [i] : []));
+    if (bad.length) throw new ClipDownloadError(bad);
+    const files = downloads.map((d) => (d as PromiseFulfilledResult<string>).value);
+    const [durations, motion] = await Promise.all([Promise.all(files.map(durationOf)), Promise.all(files.map(motionOf))]);
 
     const totalFrames = Math.round(totalSeconds * FPS);
     const n = files.length;
@@ -76,7 +112,7 @@ export async function makeFinalVideo(urls: string[], totalSeconds = 15): Promise
     ];
     const { code, stderr } = await run(args);
     if (code !== 0) throw new Error(`ffmpeg falló: ${stderr.slice(-1500)}`);
-    return await fs.readFile(out);
+    return { video: await fs.readFile(out), motion };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
