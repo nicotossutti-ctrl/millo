@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { productText } from '@/lib/texts';
 import { ensureFolder, putFile } from '@/lib/google';
+import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
 /** Rehace sólo el TXT (sin tocar el video ni gastar en MiniMax), ej. después de escribir el guion. */
 export async function POST(req: Request) {
+  const denied = await guard();
+  if (denied) return denied;
   try {
     const { sku, colors, alsoNames } = (await req.json()) as { sku: string; colors: string[]; alsoNames?: string[] };
     const outputRoot = process.env.DRIVE_OUTPUT_FOLDER_ID;

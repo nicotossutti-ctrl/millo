@@ -1,4 +1,4 @@
-import { readGoogleSession, saveGoogleSession } from './session';
+import { requireUser, saveGoogleSession } from './session';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DRIVE = 'https://www.googleapis.com/drive/v3';
@@ -9,27 +9,46 @@ export function baseUrl() {
   return (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
 
-export function googleAuthUrl() {
+export function googleAuthUrl(state: string) {
   const id = process.env.GOOGLE_CLIENT_ID;
   if (!id) throw new Error('Falta GOOGLE_CLIENT_ID');
   const p = new URLSearchParams({
     client_id: id,
     redirect_uri: `${baseUrl()}/api/auth/google/callback`,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/drive',
+    // openid + email: para saber qué cuenta entró y compararla con ALLOWED_EMAILS.
+    scope: 'openid email https://www.googleapis.com/auth/drive',
     access_type: 'offline',
     prompt: 'consent',
+    state,
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
 }
 
+/**
+ * Mail de la cuenta, sacado del id_token. Como el token llega directo del endpoint de Google
+ * por HTTPS (no del navegador), alcanza con revisar emisor, destinatario y mail verificado.
+ */
+export function emailFromIdToken(idToken: string | undefined, clientId: string) {
+  if (!idToken) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8'));
+    const issOk = payload.iss === 'https://accounts.google.com' || payload.iss === 'accounts.google.com';
+    if (!issOk || payload.aud !== clientId || payload.email_verified !== true || !payload.email) return undefined;
+    return String(payload.email).toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function exchangeCode(code: string) {
+  const clientId = process.env.GOOGLE_CLIENT_ID || '';
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       code,
-      client_id: process.env.GOOGLE_CLIENT_ID || '',
+      client_id: clientId,
       client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
       redirect_uri: `${baseUrl()}/api/auth/google/callback`,
       grant_type: 'authorization_code',
@@ -41,6 +60,7 @@ export async function exchangeCode(code: string) {
     access_token: j.access_token as string,
     refresh_token: j.refresh_token as string | undefined,
     expires_at: Date.now() + (j.expires_in || 3600) * 1000 - 60_000,
+    email: emailFromIdToken(j.id_token, clientId),
   };
 }
 
@@ -61,8 +81,8 @@ async function refresh(refreshToken: string) {
 }
 
 export async function accessToken() {
-  const s = await readGoogleSession();
-  if (!s) throw new Error('Google Drive no conectado');
+  // Toda llamada a Drive pasa por acá: sin cuenta autorizada no hay token.
+  const s = await requireUser();
   if (s.expires_at > Date.now()) return s.access_token;
   if (!s.refresh_token) throw new Error('Sesión de Google vencida, tocá "Conectar Google" de nuevo');
   const r = await refresh(s.refresh_token);

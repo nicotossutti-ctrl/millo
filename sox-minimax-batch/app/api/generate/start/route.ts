@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { downloadFile } from '@/lib/google';
 import { frameDataUrl } from '@/lib/frame';
 import { createVideo } from '@/lib/minimax';
+import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -13,8 +14,12 @@ type Item = { fileId: string; seconds: number };
  * sí se crearon (ya están pagas) para que la página las guarde y no las vuelva a pedir.
  */
 export async function POST(req: Request) {
+  const denied = await guard();
+  if (denied) return denied;
   const { items, loop } = (await req.json()) as { items: Item[]; loop?: boolean };
   if (!Array.isArray(items) || !items.length) return NextResponse.json({ error: 'No hay imágenes' }, { status: 400 });
+  // Tope por pedido: un SKU nunca tiene más de 15 variantes (15 s de video).
+  if (items.length > 15) return NextResponse.json({ error: 'Demasiadas imágenes en un solo pedido' }, { status: 400 });
   const results = await Promise.allSettled(
     items.map(async (it) => {
       const seconds = Math.min(15, Math.max(4, Math.round(Number(it.seconds) || 4)));

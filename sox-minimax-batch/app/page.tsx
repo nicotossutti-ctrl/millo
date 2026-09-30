@@ -59,7 +59,7 @@ async function api<T = any>(url: string, body?: unknown): Promise<{ ok: boolean;
 }
 
 export default function Page() {
-  const [status, setStatus] = useState<{ connected: boolean; missing: string[] } | null>(null);
+  const [status, setStatus] = useState<{ connected: boolean; missing: string[]; email?: string | null; denied?: boolean } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [price, setPrice] = useState(0.08);
   const [clipTable, setClipTable] = useState<Record<number, number>>({});
@@ -290,8 +290,12 @@ export default function Page() {
 
       <div className="card row">
         {status?.missing.length ? <span className="badge err">Faltan variables en Vercel: {status.missing.join(', ')}</span> : null}
-        <span className={'badge ' + (status?.connected ? 'ok' : 'warn')}>{status?.connected ? 'Google Drive conectado' : 'Google Drive sin conectar'}</span>
-        {status && !status.connected && (
+        {status?.denied ? (
+          <span className="badge err">La cuenta {status.email} no está autorizada</span>
+        ) : (
+          <span className={'badge ' + (status?.connected ? 'ok' : 'warn')}>{status?.connected ? `Drive conectado · ${status.email}` : 'Google Drive sin conectar'}</span>
+        )}
+        {status && !status.connected && !status.denied && (
           <a className="btn" href="/api/auth/google/start">
             Conectar Google
           </a>
@@ -299,7 +303,7 @@ export default function Page() {
         <button className="secondary" disabled={!ready || scanning} onClick={scan}>
           {scanning ? 'Escaneando…' : products.length ? 'Volver a escanear' : 'Escanear Drive'}
         </button>
-        {status?.connected && (
+        {(status?.connected || status?.denied) && (
           <a className="small-link" href="/api/auth/logout">
             desconectar
           </a>

@@ -84,12 +84,20 @@ Vercel → proyecto `sox-minimax-batch` → **Settings → Environment Variables
 | `MINIMAX_API_KEY` | la key del paso 2 |
 | `GOOGLE_CLIENT_ID` | ID de cliente del paso 3 |
 | `GOOGLE_CLIENT_SECRET` | secreto del paso 3 |
-| `APP_SECRET` | cualquier texto largo inventado (ej. 40 letras y números al azar) |
+| `APP_SECRET` | texto al azar de **32 caracteres o más** (ver abajo cómo generarlo) |
+| `ALLOWED_EMAILS` | `nicotossutti@gmail.com` (las únicas cuentas de Google que pueden usar la app; separá con coma si agregás otra) |
+| `APP_PASSWORD` | una contraseña para entrar a la web (recomendada: sin esto cualquiera ve la pantalla, aunque no pueda usarla) |
 | `NEXT_PUBLIC_BASE_URL` | tu URL del paso 1, sin `/` al final |
 | `DRIVE_ROOT_FOLDER_ID` | `1RFTQStpZh7Mh4KSaMwaeouYvNLvr6uAd` |
 | `DRIVE_OUTPUT_FOLDER_ID` | `1ttwG1wyBlkmlhivEQxP10V42vx3avGj3` |
 | `DRIVE_CATALOG_FILE_ID` | `1WNdDIxQP3IjFd5VCnIx3es88HIxPyQUD` |
 | `DRIVE_TEXTS_FILE_ID` | `1UeZXjPpYZfEIUMhvH2G2hRLu1XRahXe3` |
+
+Para generar `APP_SECRET`, en PowerShell:
+
+```
+-join ((48..57)+(65..90)+(97..122) | Get-Random -Count 40 | % {[char]$_})
+```
 
 Tip: si copiás las líneas de `.env.example` y las pegás en el campo "Key", Vercel las separa solas; completá las que están vacías antes de guardar.
 
@@ -103,14 +111,25 @@ npx vercel@latest --prod
 
 ### Paso 6 · Piloto con un solo SKU
 
-1. Abrí tu URL → **Conectar Google** → elegí tu cuenta. Google va a avisar "Google no verificó esta app": **Continuar** (la app es tuya).
+1. Abrí tu URL → poné la contraseña (`APP_PASSWORD`) → **Conectar Google** → elegí tu cuenta. Google va a avisar "Google no verificó esta app": **Continuar** (la app es tuya).
 2. **Escanear Drive** → en el filtro poné `TE132B` → revisá que salgan Negro, Blanco, Océano y Salmón → **Procesar**.
 3. En ~3–6 minutos aparece "terminado" con el link a la carpeta. Mirá el video.
 4. Si te gusta cómo gira, sacá el filtro y usá **Procesar N pendientes** (dejá la pestaña abierta; con "en paralelo 2" hace dos SKUs a la vez).
 
+## Quién puede usarla (tu MiniMax está detrás)
+
+Tres barreras, independientes entre sí:
+1. **Contraseña de la web** (`APP_PASSWORD`): sin ella no carga ni la página ni ninguna función.
+2. **Cuenta de Google autorizada** (`ALLOWED_EMAILS`): cada función que gasta o toca tu Drive revisa en cada pedido que la sesión sea de una cuenta de esa lista. Si está vacía no entra nadie. Sacar un mail de la lista le corta el acceso al instante.
+3. **Login de Google protegido** (`state`): sólo se acepta la vuelta de un login que empezó en tu navegador.
+
+Además: cargá el saldo de MiniMax de a poco (por ejemplo USD 20). Ese saldo es el techo real de lo que se puede gastar.
+
 ## Si algo falla
 
 - **"Faltan variables en Vercel"**: falta cargar alguna del paso 4 o no hiciste el paso 5.
+- **"La cuenta … no está autorizada"**: entraste con otra cuenta de Google. Tocá "desconectar" y volvé a entrar con la de `ALLOWED_EMAILS`.
+- **"El inicio de sesión no empezó en este navegador o venció"**: tardaste más de 10 minutos en la pantalla de Google o abriste el link en otro navegador. Volvé a tocar "Conectar Google".
 - **Error de Google `redirect_uri_mismatch`**: la URL del paso 3 tiene que ser idéntica a `NEXT_PUBLIC_BASE_URL` + `/api/auth/google/callback`.
 - **"Sesión de Google vencida"** (pasa cada 7 días mientras la app está en modo prueba): tocá "Conectar Google" otra vez.
 - **Una variante falla en MiniMax** (moderación, saldo): tocá **Reintentar**; sólo regenera esa.

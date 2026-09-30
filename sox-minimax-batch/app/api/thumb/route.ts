@@ -1,9 +1,12 @@
 import sharp from 'sharp';
 import { downloadFile, thumbnail } from '@/lib/google';
+import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
+  const denied = await guard();
+  if (denied) return denied;
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return new Response('Falta id', { status: 400 });
   try {

@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server';
 import { ClipDownloadError, makeFinalVideo } from '@/lib/video';
 import { productText } from '@/lib/texts';
 import { ensureFolder, putFile } from '@/lib/google';
+import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  const denied = await guard();
+  if (denied) return denied;
   try {
     const { sku, urls, colors, alsoNames } = (await req.json()) as { sku: string; urls: string[]; colors: string[]; alsoNames?: string[] };
     if (!sku || !Array.isArray(urls) || !urls.length) throw new Error('Datos incompletos');

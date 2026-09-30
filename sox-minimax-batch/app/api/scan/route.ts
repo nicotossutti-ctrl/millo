@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { scanProducts } from '@/lib/scan';
 import { clipSeconds, pricePerSecond } from '@/lib/minimax';
+import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 export async function GET() {
+  const denied = await guard();
+  if (denied) return denied;
   try {
     const root = process.env.DRIVE_ROOT_FOLDER_ID;
     if (!root) throw new Error('Falta DRIVE_ROOT_FOLDER_ID');
