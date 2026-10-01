@@ -225,6 +225,8 @@ export default function Page() {
       setProducts((ps) => ps.map((x) => (x.sku === sku ? { ...x, done: true } : x)));
     } catch (e: any) {
       patchJob(sku, { phase: 'error', detail: e.message });
+      // Sin saldo no tiene sentido seguir con el lote: se pausa y queda avisado en este SKU.
+      if (/sin saldo en minimax/i.test(e.message)) stopRef.current = true;
     } finally {
       setRunning((r) => {
         const n = new Set(r);

@@ -9,6 +9,8 @@ function key() {
 
 export const TOTAL_SECONDS = 15;
 
+export const NO_BALANCE = 'Sin saldo en MiniMax: cargá saldo en platform.minimax.io (Billing) y tocá Reintentar. No se cobró nada.';
+
 /**
  * Cuántos segundos pedirle a MiniMax por variante. Después el video se acelera o frena
  * para que cada variante dure exactamente 15 / N segundos, así la vuelta nunca queda cortada.
@@ -60,7 +62,10 @@ export async function createVideo(frameDataUrl: string, seconds: number, loop: b
   } catch {}
   const apiError = j.base_resp && j.base_resp.status_code !== 0 ? j.base_resp.status_msg : j.error?.message;
   const taskId = j.task_id ?? j.id ?? j.task?.id ?? j.data?.task_id;
-  if (!res.ok || apiError || !taskId) throw new Error(`MiniMax ${res.status}: ${apiError || text.slice(0, 400)}`);
+  const detail = apiError || text.slice(0, 400);
+  // 402 / código 1008: la cuenta de la API no tiene saldo (no se cobró nada).
+  if (res.status === 402 || /insufficient balance|\b1008\b/i.test(detail)) throw new Error(NO_BALANCE);
+  if (!res.ok || apiError || !taskId) throw new Error(`MiniMax ${res.status}: ${detail}`);
   return String(taskId);
 }
 
