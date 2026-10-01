@@ -67,10 +67,11 @@ async function durationOf(file: string) {
 }
 
 /**
- * Une los clips con corte seco en un MP4 vertical 1080x1920 de exactamente `totalSeconds`, repartidos
- * en partes iguales. Cada clip se acelera o se frena (no se recorta) para que la vuelta entre en su tramo.
+ * Une los clips con corte seco en un MP4 vertical 1080x1920. `order` dice qué clip va en cada tramo
+ * (puede repetir, ej. [0, 1, 0]) y cada tramo dura `segmentSeconds`. Si un clip no dura justo eso,
+ * se acelera o frena apenas (no se recorta), así la vuelta entra entera.
  */
-export async function makeFinalVideo(urls: string[], totalSeconds: number): Promise<{ video: Buffer; motion: Motion[] }> {
+export async function makeFinalVideo(urls: string[], order: number[], segmentSeconds: number): Promise<{ video: Buffer; motion: Motion[] }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sox-video-'));
   try {
     const downloads = await Promise.allSettled(
@@ -84,10 +85,13 @@ export async function makeFinalVideo(urls: string[], totalSeconds: number): Prom
     );
     const bad = downloads.flatMap((d, i) => (d.status === 'rejected' ? [i] : []));
     if (bad.length) throw new ClipDownloadError(bad);
-    const files = downloads.map((d) => (d as PromiseFulfilledResult<string>).value);
-    const [durations, motion] = await Promise.all([Promise.all(files.map(durationOf)), Promise.all(files.map(motionOf))]);
+    const unique = downloads.map((d) => (d as PromiseFulfilledResult<string>).value);
+    const [uniqueDurations, motion] = await Promise.all([Promise.all(unique.map(durationOf)), Promise.all(unique.map(motionOf))]);
+    // Un input de ffmpeg por tramo (un clip repetido se lee dos veces del mismo archivo).
+    const files = order.map((i) => unique[i]);
+    const durations = order.map((i) => uniqueDurations[i]);
 
-    const totalFrames = Math.round(totalSeconds * FPS);
+    const totalFrames = Math.round(order.length * segmentSeconds * FPS);
     const n = files.length;
     const framesFor = (i: number) => Math.floor(((i + 1) * totalFrames) / n) - Math.floor((i * totalFrames) / n);
 

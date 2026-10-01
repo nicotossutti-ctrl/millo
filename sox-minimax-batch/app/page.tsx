@@ -62,7 +62,7 @@ export default function Page() {
   const [products, setProducts] = useState<Product[]>([]);
   const [price, setPrice] = useState(0.08);
   const [clipTable, setClipTable] = useState<Record<number, number>>({});
-  const [perVariantTable, setPerVariantTable] = useState<Record<number, number>>({});
+  const [sequenceTable, setSequenceTable] = useState<Record<number, number[]>>({});
   const [sel, setSel] = useState<Record<string, Sel>>({});
   const [jobs, setJobsState] = useState<Record<string, Job>>({});
   const jobsRef = useRef<Record<string, Job>>({});
@@ -111,8 +111,11 @@ export default function Page() {
     return p.variants.filter((v) => !s.off.includes(v.key));
   };
   // Igual que lib/minimax.ts (el servidor manda las tablas al escanear; esto es sólo el respaldo).
-  const perVariant = (n: number) => perVariantTable[n] || (n <= 1 ? 15 : n === 2 ? 7.5 : n <= 4 ? 5 : 4);
-  const secondsFor = (n: number) => clipTable[n] || Math.min(15, Math.max(4, Math.ceil(perVariant(n))));
+  const secondsFor = (n: number) => clipTable[n] || 4;
+  const sequence = (n: number) => sequenceTable[n] || Array.from({ length: Math.max(3, n) }, (_, i) => i % n);
+  const videoSeconds = (n: number) => sequence(n).length * secondsFor(n);
+  const sequenceLabel = (n: number) =>
+    n <= 3 ? `${sequence(n).map((i) => String.fromCharCode(65 + i)).join('·')} = ${videoSeconds(n)} s` : `${n} × ${secondsFor(n)} s = ${videoSeconds(n)} s`;
 
   /** Qué se va a generar: reutiliza los clips ya pagos si la selección no cambió. */
   function planFor(p: Product, jobsMap = jobsRef.current) {
@@ -133,7 +136,7 @@ export default function Page() {
       setProducts(j.products);
       setPrice(j.pricePerSecond);
       setClipTable(j.clipTable);
-      setPerVariantTable(j.perVariantTable || {});
+      setSequenceTable(j.sequenceTable || {});
     } catch (e: any) {
       alert(e.message);
     } finally {
@@ -291,7 +294,7 @@ export default function Page() {
     <main>
       <h1>SOX · Videos 360°</h1>
       <p>
-        Drive → una foto original por color (sin ALL ni DARK) → MiniMax gira cada media una vuelta → cada color dura 7,5 s (2 colores), 5 s (3–4) o 4 s (5 o más) → MP4 vertical + TXT en
+        Drive → una foto original por color (sin ALL ni DARK) → MiniMax gira cada media una vuelta → cada color da una vuelta de 4 s; el video dura al menos 12 s (con 1 o 2 colores se repiten: A·A·A, A·B·A) → MP4 vertical + TXT en
         <b> TERMINADOS - VIDEOS</b>.
       </p>
 
@@ -467,7 +470,7 @@ export default function Page() {
                     <td>
                       {n ? (
                         <>
-                          {n} × {String(perVariant(n)).replace('.', ',')} s = {String(n * perVariant(n)).replace('.', ',')} s
+                          {sequenceLabel(n)}
                           <br />
                           <small>
                             pide {plan.seconds} s c/u · ≈ {usd(plan.fullCost)}
@@ -483,7 +486,7 @@ export default function Page() {
                           {n > 6 && (
                             <>
                               <br />
-                              <small className="warn">muchos colores: video de {n * perVariant(n)} s</small>
+                              <small className="warn">muchos colores: video de {videoSeconds(n)} s</small>
                             </>
                           )}
                         </>

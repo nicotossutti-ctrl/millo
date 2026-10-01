@@ -1,6 +1,6 @@
 # SOX · Videos 360° (MiniMax H3 → Drive)
 
-App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, hace girar cada media una vuelta completa con MiniMax H3 y sube a **TERMINADOS - VIDEOS/<SKU>/** el video vertical (`<SKU>.mp4`, de 15 a 20 s según la cantidad de colores) y su descripción (`<SKU>.txt`).
+App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, hace girar cada media una vuelta completa con MiniMax H3 y sube a **TERMINADOS - VIDEOS/<SKU>/** el video vertical (`<SKU>.mp4`, 12 s o más según la cantidad de colores) y su descripción (`<SKU>.txt`).
 
 ## Qué hace, exactamente
 
@@ -17,21 +17,21 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
    - En la fila del SKU ves cada clip generado (pasá el mouse para reproducirlo).
    - Si uno no te gusta, **↻ regenera sólo ese clip** (USD 0,32 con 4 s) y se vuelve a armar el video.
    - Un aviso aproximado marca clips para mirar primero: **⚠ casi quieta** o **⚠ no termina de frente**. Detecta esos dos casos; no confirma que el giro sea completo.
-4. **Arma el video**: cada color dura **7,5 s con 2 colores, 5 s con 3 o 4, y 4 s con 5 o más** (1 solo color: 15 s). El clip se **acelera o frena, no se recorta**, así no se pierde el final de la vuelta. Corte seco entre colores, sin audio. El armado se hace de a un SKU por vez (medido: 13–18 s con 1 CPU para 2 a 7 variantes, ~0,7 GB de RAM).
+4. **Arma el video**: cada color da **una vuelta de 4 s** y el video dura **al menos 12 s**: con 1 color se repite (A·A·A), con 2 vuelve el primero al final (A·B·A). Los repetidos usan el mismo clip, no se pagan de nuevo. El clip se **acelera o frena, no se recorta**, así no se pierde el final de la vuelta. Corte seco entre colores, sin audio. El armado se hace de a un SKU por vez (medido: 13–18 s con 1 CPU para 2 a 7 variantes, ~0,7 GB de RAM).
 5. **Sube MP4 + TXT** a `TERMINADOS - VIDEOS/<SKU>/`. Si ya existían, los reemplaza.
 6. **El TXT** tiene dos partes:
    - **GUION**: tu texto hablado, tomado del **Google Doc que se llame igual que el SKU** (como los de la carpeta CLIPS: `TE215C`, `TE251C`…). Si todavía no existe, lo deja indicado.
    - **DESCRIPCIÓN MERCADO LIBRE**: título y `Descripcion_conversion` de **PF_Master_v11 → PUBLICACIONES_OBJETIVO** (publicación x1).
    - **Actualizar TXT** rehace sólo el TXT, sin costo (por ejemplo después de escribir el guion).
 
-| Colores | Segundos por color | Largo del video | Se le pide a MiniMax | Costo aprox. (USD 0,08/s) |
+| Colores | Secuencia | Largo del video | Se le pide a MiniMax | Costo aprox. (USD 0,08/s) |
 |---|---|---|---|---|
-| 1 | 15 | 15 s | 15 s | 1,20 |
-| 2 | 7,5 | 15 s | 8 s c/u | 1,28 |
-| 3 | 5 | 15 s | 5 s c/u | 1,20 |
-| 4 | 5 | 20 s | 5 s c/u | 1,60 |
-| 5 | 4 | 20 s | 4 s c/u | 1,60 |
-| 7 | 4 | 28 s | 4 s c/u | 2,24 |
+| 1 | A·A·A | 12 s | 1 clip de 4 s | 0,32 |
+| 2 | A·B·A | 12 s | 2 clips de 4 s | 0,64 |
+| 3 | A·B·C | 12 s | 3 clips de 4 s | 0,96 |
+| 4 | A·B·C·D | 16 s | 4 clips de 4 s | 1,28 |
+| 5 | A·B·C·D·E | 20 s | 5 clips de 4 s | 1,60 |
+| N > 5 | uno por color | N × 4 s | N clips de 4 s | N × 0,32 |
 
 **Control de gasto**
 - Antes de generar te muestra el costo estimado y te pide confirmación.
