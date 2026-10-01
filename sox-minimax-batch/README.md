@@ -62,6 +62,8 @@ Respondé:
 
 Al final te da la URL de producción, por ejemplo `https://sox-minimax-batch.vercel.app`. **Anotala exacta**, la vas a usar en los pasos 3 y 4.
 
+**Alternativa sin consola (arrastrar y soltar):** en Vercel, dentro del proyecto `sox-minimax-batch`, arrastrá la carpeta que tiene `package.json` **directamente adentro** (no una carpeta que la contenga). En la lista de archivos tienen que verse `package.json`, `app/…`, `lib/…` sin otro nombre adelante; si aparece el aviso "look like Other", soltaste la carpeta equivocada.
+
 ### Paso 2 · API key de MiniMax
 
 En https://platform.minimax.io → **API Keys** → creá una y copiala. Cargá saldo en la cuenta (Billing).

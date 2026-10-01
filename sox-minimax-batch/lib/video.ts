@@ -1,6 +1,7 @@
 import ffmpegStatic from 'ffmpeg-static';
 import { spawn } from 'child_process';
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -10,7 +11,8 @@ const FPS = 30;
 
 function ffmpegBin() {
   const p = process.env.FFMPEG_PATH || (ffmpegStatic as unknown as string | null);
-  if (!p) throw new Error('ffmpeg no disponible');
+  // npm 11+ no ejecuta el script que baja ffmpeg salvo que esté en "allowScripts" del package.json.
+  if (!p || !existsSync(p)) throw new Error('ffmpeg no está instalado en el servidor (revisá "allowScripts" en package.json y volvé a publicar)');
   return p;
 }
 
