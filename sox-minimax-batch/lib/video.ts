@@ -67,10 +67,10 @@ async function durationOf(file: string) {
 }
 
 /**
- * Une los clips con corte seco en un MP4 vertical 1080x1920 de exactamente `totalSeconds`.
- * Cada clip se acelera o se frena (no se recorta) para que la vuelta completa entre en su tramo.
+ * Une los clips con corte seco en un MP4 vertical 1080x1920 de exactamente `totalSeconds`, repartidos
+ * en partes iguales. Cada clip se acelera o se frena (no se recorta) para que la vuelta entre en su tramo.
  */
-export async function makeFinalVideo(urls: string[], totalSeconds = 15): Promise<{ video: Buffer; motion: Motion[] }> {
+export async function makeFinalVideo(urls: string[], totalSeconds: number): Promise<{ video: Buffer; motion: Motion[] }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sox-video-'));
   try {
     const downloads = await Promise.allSettled(

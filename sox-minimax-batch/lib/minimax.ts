@@ -7,16 +7,31 @@ function key() {
   return k;
 }
 
-export const TOTAL_SECONDS = 15;
 
 export const NO_BALANCE = 'Sin saldo en MiniMax: cargá saldo en platform.minimax.io (Billing) y tocá Reintentar. No se cobró nada.';
 
 /**
- * Cuántos segundos pedirle a MiniMax por variante. Después el video se acelera o frena
- * para que cada variante dure exactamente 15 / N segundos, así la vuelta nunca queda cortada.
+ * Cuánto dura cada color en el video final:
+ * 1 color 15 s · 2 colores 7,5 s · 3 o 4 colores 5 s · 5 o más 4 s.
+ * El video dura N × eso (2 y 3 colores: 15 s; 4 y 5 colores: 20 s).
+ */
+export function secondsPerVariant(variantCount: number) {
+  if (variantCount <= 1) return 15;
+  if (variantCount === 2) return 7.5;
+  if (variantCount <= 4) return 5;
+  return 4;
+}
+
+export function totalSeconds(variantCount: number) {
+  return variantCount * secondsPerVariant(variantCount);
+}
+
+/**
+ * Cuántos segundos pedirle a MiniMax por variante (entero de 4 a 15). Después el clip se
+ * acelera o frena apenas para que dure exactamente secondsPerVariant: la vuelta nunca se corta.
  */
 export function clipSeconds(variantCount: number) {
-  return Math.min(15, Math.max(4, Math.round(TOTAL_SECONDS / variantCount)));
+  return Math.min(15, Math.max(4, Math.ceil(secondsPerVariant(variantCount))));
 }
 
 export function pricePerSecond() {

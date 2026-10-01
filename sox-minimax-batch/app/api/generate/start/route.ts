@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   if (denied) return denied;
   const { items, loop } = (await req.json()) as { items: Item[]; loop?: boolean };
   if (!Array.isArray(items) || !items.length) return NextResponse.json({ error: 'No hay imágenes' }, { status: 400 });
-  // Tope por pedido: un SKU nunca tiene más de 15 variantes (15 s de video).
+  // Tope por pedido: más de 15 variantes no tiene sentido en un video de producto.
   if (items.length > 15) return NextResponse.json({ error: 'Demasiadas imágenes en un solo pedido' }, { status: 400 });
   const results = await Promise.allSettled(
     items.map(async (it) => {
