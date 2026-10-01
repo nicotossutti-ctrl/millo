@@ -59,6 +59,14 @@ export function videoPrompt(loop: boolean, seconds: number) {
   ].join('\n');
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const RETRY_WAITS = [3000, 8000, 15000];
+
+/** MiniMax rechazó el pedido por exceso de pedidos (no se creó nada, se puede reintentar sin riesgo). */
+function isRateLimited(status: number, body: string) {
+  return status === 429 || /"status_code"\s*:\s*1002\b|rate limit|too many requests/i.test(body);
+}
+
 export async function createVideo(frameDataUrl: string, seconds: number, loop: boolean) {
   const content: unknown[] = [
     { type: 'text', text: videoPrompt(loop, seconds) },
@@ -67,19 +75,27 @@ export async function createVideo(frameDataUrl: string, seconds: number, loop: b
   // Mismo cuadro al principio y al final: obliga a que la vuelta termine donde empezó.
   if (loop) content.push({ type: 'image_url', image_url: { url: frameDataUrl }, role: 'last_frame' });
 
-  const res = await fetch(`${BASE}/v2/video_generation`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: process.env.MINIMAX_MODEL || 'MiniMax-H3',
-      content,
-      resolution: process.env.MINIMAX_RESOLUTION || '768P',
-      duration: seconds,
-      // Con imagen inicial MiniMax toma la proporción de la imagen: por eso la mandamos ya en 9:16.
-      ratio: 'adaptive',
-    }),
+  const body = JSON.stringify({
+    model: process.env.MINIMAX_MODEL || 'MiniMax-H3',
+    content,
+    resolution: process.env.MINIMAX_RESOLUTION || '768P',
+    duration: seconds,
+    // Con imagen inicial MiniMax toma la proporción de la imagen: por eso la mandamos ya en 9:16.
+    ratio: 'adaptive',
   });
-  const text = await res.text();
+  // Sólo se reintenta si MiniMax dijo explícitamente "demasiados pedidos": así nunca se crea (ni se paga) dos veces.
+  let res: Response;
+  let text = '';
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`${BASE}/v2/video_generation`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' },
+      body,
+    });
+    text = await res.text();
+    if (!isRateLimited(res.status, text) || attempt >= RETRY_WAITS.length) break;
+    await sleep(RETRY_WAITS[attempt]);
+  }
   let j: any = {};
   try {
     j = JSON.parse(text);
@@ -89,6 +105,7 @@ export async function createVideo(frameDataUrl: string, seconds: number, loop: b
   const detail = apiError || text.slice(0, 400);
   // 402 / código 1008: la cuenta de la API no tiene saldo (no se cobró nada).
   if (res.status === 402 || /insufficient balance|\b1008\b/i.test(detail)) throw new Error(NO_BALANCE);
+  if (isRateLimited(res.status, text)) throw new Error('MiniMax está recibiendo demasiados pedidos. Esperá un minuto y tocá Reintentar (no se cobró nada).');
   if (!res.ok || apiError || !taskId) throw new Error(`MiniMax ${res.status}: ${detail}`);
   return String(taskId);
 }
@@ -96,11 +113,19 @@ export async function createVideo(frameDataUrl: string, seconds: number, loop: b
 export type TaskState = { taskId: string; status: 'pending' | 'succeeded' | 'failed'; url?: string; error?: string };
 
 export async function queryVideo(taskId: string): Promise<TaskState> {
-  const res = await fetch(`${BASE}/v2/query/video_generation/${encodeURIComponent(taskId)}`, {
-    headers: { Authorization: `Bearer ${key()}` },
-    cache: 'no-store',
-  });
-  const text = await res.text();
+  // Consultar no cuesta nada: ante límite de pedidos o error temporal de MiniMax, se reintenta.
+  let res: Response;
+  let text = '';
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`${BASE}/v2/query/video_generation/${encodeURIComponent(taskId)}`, {
+      headers: { Authorization: `Bearer ${key()}` },
+      cache: 'no-store',
+    });
+    text = await res.text();
+    const retry = isRateLimited(res.status, text) || res.status >= 500;
+    if (!retry || attempt >= RETRY_WAITS.length) break;
+    await sleep(RETRY_WAITS[attempt]);
+  }
   let j: any = {};
   try {
     j = JSON.parse(text);

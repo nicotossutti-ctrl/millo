@@ -197,6 +197,15 @@ export async function ensureFolder(parentId: string, name: string) {
   return (await findChild(parentId, name, FOLDER_MIME)) || (await createFolder(parentId, name));
 }
 
+/** Manda un archivo a la papelera de Drive (se puede recuperar desde ahí). */
+export async function trashFile(fileId: string) {
+  await gfetch(`/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true }),
+  });
+}
+
 type Uploaded = { id: string; name: string; webViewLink?: string };
 
 /** Sube un archivo; si ya existe uno con el mismo nombre en esa carpeta, lo reemplaza (no duplica). */

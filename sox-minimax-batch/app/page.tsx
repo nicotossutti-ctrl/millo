@@ -68,12 +68,18 @@ export default function Page() {
   const jobsRef = useRef<Record<string, Job>>({});
   const [filter, setFilter] = useState('');
   const [hideDone, setHideDone] = useState(true);
-  const [concurrency, setConcurrency] = useState(2);
+  const [concurrency, setConcurrency] = useState(1);
   const [loop, setLoop] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [running, setRunning] = useState<Set<string>>(new Set());
-  const stopRef = useRef(false);
-  const [batch, setBatch] = useState(false);
+  // Cola de SKUs: arrancan solos a medida que se libera un lugar (según "en paralelo").
+  const [queue, setQueueState] = useState<string[]>([]);
+  const queueRef = useRef<string[]>([]);
+  const runningRef = useRef<Set<string>>(new Set());
+  const activeRef = useRef(0);
+  const concurrencyRef = useRef(1);
+  const productsRef = useRef<Product[]>([]);
+  const processRef = useRef<(p: Product) => Promise<void>>(async () => {});
   // El armado (ffmpeg) es lo más pesado: se hace de a un SKU por vez aunque se generen varios en paralelo.
   const finalizeQueue = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -99,6 +105,33 @@ export default function Page() {
       return next;
     });
   }
+  function setQueue(q: string[]) {
+    queueRef.current = q;
+    setQueueState(q);
+  }
+  /** Arranca SKUs de la cola mientras haya lugar. */
+  function pump() {
+    while (activeRef.current < concurrencyRef.current && queueRef.current.length) {
+      const [sku, ...rest] = queueRef.current;
+      setQueue(rest);
+      const p = productsRef.current.find((x) => x.sku === sku);
+      if (!p) continue;
+      activeRef.current++;
+      processRef.current(p).finally(() => {
+        activeRef.current--;
+        pump();
+      });
+    }
+  }
+  function enqueue(skus: string[]) {
+    const taken = new Set([...queueRef.current, ...runningRef.current]);
+    setQueue([...queueRef.current, ...skus.filter((s) => !taken.has(s))]);
+    pump();
+  }
+  function dequeue(sku: string) {
+    setQueue(queueRef.current.filter((s) => s !== sku));
+  }
+
   function exclusive<T>(fn: () => Promise<T>): Promise<T> {
     const run = finalizeQueue.current.catch(() => {}).then(fn);
     finalizeQueue.current = run;
@@ -147,14 +180,15 @@ export default function Page() {
   const shown = useMemo(() => {
     const f = filter.trim().toUpperCase();
     // Se ocultan sólo los que ya estaban terminados de antes; los que se procesan acá quedan a la vista para revisarlos.
-    return products.filter((p) => (!f || p.sku.includes(f)) && (!hideDone || !p.done || running.has(p.sku) || !!jobs[p.sku]));
-  }, [products, filter, hideDone, running, jobs]);
+    return products.filter((p) => (!f || p.sku.includes(f)) && (!hideDone || !p.done || running.has(p.sku) || queue.includes(p.sku) || !!jobs[p.sku]));
+  }, [products, filter, hideDone, running, queue, jobs]);
 
   async function processOne(p: Product) {
     const sku = p.sku;
     const plan = planFor(p);
     if (!plan.items.length) return;
-    setRunning((r) => new Set(r).add(sku));
+    runningRef.current.add(sku);
+    setRunning(new Set(runningRef.current));
     try {
       let items = plan.items.map((it) => (needsGen(it) ? fresh(it) : it));
       patchJob(sku, { items, phase: 'generando', detail: 'enviando a MiniMax…', folderUrl: undefined });
@@ -207,7 +241,7 @@ export default function Page() {
       patchJob(sku, { phase: 'armando', detail: 'esperando turno para armar el video…' });
       const { ok, status: code, j } = await exclusive(() => {
         patchJob(sku, { detail: 'uniendo clips y subiendo a Drive…' });
-        return api<{ folderUrl: string; motion: Motion[]; hasScript: boolean; badClips?: number[] }>('/api/finalize', {
+        return api<{ folderUrl: string; motion: Motion[]; hasScript: boolean; badClips?: number[]; clipsFailed?: number }>('/api/finalize', {
           sku,
           urls: items.map((it) => it.url),
           colors: items.map((it) => it.label),
@@ -227,37 +261,34 @@ export default function Page() {
       }
       items = items.map((it, i) => ({ ...it, motion: j.motion?.[i], redo: false }));
       const warns = items.filter((it) => motionWarn(it.motion)).map((it) => it.label);
-      const notes = [warns.length ? `revisá: ${warns.join(', ')}` : '', j.hasScript ? '' : 'TXT sin guion'].filter(Boolean);
-      patchJob(sku, { items, phase: 'terminado', detail: ['MP4 + TXT en TERMINADOS', ...notes].join(' · '), folderUrl: j.folderUrl });
+      const notes = [
+        warns.length ? `revisá: ${warns.join(', ')}` : '',
+        j.hasScript ? '' : 'TXT sin guion',
+        j.clipsFailed ? `${j.clipsFailed} clip(s) sueltos no se subieron (el video final sí)` : '',
+      ].filter(Boolean);
+      patchJob(sku, { items, phase: 'terminado', detail: ['MP4 + clips + TXT en TERMINADOS', ...notes].join(' · '), folderUrl: j.folderUrl });
       setProducts((ps) => ps.map((x) => (x.sku === sku ? { ...x, done: true } : x)));
     } catch (e: any) {
       patchJob(sku, { phase: 'error', detail: e.message });
-      // Sin saldo no tiene sentido seguir con el lote: se pausa y queda avisado en este SKU.
-      if (/sin saldo en minimax/i.test(e.message)) stopRef.current = true;
+      // Sin saldo no tiene sentido seguir: se vacía la cola y queda avisado en este SKU.
+      if (/sin saldo en minimax/i.test(e.message)) setQueue([]);
     } finally {
-      setRunning((r) => {
-        const n = new Set(r);
-        n.delete(sku);
-        return n;
-      });
+      runningRef.current.delete(sku);
+      setRunning(new Set(runningRef.current));
     }
   }
+  // La cola siempre usa la versión más nueva de processOne y de la lista (selección de colores, tablas, etc.).
+  processRef.current = processOne;
+  productsRef.current = products;
+  concurrencyRef.current = concurrency;
 
-  async function runBatch() {
+  function runBatch() {
     // El lote sólo incluye SKUs del catálogo SOX; los demás se procesan de a uno si hace falta.
-    const todo = shown.filter((p) => !p.done && p.inCatalog && variantsOf(p).length);
+    const todo = shown.filter((p) => !p.done && p.inCatalog && variantsOf(p).length && !running.has(p.sku) && !queue.includes(p.sku));
     if (!todo.length) return alert('No hay SKUs pendientes en la lista.');
     const total = todo.reduce((a, p) => a + planFor(p).cost, 0);
-    if (!confirm(`Se van a procesar ${todo.length} SKUs.\nCosto estimado en MiniMax: ${usd(total)} (sin contar reintentos).\n\n¿Arrancamos?`)) return;
-    stopRef.current = false;
-    setBatch(true);
-    const queue = [...todo];
-    await Promise.all(
-      Array.from({ length: concurrency }, async () => {
-        while (queue.length && !stopRef.current) await processOne(queue.shift()!);
-      }),
-    );
-    setBatch(false);
+    if (!confirm(`Se van a poner en cola ${todo.length} SKUs.\nCosto estimado en MiniMax: ${usd(total)} (sin contar reintentos).\n\n¿Arrancamos?`)) return;
+    enqueue(todo.map((p) => p.sku));
   }
 
   function runSingle(p: Product) {
@@ -271,7 +302,7 @@ export default function Page() {
       const already = p.done && !job ? `${p.sku} ya tiene video terminado.\n` : '';
       if (!confirm(`${already}${p.sku}: generar ${plan.toGenerate} clip(s), ≈ ${usd(plan.cost)}. ¿Seguimos?`)) return;
     }
-    processOne(p);
+    enqueue([p.sku]);
   }
 
   function toggleRedo(sku: string, idx: number) {
@@ -286,7 +317,7 @@ export default function Page() {
     alert(ok ? (j.hasScript ? `TXT de ${p.sku} actualizado con tu guion.` : `TXT de ${p.sku} actualizado, pero no encontré un Google Doc llamado ${p.sku}.`) : j.error);
   }
 
-  const pending = shown.filter((p) => !p.done && p.inCatalog && p.variants.length);
+  const pending = shown.filter((p) => !p.done && p.inCatalog && p.variants.length && !running.has(p.sku) && !queue.includes(p.sku));
   const pendingCost = pending.reduce((a, p) => a + planFor(p, jobs).cost, 0);
   const ready = status?.connected && !status.missing.length;
 
@@ -330,9 +361,16 @@ export default function Page() {
             <label title="Usa la misma foto como primer y último cuadro, así la vuelta termina de frente">
               <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} /> forzar que termine de frente
             </label>
-            <label title="SKUs que se generan a la vez en MiniMax. El armado final igual se hace de a uno.">
+            <label title="Cuántos SKUs se procesan a la vez. Lo que toques de más queda en cola y arranca solo. El armado final igual se hace de a uno.">
               en paralelo{' '}
-              <select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
+              <select
+                value={concurrency}
+                onChange={(e) => {
+                  concurrencyRef.current = Number(e.target.value);
+                  setConcurrency(concurrencyRef.current);
+                  pump();
+                }}
+              >
                 {[1, 2, 3, 4].map((n) => (
                   <option key={n}>{n}</option>
                 ))}
@@ -340,13 +378,12 @@ export default function Page() {
             </label>
           </div>
           <div className="row" style={{ marginTop: 12 }}>
-            {!batch ? (
-              <button disabled={!pending.length} onClick={runBatch}>
-                Procesar {pending.length} pendientes · ≈ {usd(pendingCost)}
-              </button>
-            ) : (
-              <button className="secondary" onClick={() => (stopRef.current = true)}>
-                Pausar después de lo que está en curso
+            <button disabled={!pending.length} onClick={runBatch}>
+              Procesar {pending.length} pendientes · ≈ {usd(pendingCost)}
+            </button>
+            {queue.length > 0 && (
+              <button className="secondary" onClick={() => setQueue([])} title="Lo que está en curso termina; lo que espera vuelve a pendiente">
+                Vaciar cola ({queue.length} en espera)
               </button>
             )}
             <small>
@@ -373,12 +410,15 @@ export default function Page() {
                 const s = selOf(p);
                 const set = p.variants;
                 const job = jobs[p.sku];
-                const busy = running.has(p.sku);
+                const queuedAt = queue.indexOf(p.sku);
+                const busy = running.has(p.sku) || queuedAt >= 0;
                 const plan = planFor(p, jobs);
                 const n = plan.items.length;
                 const finished = p.done || job?.phase === 'terminado';
                 const clips = job?.items.filter((it) => it.url) || [];
-                const action = busy
+                const action = queuedAt >= 0
+                  ? `En cola (#${queuedAt + 1}) · quitar`
+                  : running.has(p.sku)
                   ? '…'
                   : job?.phase === 'error'
                     ? 'Reintentar'
@@ -495,6 +535,12 @@ export default function Page() {
                       )}
                     </td>
                     <td>
+                      {queuedAt >= 0 && (
+                        <>
+                          <span className="badge warn">en cola #{queuedAt + 1}</span>
+                          <br />
+                        </>
+                      )}
                       {job && (
                         <>
                           <span className={'badge ' + (job.phase === 'terminado' ? 'ok' : job.phase === 'error' ? 'err' : 'warn')}>{busy && job.phase === 'error' ? 'reintentando' : job.phase}</span>
@@ -512,7 +558,11 @@ export default function Page() {
                       )}
                     </td>
                     <td>
-                      <button className="secondary" disabled={busy || !n} onClick={() => runSingle(p)}>
+                      <button
+                        className="secondary"
+                        disabled={running.has(p.sku) || !n}
+                        onClick={() => (queuedAt >= 0 ? dequeue(p.sku) : runSingle(p))}
+                      >
                         {action}
                       </button>
                       {finished && !busy && (

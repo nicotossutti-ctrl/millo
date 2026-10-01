@@ -71,7 +71,11 @@ async function durationOf(file: string) {
  * (puede repetir, ej. [0, 1, 0]) y cada tramo dura `segmentSeconds`. Si un clip no dura justo eso,
  * se acelera o frena apenas (no se recorta), así la vuelta entra entera.
  */
-export async function makeFinalVideo(urls: string[], order: number[], segmentSeconds: number): Promise<{ video: Buffer; motion: Motion[] }> {
+export async function makeFinalVideo(
+  urls: string[],
+  order: number[],
+  segmentSeconds: number,
+): Promise<{ video: Buffer; motion: Motion[]; clips: Buffer[] }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sox-video-'));
   try {
     const downloads = await Promise.allSettled(
@@ -118,7 +122,9 @@ export async function makeFinalVideo(urls: string[], order: number[], segmentSec
     ];
     const { code, stderr } = await run(args);
     if (code !== 0) throw new Error(`ffmpeg falló: ${stderr.slice(-1500)}`);
-    return { video: await fs.readFile(out), motion };
+    // Los clips tal cual los devolvió MiniMax (uno por color), para guardarlos también en Drive.
+    const clips = await Promise.all(unique.map((f) => fs.readFile(f)));
+    return { video: await fs.readFile(out), motion, clips };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

@@ -18,7 +18,7 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
    - Si uno no te gusta, **↻ regenera sólo ese clip** (USD 0,32 con 4 s) y se vuelve a armar el video.
    - Un aviso aproximado marca clips para mirar primero: **⚠ casi quieta** o **⚠ no termina de frente**. Detecta esos dos casos; no confirma que el giro sea completo.
 4. **Arma el video de 15 s exactos** (450 cuadros a 30 fps): cada color aparece una sola vez y ocupa **15 / N segundos** (2 → 7,5 s · 3 → 5 s · 4 → 3,75 s · 5 → 3 s · 6 → 2,5 s). El clip se **acelera o frena, no se recorta**, así no se pierde el final de la vuelta. Corte seco entre colores, sin audio. El armado se hace de a un SKU por vez (medido: 13–18 s con 1 CPU para 2 a 7 variantes, ~0,7 GB de RAM).
-5. **Sube MP4 + TXT** a `TERMINADOS - VIDEOS/<SKU>/`. Si ya existían, los reemplaza.
+5. **Sube a `TERMINADOS - VIDEOS/<SKU>/`**: el video unido `<SKU>.mp4`, el `<SKU>.txt` y una subcarpeta **`clips/`** con cada clip de MiniMax tal cual salió (`<SKU>-01-Negro.mp4`, …). Si ya existían, los reemplaza; los clips de colores que ya no se usan van a la papelera.
 6. **El TXT** tiene dos partes:
    - **GUION**: tu texto hablado, tomado del **Google Doc que se llame igual que el SKU** (como los de la carpeta CLIPS: `TE215C`, `TE251C`…). Si todavía no existe, lo deja indicado.
    - **DESCRIPCIÓN MERCADO LIBRE**: título y `Descripcion_conversion` de **PF_Master_v11 → PUBLICACIONES_OBJETIVO** (publicación x1).
@@ -35,6 +35,8 @@ App web independiente (no toca PFOS). Toma las fotos de cada SKU de tu Drive, ha
 
 **Control de gasto**
 - Antes de generar te muestra el costo estimado y te pide confirmación.
+- **Cola:** si tocás Procesar en otro SKU mientras uno está en curso, queda "en cola" y arranca solo cuando se libera el lugar ("en paralelo", por defecto 1). Desde el botón se lo saca de la cola.
+- Si MiniMax responde "demasiados pedidos", la app espera y reintenta sola (sin cobrar dos veces).
 - Los SKUs que ya tienen video en TERMINADOS se marcan y se ocultan.
 - **Procesar N pendientes** sólo incluye SKUs que existen en el catálogo SOX. Los que aparecen como "fuera del catálogo" (por ejemplo la línea reflectiva que no está en PV 26/27) se pueden procesar uno por uno.
 - Nunca se vuelve a pagar un clip que ya salió bien: si se corta algo (cerraste la pestaña, falló una variante, venció el link de un clip), **Reintentar** regenera sólo lo que falta o falló. Queda guardado en ese navegador.
