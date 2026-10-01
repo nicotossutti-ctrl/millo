@@ -38,11 +38,12 @@ export function pricePerSecond() {
   return Number(process.env.MINIMAX_PRICE_PER_SECOND || 0.08);
 }
 
-export function videoPrompt(loop: boolean) {
+export function videoPrompt(loop: boolean, seconds: number) {
   return [
     'E-commerce product video of the exact sock shown in the image, standing on an invisible turntable.',
-    'During the whole clip the sock rotates at a slow, constant speed around its vertical axis and completes exactly ONE full 360-degree turn:',
-    'front, side, back, other side, and back to the same front view it starts with.',
+    `The sock makes exactly ONE full 360-degree turn around its vertical axis, and that single turn takes the entire ${seconds} seconds of the clip:`,
+    'a slow, steady, constant speed from the first frame to the last, never more than one turn, no pauses.',
+    'Order of views: front, side, back, other side, and back to the same front view it starts with.',
     loop ? 'The last frame must match the first frame.' : 'It ends facing the front again.',
     'Locked-off camera: no zoom, no pan, no orbit, no cuts. Keep the same background and lighting as the image.',
     'Keep the sock identical to the image: same colors, knit pattern, logos, text, shape and size.',
@@ -52,7 +53,7 @@ export function videoPrompt(loop: boolean) {
 
 export async function createVideo(frameDataUrl: string, seconds: number, loop: boolean) {
   const content: unknown[] = [
-    { type: 'text', text: videoPrompt(loop) },
+    { type: 'text', text: videoPrompt(loop, seconds) },
     { type: 'image_url', image_url: { url: frameDataUrl }, role: 'first_frame' },
   ];
   // Mismo cuadro al principio y al final: obliga a que la vuelta termine donde empezó.
