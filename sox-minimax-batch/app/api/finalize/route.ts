@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { ClipDownloadError, makeFinalVideo } from '@/lib/video';
 import { productText } from '@/lib/texts';
 import { ensureFolder, putFile } from '@/lib/google';
-import { TURN_SECONDS, sequenceFor } from '@/lib/minimax';
+import { secondsPerVariant, sequenceFor } from '@/lib/minimax';
 import { guard } from '@/lib/guard';
 
 export const runtime = 'nodejs';
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     if (!outputRoot) throw new Error('Falta DRIVE_OUTPUT_FOLDER_ID');
 
     const [{ video, motion }, { text, hasScript }, folder] = await Promise.all([
-      makeFinalVideo(urls, sequenceFor(urls.length), TURN_SECONDS),
+      makeFinalVideo(urls, sequenceFor(urls.length), secondsPerVariant(urls.length)),
       productText(sku, colors || [], alsoNames || []),
       ensureFolder(outputRoot, sku),
     ]);

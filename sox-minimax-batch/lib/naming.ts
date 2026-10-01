@@ -48,7 +48,7 @@ export function parseImageName(fileName: string): ParsedImage | null {
     else if (MAIN_VIEW.has(t)) continue;
     else rest.push(t);
   }
-  if (rest.length && /^\d{1,2}$/.test(rest[rest.length - 1])) angle = Number(rest.pop());
+  if (rest.length && /^\d{1,3}$/.test(rest[rest.length - 1])) angle = Number(rest.pop());
   if (!rest.length) return { sku, key: UNICO, label: 'Único', order: 0, dark, alt, angle };
 
   const key = rest.join('-');

@@ -10,24 +10,25 @@ function key() {
 
 export const NO_BALANCE = 'Sin saldo en MiniMax: cargá saldo en platform.minimax.io (Billing) y tocá Reintentar. No se cobró nada.';
 
-/** Cada color da una vuelta de 4 s (es también el mínimo que genera MiniMax: no hace falta acelerar). */
-export const TURN_SECONDS = 4;
-/** El video nunca baja de 12 s: con 1 o 2 colores se repiten clips (sin costo extra). */
-export const MIN_SEGMENTS = 3;
+/** Todo video final dura exactamente esto, tenga los colores que tenga. */
+export const TOTAL_SECONDS = 15;
 
-/** Orden de los clips en el video, como índices de color: 1 → A·A·A, 2 → A·B·A, 3+ → A·B·C… */
+/** Cada color ocupa lo mismo: 15 / N segundos (2 → 7,5 · 3 → 5 · 4 → 3,75 · 5 → 3 · 6 → 2,5). */
+export function secondsPerVariant(variantCount: number) {
+  return TOTAL_SECONDS / Math.max(1, variantCount);
+}
+
+/** Orden de los clips: cada color una sola vez, sin repetir. */
 export function sequenceFor(variantCount: number) {
-  const len = Math.max(MIN_SEGMENTS, variantCount);
-  return Array.from({ length: len }, (_, i) => i % variantCount);
+  return Array.from({ length: variantCount }, (_, i) => i);
 }
 
-export function totalSeconds(variantCount: number) {
-  return sequenceFor(variantCount).length * TURN_SECONDS;
-}
-
-/** Segundos que se le piden a MiniMax por color. */
-export function clipSeconds(_variantCount: number) {
-  return TURN_SECONDS;
+/**
+ * Segundos que se le piden a MiniMax por color (entero de 4 a 15), lo más cerca posible de 15 / N.
+ * Cada clip tiene una vuelta completa; después se acelera o frena apenas para que dure 15 / N, sin cortarla.
+ */
+export function clipSeconds(variantCount: number) {
+  return Math.min(15, Math.max(4, Math.round(secondsPerVariant(variantCount))));
 }
 
 export function pricePerSecond() {
