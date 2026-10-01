@@ -34,17 +34,28 @@ export function pricePerSecond() {
   return Number(process.env.MINIMAX_PRICE_PER_SECOND || 0.08);
 }
 
+/**
+ * Prompt para MiniMax. H3 no lo reescribe: le llega tal cual. La prioridad absoluta es
+ * no cambiar el producto (colores, tejido, logos y textos), después el giro y la cámara fija.
+ */
 export function videoPrompt(loop: boolean, seconds: number) {
   return [
-    'E-commerce product video of the exact sock shown in the image, standing on an invisible turntable.',
-    `The sock makes exactly ONE full 360-degree turn around its vertical axis, and that single turn takes the entire ${seconds} seconds of the clip:`,
-    'a slow, steady, constant speed from the first frame to the last, never more than one turn, no pauses.',
-    'Order of views: front, side, back, other side, and back to the same front view it starts with.',
-    loop ? 'The last frame must match the first frame.' : 'It ends facing the front again.',
-    'Locked-off camera: no zoom, no pan, no orbit, no cuts. Keep the same background and lighting as the image.',
-    'Keep the sock identical to the image: same colors, knit pattern, logos, text, shape and size.',
-    'No hands, no feet, no people, no extra objects, no text overlays, no morphing.',
-  ].join(' ');
+    'PRODUCT TURNTABLE VIDEO FOR AN ONLINE STORE. The only subject is the exact real sock shown in the image. This is a photo of a real product that customers will buy, so it must look exactly like the photo.',
+    '',
+    'RULE 1 - DO NOT CHANGE THE PRODUCT (highest priority, never break it):',
+    '- Keep every color exactly as in the image. No hue, saturation or brightness changes.',
+    '- Keep the knit texture, stripes, patterns, panels, seams, cuff, heel and toe exactly as in the image.',
+    '- Keep every logo and every printed word exactly as in the image: same letters, same spelling, same font, same color, same size, same position. Do not mirror or flip any text.',
+    '- NEVER add, invent, complete, translate or replace any text, letters, numbers, words or logos. If a word is only partly visible, leave it exactly as it looks. Do not write words that are not in the image.',
+    '- Parts of the sock that are not visible in the image must stay simple and consistent with the visible colors and materials, with NO new text, NO new logos and NO new graphics.',
+    '- Keep the exact shape, length, thickness and proportions. No stretching, bending, melting or morphing.',
+    '',
+    `RULE 2 - MOTION: the sock stands upright on an invisible turntable and makes exactly ONE full 360-degree turn around its vertical axis. That single turn lasts the entire ${seconds} seconds, at a slow and constant speed, without pauses and never more than one turn. ${loop ? 'The last frame must be identical to the first frame.' : 'It ends facing the same way it started.'}`,
+    '',
+    'RULE 3 - CAMERA: fixed camera on a tripod. The framing stays identical to the first frame for the whole video: NO zoom in, NO zoom out, NO push-in, NO dolly, NO pan, NO tilt, NO reframing, NO cuts. The sock keeps the same size and stays centered in the same place.',
+    '',
+    'RULE 4 - SCENE: keep the same background, the same lighting and the same floor reflection as the image. No hands, no feet, no legs, no mannequin, no people, no extra objects, no text overlays, no watermark, no effects.',
+  ].join('\n');
 }
 
 export async function createVideo(frameDataUrl: string, seconds: number, loop: boolean) {
