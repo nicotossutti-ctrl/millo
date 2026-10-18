@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { toCsv, fechaArca } from './csv.js';
 
-// Tipos que emite un monotributista: Factura C, ND C, NC C, Recibo C.
+// Responsable inscripto: A y B (y M si ARCA lo impuso). Monotributo: C.
+export const TIPOS_RI = [1, 2, 3, 4, 6, 7, 8, 9, 51, 52, 53];
 export const TIPOS_C = [11, 12, 13, 15];
 
 /** Notas de crédito: restan en la conciliación. */
@@ -47,11 +48,21 @@ export async function exportarEmitidos(wsfe, cfg, { desde, hasta, tipos, ptos, l
   const h = ymd(hasta);
   const puntos = ptos?.length ? ptos : (await wsfe.ptosVenta()).filter((p) => !p.bloqueado).map((p) => p.nro);
   if (!puntos.length) throw new Error('No hay puntos de venta habilitados para web services.');
+  // Sin --tipos recorremos todos los tipos vigentes que informa ARCA: así no se escapa
+  // una Factura M, E o de crédito electrónico que no esperábamos.
+  const tiposARecorrer = tipos?.length ? tipos : (await wsfe.tiposCbte()).filter((t) => !t.fchHasta).map((t) => t.id);
 
   const rows = [];
   for (const pto of puntos) {
-    for (const tipo of tipos) {
-      const ultimo = await wsfe.ultimoAutorizado(pto, tipo);
+    for (const tipo of tiposARecorrer) {
+      let ultimo;
+      try {
+        ultimo = await wsfe.ultimoAutorizado(pto, tipo);
+      } catch (e) {
+        log(`PV ${pto} tipo ${tipo}: no consultable (${e.message})`);
+        continue;
+      }
+      if (!ultimo) continue;
       log(`PV ${pto} tipo ${tipo} (${TIPO_DESC[tipo] ?? '?'}): último autorizado ${ultimo}`);
       let fuera = 0;
       for (let nro = ultimo; nro >= 1; nro--) {

@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from './config.js';
 import { Wsfe } from './wsfe.js';
 import { getTicket } from './wsaa.js';
-import { exportarEmitidos, escribirCsv, TIPOS_C, signo } from './emitidos.js';
+import { exportarEmitidos, escribirCsv, signo } from './emitidos.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -14,7 +14,8 @@ Comandos:
   tipos-cbte                    Tipos de comprobante vigentes
   ultimo --pto N --tipo T       Último comprobante autorizado
   consultar --pto N --tipo T --nro X
-  emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--tipos 11,12,13,15] [--pto 1,2] [--out out/emitidos.csv]
+  emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--tipos 1,2,3,6,7,8] [--pto 1,2] [--out out/emitidos.csv]
+                                (sin --tipos recorre todos los tipos vigentes; sin --pto, todos los puntos de venta)
 
 Variables (.env): ARCA_ENV, ARCA_CUIT, ARCA_CERT, ARCA_KEY`;
 
@@ -82,7 +83,7 @@ try {
       const rows = await exportarEmitidos(wsfe, cfg, {
         desde,
         hasta,
-        tipos: o.tipos ? lista(o.tipos) : TIPOS_C,
+        tipos: o.tipos ? lista(o.tipos) : null,
         ptos: o.pto ? lista(o.pto) : null,
         log: (m) => console.error(m),
       });

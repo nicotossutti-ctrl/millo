@@ -57,8 +57,14 @@ npm run arca -- emitidos --desde 2026-01-01 --hasta 2026-09-30
 con fecha, tipo, número, CAE, receptor, importes y una columna **Signo** (−1 en notas de crédito)
 para sumar directo.
 
-Por defecto recorre Factura, Nota de Débito, Nota de Crédito y Recibo C (monotributo).
-Para otros tipos: `--tipos 1,2,3,6,7,8`. Para un solo punto de venta: `--pto 2`.
+Por defecto recorre **todos** los tipos de comprobante vigentes que informa ARCA y todos los
+puntos de venta habilitados, para no dejar afuera una Factura M o de crédito electrónico inesperada.
+Para acotar: `--tipos 1,2,3,6,7,8` (A y B) o `--pto 2`.
+
+Atención: el listado de puntos de venta del web service puede no incluir los que usan
+Comprobantes en Línea ni los que Mercado Libre u otro sistema crearon para facturar en tu nombre.
+Si tenés alguno así, pasalo con `--pto`. La cobertura se valida comparando contra una
+exportación manual de Mis Comprobantes del mismo mes.
 Con `--json` imprime los comprobantes completos, con detalle de IVA y tributos.
 
 Cada comprobante consultado se guarda en `out/cache/`, así una segunda corrida sobre el mismo
