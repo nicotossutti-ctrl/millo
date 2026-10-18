@@ -7,7 +7,7 @@ import { exportarEmitidos, escribirCsv, escribirReporte, resumenReporte } from '
 import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
 import { Sesion } from './portal/sesion.js';
-import { diagnosticar, SERVICIOS } from './portal/diagnostico.js';
+import { diagnosticar, limpiar, SERVICIOS } from './portal/diagnostico.js';
 import { descargarMisComprobantes } from './portal/misComprobantes.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
@@ -32,8 +32,10 @@ Comandos:
 Portal (sesión autenticada con navegador, sin certificado):
   portal:login [--visible]      Inicia sesión en el portal y guarda las cookies en .sesion/. Sin ARCA_CLAVE
                                 hay que usar --visible y tipear la clave a mano. Nunca elude CAPTCHA ni 2FA.
-  portal:diagnostico [--visible] [--servicios "Mis Comprobantes,Portal IVA"]
-                                Entra a cada servicio y guarda captura, HTML y estructura en out/diagnostico/.
+  portal:diagnostico [--visible] [--sin-capturas] [--servicios "Mis Comprobantes,Portal IVA"]
+                                Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
+                                (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
+  portal:limpiar                Borra diagnóstico, descargas y sesión guardada.
   portal:mis-comprobantes --tipo emitidos|recibidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
                                 Descarga la exportación de Mis Comprobantes (tramos de hasta 365 días).
 
@@ -57,6 +59,7 @@ const { values: o, positionals } = parseArgs({
     json: { type: 'boolean', default: false },
     completo: { type: 'boolean', default: false },
     visible: { type: 'boolean', default: false },
+    'sin-capturas': { type: 'boolean', default: false },
     servicios: { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -106,6 +109,11 @@ try {
     process.exit(0);
   }
 
+  if (cmd === 'portal:limpiar') {
+    const cfg = loadConfig({ requireAuth: false });
+    print({ borrados: limpiar({ outDir: cfg.outDir, sesionDir: cfg.sesionDir }) });
+    process.exit(0);
+  }
   if (cmd.startsWith('portal:')) {
     const cfg = loadConfig({ requireAuth: 'cuit' });
     const sesion = new Sesion(cfg, { visible: o.visible, log: (m) => console.error(m) });
@@ -116,7 +124,7 @@ try {
         console.log('OK: sesión guardada.');
       } else if (cmd === 'portal:diagnostico') {
         const servicios = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : SERVICIOS;
-        print(await diagnosticar(sesion, { servicios, log: (m) => console.error(m) }));
+        print(await diagnosticar(sesion, { servicios, sinCapturas: o['sin-capturas'], log: (m) => console.error(m) }));
       } else if (cmd === 'portal:mis-comprobantes') {
         print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), log: (m) => console.error(m) }));
       } else {

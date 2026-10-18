@@ -84,22 +84,24 @@ export class Sesion {
 
   /**
    * Login en dos pasos (CUIT → clave). Si no hay ARCA_CLAVE y la sesión es visible, espera a que
-   * la persona tipee la clave. Si hay CAPTCHA o segundo factor, se detiene.
+   * la persona tipee la clave. Ante CAPTCHA o segundo factor: en modo visible espera a que la
+   * persona lo resuelva y, si la sesión queda iniciada, termina ahí; en modo oculto falla.
+   * En ningún caso se sigue operando el formulario después de una verificación.
    */
   async login() {
     const { page, cfg } = this;
     await page.goto(URL_LOGIN, { waitUntil: 'domcontentloaded' });
-    if (await hayDesafio(page)) throw await this.detenerPorDesafio(await hayDesafio(page));
+    if (await this.resolverDesafioSiHay('antes del CUIT')) return;
 
     await page.fill('#F1\\:username', cfg.cuit);
     await page.click('#F1\\:btnSiguiente');
     await page.waitForSelector('#F1\\:password', { state: 'attached', timeout: 20000 }).catch(() => {});
     await page.waitForLoadState('networkidle').catch(() => {});
-    const msg = await page.locator('#F1\\:msg').textContent().catch(() => '');
-    if (msg && msg.trim() && !(await page.locator('#F1\\:password').count())) throw new Error(`ARCA rechazó el CUIT: ${msg.trim()}`);
-
-    const desafio = await hayDesafio(page);
-    if (desafio) throw await this.detenerPorDesafio(desafio);
+    if (await this.resolverDesafioSiHay('después del CUIT')) return;
+    if (!(await page.locator('#F1\\:password').count())) {
+      const msg = ((await page.locator('#F1\\:msg').textContent().catch(() => '')) || '').trim();
+      throw new Error(`ARCA no pasó al paso de la clave${msg ? `: ${msg}` : ''}. Corré con --visible para ver qué muestra.`);
+    }
 
     const clave = process.env.ARCA_CLAVE;
     if (clave) {
@@ -113,43 +115,51 @@ export class Sesion {
       throw new Error('Sin ARCA_CLAVE y sin --visible no se puede loguear. Definí ARCA_CLAVE o corré con --visible para tipearla a mano.');
     }
 
-    // Esperamos salir del dominio de login o un mensaje de error.
+    const timeout = this.visible ? 180000 : 45000;
     const salida = await Promise.race([
-      page.waitForURL((u) => !u.href.includes('auth.afip.gob.ar'), { timeout: this.visible ? 180000 : 45000 }).then(() => 'ok'),
-      page.waitForSelector('#F1\\:msg:not(:empty)', { timeout: this.visible ? 180000 : 45000 }).then(() => 'msg'),
+      page.waitForURL((u) => !u.href.includes('auth.afip.gob.ar'), { timeout }).then(() => 'ok'),
+      page.waitForSelector('#F1\\:msg:not(:empty)', { timeout }).then(() => 'msg'),
     ]).catch(() => 'timeout');
 
+    if (salida === 'ok') return this.confirmarLogin();
+    if (await this.resolverDesafioSiHay('después de la clave')) return;
     if (salida === 'msg') {
-      const err = (await page.locator('#F1\\:msg').textContent()) ?? '';
-      if (await hayDesafio(page)) throw await this.detenerPorDesafio(await hayDesafio(page));
-      throw new Error(`ARCA rechazó el ingreso: ${err.trim()}`);
+      const err = ((await page.locator('#F1\\:msg').textContent()) ?? '').trim();
+      throw new Error(`ARCA rechazó el ingreso: ${err}`);
     }
-    if (salida === 'timeout') {
-      const desafio = await hayDesafio(page);
-      if (desafio) throw await this.detenerPorDesafio(desafio);
-      throw new Error('El login no terminó a tiempo. Corré con --visible para ver qué muestra ARCA.');
-    }
+    throw new Error('El login no terminó a tiempo. Corré con --visible para ver qué muestra ARCA.');
+  }
+
+  /** Verifica que el portal cargue con sesión y recién entonces guarda las cookies. */
+  async confirmarLogin() {
+    if (!(await this.estaLogueado())) throw new Error('Salimos del login pero el portal no muestra sesión iniciada.');
     await this.guardar();
     this.log('Sesión iniciada y guardada.');
   }
 
-  async detenerPorDesafio(que) {
-    if (this.visible) {
-      this.log(`ARCA pidió una verificación (${que}). Resolvela a mano en la ventana; espero hasta 3 minutos.`);
-      try {
-        await this.page.waitForURL((u) => !u.href.includes('auth.afip.gob.ar'), { timeout: 180000 });
-        await this.guardar();
-        return null;
-      } catch { /* cae al error */ }
+  /**
+   * Si hay un CAPTCHA u otra verificación: en modo visible espera a que la persona la resuelva
+   * (hasta 3 minutos) y devuelve true si la sesión quedó iniciada; en modo oculto lanza
+   * DesafioDeSeguridad. Devuelve false si no había verificación.
+   */
+  async resolverDesafioSiHay(momento) {
+    const que = await hayDesafio(this.page);
+    if (!que) return false;
+    if (!this.visible) throw new DesafioDeSeguridad(`${que} ${momento}`);
+    this.log(`ARCA pidió una verificación (${que}, ${momento}). Resolvela a mano en la ventana, incluida la clave si la pide; espero hasta 3 minutos.`);
+    try {
+      await this.page.waitForURL((u) => !u.href.includes('auth.afip.gob.ar'), { timeout: 180000 });
+    } catch {
+      throw new DesafioDeSeguridad(`${que} ${momento}, no resuelta en 3 minutos`);
     }
-    return new DesafioDeSeguridad(que);
+    await this.confirmarLogin();
+    return true;
   }
 
   async asegurarLogin() {
     if (await this.estaLogueado()) { this.log('Sesión vigente.'); return; }
     this.log('Sin sesión vigente: iniciando login.');
-    const err = await this.login();
-    if (err) throw err;
+    await this.login();
   }
 
   /**

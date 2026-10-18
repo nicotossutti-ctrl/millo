@@ -82,10 +82,13 @@ Terceros como Afip SDK no tienen un cuarto mecanismo: usan el 2 con tu clave en 
 - WSAA + WSFEv1 con reporte de integridad, solo lectura por código, 32 tests (fuente 1).
 - Motor de Ganancias calibrado contra la DDJJ 2025 (para la fila 8, estimaciones).
 - Capa de sesión del portal: login en dos pasos con los selectores reales del formulario de
-  ARCA, detección de CAPTCHA y 2FA con parada, cookies persistidas con permisos 0600, apertura
-  de servicios por el buscador del portal.
-- Modo diagnóstico: entra a cada servicio y guarda captura, HTML, inventario de formularios y
-  tráfico de red, para escribir los selectores exactos sin adivinar.
+  ARCA. Ante CAPTCHA o segundo factor, en modo oculto falla y en modo visible espera a que la
+  persona lo resuelva; si la sesión queda iniciada, termina ahí y no vuelve a tocar el
+  formulario. Las cookies se guardan recién después de confirmar que el portal carga con sesión.
+  Apertura de servicios por el buscador del portal.
+- Modo diagnóstico: entra a cada servicio y guarda captura, HTML saneado (sin scripts, valores,
+  tokens, CUIT ni importes), inventario de formularios y rutas de red sin parámetros, todo con
+  permisos 0600 y fuera de git, para escribir los selectores exactos sin adivinar.
 - Extractor de Mis Comprobantes emitidos y recibidos (fuentes 1b y 2), con selectores
   provisorios hasta el diagnóstico.
 

@@ -150,6 +150,19 @@ formularios y tráfico de red de cada servicio. Es lo que se usa para escribir l
 exactos de cada extractor sin adivinar, y lo que hay que volver a correr cuando ARCA rediseña
 una pantalla.
 
+Lo que guarda el diagnóstico sale de pantallas autenticadas, así que se protege:
+
+- carpetas 0700 y archivos 0600; `out/` y `.sesion/` están en `.gitignore` y un test
+  (`test/diagnostico.test.js`) verifica en cada corrida que git los ignore;
+- el HTML se sanea: sin scripts, sin valores de inputs ni tokens de formulario, CUIT e importes
+  enmascarados; la estructura nunca incluye el valor de un input;
+- del tráfico de red se guarda solo método, host y ruta: sin query string, sin cookies ni
+  encabezados;
+- las capturas muestran lo que muestra la pantalla; `--sin-capturas` las omite;
+- `portal:limpiar` borra diagnóstico, descargas y la sesión guardada.
+
+Si me vas a pasar la carpeta de diagnóstico, pasala sin las capturas o revisándolas antes.
+
 ## Estimación mensual: cuánto gano de verdad
 
 El contador liquida; esto solo provisiona. Para cada mes:
