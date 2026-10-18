@@ -1,11 +1,24 @@
 /**
- * WSFEv1: Factura Electrónica. Solo usamos los métodos de consulta.
+ * WSFEv1: Factura Electrónica. SOLO métodos de consulta.
  * Manual oficial: https://www.afip.gob.ar/ws/documentacion/manuales/manual-desarrollador-ARCA-COMPG-v4-0.pdf
  */
 import { soapCall, asArray } from './soap.js';
 import { getTicket } from './wsaa.js';
 
 const NS = 'http://ar.gov.afip.dif.FEV1/';
+
+/**
+ * Lista cerrada de métodos permitidos. Cualquier otro (FECAESolicitar, FECAEARegInformativo,
+ * FECAEAInformarMovimiento, etc.) queda bloqueado por código: este cliente no emite ni modifica.
+ */
+export const METODOS_LECTURA = Object.freeze([
+  'FEDummy',
+  'FEParamGetPtosVenta',
+  'FEParamGetTiposCbte',
+  'FEParamGetTiposMonedas',
+  'FECompUltimoAutorizado',
+  'FECompConsultar',
+]);
 
 function envelope(method, innerXml) {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -20,25 +33,36 @@ function authXml(cfg, ta) {
   return `<ar:Auth><ar:Token>${ta.token}</ar:Token><ar:Sign>${ta.sign}</ar:Sign><ar:Cuit>${cfg.cuit}</ar:Cuit></ar:Auth>`;
 }
 
-/** Los métodos de WSFE devuelven Errors/Err[] en vez de SOAP Faults. */
-function throwIfErrors(result, method) {
-  const errs = asArray(result?.Errors?.Err);
-  if (errs.length) {
-    const e = new Error(`${method}: ${errs.map((x) => `[${x.Code}] ${x.Msg}`).join('; ')}`);
-    e.codes = errs.map((x) => Number(x.Code));
-    throw e;
+export class WsfeError extends Error {
+  constructor(method, errs) {
+    super(`${method}: ${errs.map((x) => `[${x.Code}] ${x.Msg}`).join('; ')}`);
+    this.name = 'WsfeError';
+    this.method = method;
+    this.codes = errs.map((x) => Number(x.Code));
   }
 }
 
+/** Los métodos de WSFE devuelven Errors/Err[] en vez de SOAP Faults. */
+function throwIfErrors(result, method) {
+  const errs = asArray(result?.Errors?.Err);
+  if (errs.length) throw new WsfeError(method, errs);
+}
+
 export class Wsfe {
-  constructor(cfg) {
+  constructor(cfg, { fetchImpl, onRetry, ticketProvider = getTicket } = {}) {
     this.cfg = cfg;
+    this.fetchImpl = fetchImpl;
+    this.onRetry = onRetry;
+    this.ticketProvider = ticketProvider;
   }
 
   async call(method, innerXml, { auth = true } = {}) {
-    const ta = auth ? await getTicket(this.cfg, 'wsfe') : null;
+    if (!METODOS_LECTURA.includes(method)) {
+      throw new Error(`Método ${method} no permitido: este cliente es de solo lectura.`);
+    }
+    const ta = auth ? await this.ticketProvider(this.cfg, 'wsfe') : null;
     const xml = envelope(method, (auth ? authXml(this.cfg, ta) : '') + innerXml);
-    const body = await soapCall(this.cfg.endpoints.wsfe, NS + method, xml);
+    const body = await soapCall(this.cfg.endpoints.wsfe, NS + method, xml, { fetchImpl: this.fetchImpl, onRetry: this.onRetry });
     const result = body?.[`${method}Response`]?.[`${method}Result`];
     if (result === undefined) throw new Error(`${method}: respuesta inesperada ${JSON.stringify(body).slice(0, 300)}`);
     throwIfErrors(result, method);
@@ -50,6 +74,7 @@ export class Wsfe {
     return this.call('FEDummy', '', { auth: false });
   }
 
+  /** Todos los puntos de venta, incluidos bloqueados y dados de baja: pueden tener historia. */
   async ptosVenta() {
     const r = await this.call('FEParamGetPtosVenta', '');
     return asArray(r.ResultGet?.PtoVenta).map((p) => ({
@@ -104,7 +129,7 @@ export function normalizeComprobante(c) {
     cbteTipo: Number(c.CbteTipo),
     cbteDesde: Number(c.CbteDesde),
     cbteHasta: Number(c.CbteHasta),
-    cbteFch: c.CbteFch, // yyyymmdd
+    cbteFch: String(c.CbteFch ?? ''), // yyyymmdd
     concepto: Number(c.Concepto),
     docTipo: Number(c.DocTipo),
     docNro: String(c.DocNro ?? ''),

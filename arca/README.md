@@ -2,11 +2,31 @@
 
 Cliente propio de los web services oficiales de ARCA (ex AFIP). Sin intermediarios:
 se autentica con un certificado digital nuestro (WSAA) y consulta Factura Electrónica (WSFEv1)
-para reconstruir todos los comprobantes emitidos de un período y exportarlos a CSV.
+para reconstruir los comprobantes emitidos de un período, con reporte de integridad, y
+exportarlos a CSV. Incluye el motor de Ganancias para la estimación mensual.
 
-Es la primera capa de la conciliación. Lo que no tiene web service en ARCA
-(Mis Comprobantes recibidos, Mis Retenciones, Cuentas Tributarias, Monotributo)
-se resuelve en una segunda capa automatizando el portal, pendiente.
+**Solo lectura.** El cliente tiene una lista cerrada de métodos de consulta; cualquier método de
+emisión o modificación (`FECAESolicitar`, `FECAEA*`) es rechazado por código antes de salir a la red.
+
+Carpeta autónoma (package.json, parámetros, cache y credenciales propios): está en este repo de
+forma provisoria y se extrae a su propio repositorio sin cambios.
+
+## Estado por componente
+
+| Componente | Implementado | Probado con mocks | Probado en homologación | Validado en producción |
+|---|---|---|---|---|
+| WSAA: TRA, firma CMS, ticket y cache | sí | sí (firma verificada con openssl) | parcial: formato aceptado, certificado de prueba rechazado por no ser de ARCA | no |
+| WSFEv1: consultas, lista de solo lectura | sí | sí | `FEDummy` sí; el resto requiere certificado | no |
+| Recorrido de emitidos y reporte de integridad | sí | sí (series simuladas con huecos, errores y desorden) | no | no |
+| Validaciones de importes, IVA, moneda, fecha | sí | sí | no | no |
+| Notas de crédito: signo y anulación | sí | sí | no | no |
+| Reintentos controlados | sí | sí | no | no |
+| Cache por entorno y CUIT | sí | sí | no | no |
+| Ganancias: escala, deducciones, provisión | sí | sí (reproduce la DDJJ 2025 al centavo) | no aplica | calibrado contra DDJJ 2025 presentada |
+| Estimación mensual (IIBB, autónomos, Ganancias) | sí | sí | no aplica | pendiente de parámetros del contador |
+
+"Validado en producción" significa contrastado contra Mis Comprobantes de ARCA para un mes.
+Hasta que esa columna diga "sí", el CSV de emitidos no se usa para conciliar.
 
 ## 1. Instalar
 
@@ -53,9 +73,37 @@ npm run arca -- consultar --pto 1 --tipo 11 --nro 25
 npm run arca -- emitidos --desde 2026-01-01 --hasta 2026-09-30
 ```
 
-`emitidos` escribe `out/emitidos.csv` (separador `;`, coma decimal, listo para Excel o Sheets)
-con fecha, tipo, número, CAE, receptor, importes y una columna **Signo** (−1 en notas de crédito)
-para sumar directo.
+`emitidos` escribe dos archivos:
+
+- `out/emitidos.csv` (separador `;`, coma decimal): fecha, tipo, número, CAE, receptor, importes
+  originales, IVA por alícuota, **Total c/signo** y **Total ARS c/signo** (negativos en notas de
+  crédito, convertidos a pesos si la moneda no es PES), comprobantes asociados, **Anulado por NC**
+  cuando una nota de crédito cancela la factura por el total, y **Estado**: `OK`, `ANULADO` o
+  `INCONSISTENTE` con el detalle en **Validaciones** (total ≠ suma de componentes, IVA ≠ detalle por
+  alícuota, moneda sin cotización, fecha inválida).
+- `out/integridad-<desde>-<hasta>.json`: el reporte de integridad. Por cada punto de venta y tipo:
+  último autorizado, rango recorrido, números consultados, encontrados, inexistentes, errores,
+  fuera de orden y cobertura. Arriba, `completo: true|false`. El comando termina con código 3 si
+  la corrida no es completa, para que ningún paso posterior la tome por buena.
+
+### Cómo garantiza que no falta nada
+
+WSFE no lista por fecha: da el último número autorizado de cada serie (punto de venta + tipo) y
+consulta de a uno. ARCA exige que la fecha de un comprobante sea mayor o igual a la del anterior
+de la misma serie, así que la fecha es no decreciente con el número.
+
+- **Modo rango** (default): búsqueda binaria del primer número con fecha ≥ `desde` y recorrido
+  **consecutivo** de todos los números desde ahí hasta el último. Verifica el supuesto: el número
+  anterior al primero debe ser más viejo que `desde`, y ninguna fecha puede retroceder. Cualquier
+  contradicción marca `completo: false`.
+- **Modo completo** (`--completo`): recorre cada serie desde el 1. Sin supuestos. Para la primera
+  carga histórica y para verificar el modo rango.
+
+Los puntos de venta bloqueados o dados de baja se recorren igual: tienen historia. Las consultas
+con error no se cachean y quedan listadas en el reporte; se reintentan en la próxima corrida.
+
+Lo que esto **no** cubre: comprobantes autorizados por WSMTXCA (con detalle de ítems), WSFEX
+(exportación) o CAEA. Por eso la validación final es contra una exportación de Mis Comprobantes.
 
 Por defecto recorre **todos** los tipos de comprobante vigentes que informa ARCA y todos los
 puntos de venta habilitados, para no dejar afuera una Factura M o de crédito electrónico inesperada.
@@ -67,8 +115,8 @@ Si tenés alguno así, pasalo con `--pto`. La cobertura se valida comparando con
 exportación manual de Mis Comprobantes del mismo mes.
 Con `--json` imprime los comprobantes completos, con detalle de IVA y tributos.
 
-Cada comprobante consultado se guarda en `out/cache/`, así una segunda corrida sobre el mismo
-período no vuelve a consultar a ARCA.
+Cada comprobante consultado se guarda en `out/cache/<entorno>/<cuit>/`, así una segunda corrida
+no vuelve a consultar a ARCA. Las entradas de otra versión o de otro CUIT se ignoran.
 
 ## Estimación mensual: cuánto gano de verdad
 
@@ -104,14 +152,25 @@ copiadas de las tablas de liquidación anual de ARCA:
 `npm test` verifica que el motor reproduzca al centavo la DDJJ 2025 presentada (F.2711):
 deducciones personales, ganancia neta sujeta a impuesto, impuesto determinado y saldo.
 
+## Tests
+
+```bash
+npm test          # 32 tests, sin red ni credenciales reales
+npm run test:cov  # con informe de cobertura
+```
+
+Los tests simulan ARCA: respuestas SOAP enlatadas para WSAA y WSFE, un WSFE en memoria con
+series que tienen huecos, errores y fechas fuera de orden, y un certificado autofirmado
+descartable que se genera en el momento para probar la firma CMS. No usan certificados reales.
+
 ## Cómo funciona
 
 - `src/wsaa.js` arma el Ticket de Requerimiento de Acceso, lo firma en CMS (PKCS#7) con
   node-forge (o con `openssl cms` si `ARCA_SIGNER=openssl`) y lo manda a `loginCms`.
 - `src/wsfe.js` envuelve los métodos de consulta de WSFEv1: `FEDummy`, `FEParamGetPtosVenta`,
   `FEParamGetTiposCbte`, `FECompUltimoAutorizado`, `FECompConsultar`.
-- `src/emitidos.js`: WSFE no lista por fecha, así que para cada punto de venta y tipo pide el
-  último autorizado y recorre hacia atrás de a uno hasta pasar la fecha de inicio.
+- `src/emitidos.js`: recorrido por serie, validaciones, notas de crédito y reporte de integridad.
+- `src/ganancias.js` y `src/estimacion.js`: motor de Ganancias y estimación mensual.
 
 ## Próximos pasos
 

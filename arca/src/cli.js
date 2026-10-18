@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from './config.js';
 import { Wsfe } from './wsfe.js';
 import { getTicket } from './wsaa.js';
-import { exportarEmitidos, escribirCsv, signo } from './emitidos.js';
+import { exportarEmitidos, escribirCsv, escribirReporte, resumenReporte } from './emitidos.js';
 import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
 
@@ -16,8 +16,10 @@ Comandos:
   tipos-cbte                    Tipos de comprobante vigentes
   ultimo --pto N --tipo T       Último comprobante autorizado
   consultar --pto N --tipo T --nro X
-  emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--tipos 1,2,3,6,7,8] [--pto 1,2] [--out out/emitidos.csv]
-                                (sin --tipos recorre todos los tipos vigentes; sin --pto, todos los puntos de venta)
+  emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--tipos 1,2,3,6,7,8] [--pto 1,2] [--completo] [--out out/emitidos.csv]
+                                Exporta CSV + reporte de integridad JSON. Sin --tipos recorre todos los tipos
+                                vigentes; sin --pto, todos los puntos de venta (bloqueados incluidos).
+                                --completo recorre cada serie desde el número 1 (primera carga o verificación).
   ganancias --anio 2026 --neto 50000000 [--generales 1900000]
                                 Liquidación anual simplificada de Ganancias para un resultado neto dado
   estimar --anio 2026 --meses out/meses.csv [--proyeccion 60000000] [--out out/estimacion.csv]
@@ -42,6 +44,7 @@ const { values: o, positionals } = parseArgs({
     meses: { type: 'string' },
     proyeccion: { type: 'string' },
     json: { type: 'boolean', default: false },
+    completo: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -117,20 +120,24 @@ try {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
         throw new Error('--desde y --hasta deben ser AAAA-MM-DD');
       }
-      const rows = await exportarEmitidos(wsfe, cfg, {
+      const { rows, reporte } = await exportarEmitidos(wsfe, cfg, {
         desde,
         hasta,
         tipos: o.tipos ? lista(o.tipos) : null,
         ptos: o.pto ? lista(o.pto) : null,
+        completo: o.completo,
         log: (m) => console.error(m),
       });
+      const rep = escribirReporte(cfg, reporte);
       if (o.json) {
-        print(rows);
+        print({ reporte, comprobantes: rows });
       } else {
         const file = escribirCsv(cfg, rows, o.out);
-        const total = rows.reduce((s, r) => s + r.impTotal * signo(r.cbteTipo), 0);
-        console.error(`${rows.length} comprobantes, total neto de NC: ${total.toFixed(2)} -> ${file}`);
+        for (const l of resumenReporte(reporte)) console.error(l);
+        console.error(`${rows.length} comprobantes, total con signo ${reporte.totales.totalConSigno.toFixed(2)} -> ${file}`);
+        console.error(`Reporte de integridad -> ${rep}`);
       }
+      if (!reporte.completo) process.exit(3);
       break;
     }
     default:

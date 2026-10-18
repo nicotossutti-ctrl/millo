@@ -63,7 +63,7 @@ function signWithForge(tra, certPem, keyPem) {
 function signWithOpenssl(tra, certPath, keyPath) {
   const out = execFileSync(
     'openssl',
-    ['cms', '-sign', '-signer', certPath, '-inkey', keyPath, '-nodetach', '-outform', 'DER'],
+    ['cms', '-sign', '-binary', '-signer', certPath, '-inkey', keyPath, '-nodetach', '-outform', 'DER'],
     { input: tra },
   );
   return out.toString('base64');
