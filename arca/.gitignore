@@ -5,3 +5,4 @@ certs/*
 .ta/
 out/*
 !out/.gitkeep
+params/contribuyente.json

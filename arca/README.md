@@ -70,6 +70,40 @@ Con `--json` imprime los comprobantes completos, con detalle de IVA y tributos.
 Cada comprobante consultado se guarda en `out/cache/`, así una segunda corrida sobre el mismo
 período no vuelve a consultar a ARCA.
 
+## Estimación mensual: cuánto gano de verdad
+
+El contador liquida; esto solo provisiona. Para cada mes:
+
+```
+Ventas netas − Gastos netos          = Resultado bruto
+− Ingresos Brutos (Convenio)         ventas × Σ(coeficiente × alícuota)
+− Autónomos                          cuota mensual
+− Provisión de Ganancias             ver abajo
+= Ganancia real del mes
+```
+
+Ganancias es anual y progresivo, así que la provisión se recalcula cada mes: se proyecta el
+año a ritmo actual (o con `--proyeccion`), se liquida el impuesto anual con la escala y las
+deducciones personales oficiales de ese año, y la provisión acumulada es la parte proporcional
+de ese impuesto. La del mes es la diferencia con el mes anterior.
+
+```bash
+cp params/contribuyente.example.json params/contribuyente.json   # completar con datos del contador
+npm run arca -- ganancias --anio 2026 --neto 60000000           # liquidación anual para un neto dado
+npm run arca -- estimar --anio 2026 --meses out/meses.csv        # tabla mensual (Mes;Ventas netas;Gastos netos)
+```
+
+`params/ganancias.json` tiene la escala del art. 94 y las deducciones del art. 30 de 2025 y 2026,
+copiadas de las tablas de liquidación anual de ARCA:
+
+- [Escala 2025](https://www.afip.gob.ar/gananciasYBienes/ganancias/personas-humanas-sucesiones-indivisas/declaracion-jurada/documentos/Tabla-Art-94-LIG-liquidacion-anual-y-final-2025.pdf) ·
+  [Deducciones 2025](https://www.afip.gob.ar/gananciasYBienes/ganancias/personas-humanas-sucesiones-indivisas/deducciones/documentos/Deducciones-personales-art-30-liq-anual-2025.pdf)
+- [Escala 2026](https://www.afip.gob.ar/gananciasYBienes/ganancias/personas-humanas-sucesiones-indivisas/declaracion-jurada/documentos/Tabla-Art-94-LIG-liquidacion-anual-y-final-2026.pdf) ·
+  [Deducciones 2026](https://www.afip.gob.ar/gananciasYBienes/ganancias/personas-humanas-sucesiones-indivisas/deducciones/documentos/Deducciones-personales-art-30-liq-anual-2026.pdf)
+
+`npm test` verifica que el motor reproduzca al centavo la DDJJ 2025 presentada (F.2711):
+deducciones personales, ganancia neta sujeta a impuesto, impuesto determinado y saldo.
+
 ## Cómo funciona
 
 - `src/wsaa.js` arma el Ticket de Requerimiento de Acceso, lo firma en CMS (PKCS#7) con
@@ -82,6 +116,7 @@ período no vuelve a consultar a ARCA.
 ## Próximos pasos
 
 - Constatación de comprobantes recibidos (WSCDCV1) y constancia de inscripción de contrapartes.
-- Capa 2: Playwright contra el portal para Mis Comprobantes recibidos, Mis Retenciones y
-  Cuentas Tributarias.
+- Parsers de las exportaciones del portal: Mis Comprobantes recibidos (gastos), Mis Retenciones
+  (pagos a cuenta) y deducciones de SIFERE, para alimentar `estimar` sin cargar nada a mano.
+- Anticipos de Ganancias 2026 en el flujo de caja.
 - Cruce contra extracto bancario y Mercado Pago.

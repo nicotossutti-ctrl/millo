@@ -6,7 +6,8 @@
   "type": "module",
   "bin": { "arca": "./src/cli.js" },
   "scripts": {
-    "arca": "node --env-file-if-exists=.env src/cli.js"
+    "arca": "node --env-file-if-exists=.env src/cli.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": { "node": ">=20.6" },
   "dependencies": {
