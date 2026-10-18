@@ -6,3 +6,4 @@ certs/*
 out/*
 !out/.gitkeep
 params/contribuyente.json
+.sesion/

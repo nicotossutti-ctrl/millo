@@ -6,6 +6,9 @@ import { getTicket } from './wsaa.js';
 import { exportarEmitidos, escribirCsv, escribirReporte, resumenReporte } from './emitidos.js';
 import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
+import { Sesion } from './portal/sesion.js';
+import { diagnosticar, SERVICIOS } from './portal/diagnostico.js';
+import { descargarMisComprobantes } from './portal/misComprobantes.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -26,7 +29,15 @@ Comandos:
                                 Provisión mensual de IIBB, autónomos y Ganancias; "ganancia real" por mes.
                                 meses.csv: Mes;Ventas netas;Gastos netos. Usa params/contribuyente.json
 
-Variables (.env): ARCA_ENV, ARCA_CUIT, ARCA_CERT, ARCA_KEY`;
+Portal (sesión autenticada con navegador, sin certificado):
+  portal:login [--visible]      Inicia sesión en el portal y guarda las cookies en .sesion/. Sin ARCA_CLAVE
+                                hay que usar --visible y tipear la clave a mano. Nunca elude CAPTCHA ni 2FA.
+  portal:diagnostico [--visible] [--servicios "Mis Comprobantes,Portal IVA"]
+                                Entra a cada servicio y guarda captura, HTML y estructura en out/diagnostico/.
+  portal:mis-comprobantes --tipo emitidos|recibidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
+                                Descarga la exportación de Mis Comprobantes (tramos de hasta 365 días).
+
+Variables (.env): ARCA_ENV, ARCA_CUIT, ARCA_CERT, ARCA_KEY, ARCA_CLAVE (opcional, solo para portal)`;
 
 const { values: o, positionals } = parseArgs({
   allowPositionals: true,
@@ -45,6 +56,8 @@ const { values: o, positionals } = parseArgs({
     proyeccion: { type: 'string' },
     json: { type: 'boolean', default: false },
     completo: { type: 'boolean', default: false },
+    visible: { type: 'boolean', default: false },
+    servicios: { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -89,6 +102,28 @@ try {
       const u = rows.at(-1);
       console.log(`\nProyección anual neta: ${f(u.proyeccionAnual)}  Ganancias anual proyectado: ${f(u.impuestoAnualProyectado)}  Provisionado a la fecha: ${f(u.gananciasAcumulada)}`);
       console.error(`-> ${file}`);
+    }
+    process.exit(0);
+  }
+
+  if (cmd.startsWith('portal:')) {
+    const cfg = loadConfig({ requireAuth: 'cuit' });
+    const sesion = new Sesion(cfg, { visible: o.visible, log: (m) => console.error(m) });
+    await sesion.abrir();
+    try {
+      await sesion.asegurarLogin();
+      if (cmd === 'portal:login') {
+        console.log('OK: sesión guardada.');
+      } else if (cmd === 'portal:diagnostico') {
+        const servicios = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : SERVICIOS;
+        print(await diagnosticar(sesion, { servicios, log: (m) => console.error(m) }));
+      } else if (cmd === 'portal:mis-comprobantes') {
+        print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), log: (m) => console.error(m) }));
+      } else {
+        throw new Error(`Comando desconocido: ${cmd}`);
+      }
+    } finally {
+      await sesion.cerrar();
     }
     process.exit(0);
   }

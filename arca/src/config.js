@@ -24,11 +24,14 @@ export function loadConfig({ requireAuth = true } = {}) {
     keyPath: process.env.ARCA_KEY || 'certs/arca.key',
     signer: process.env.ARCA_SIGNER || 'forge',
     taDir: path.resolve('.ta'),
+    sesionDir: path.resolve('.sesion'),
     outDir: path.resolve('out'),
   };
 
-  if (requireAuth) {
+  if (requireAuth === 'cuit' || requireAuth === true) {
     if (cfg.cuit.length !== 11) throw new Error('ARCA_CUIT debe tener 11 dígitos (sin guiones).');
+  }
+  if (requireAuth === true) {
     for (const p of [cfg.certPath, cfg.keyPath]) {
       if (!fs.existsSync(p)) throw new Error(`No existe ${p}. Ver README: generación del certificado.`);
     }

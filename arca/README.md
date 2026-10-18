@@ -24,6 +24,9 @@ forma provisoria y se extrae a su propio repositorio sin cambios.
 | Cache por entorno y CUIT | sí | sí | no | no |
 | Ganancias: escala, deducciones, provisión | sí | sí (reproduce la DDJJ 2025 al centavo) | no aplica | calibrado contra DDJJ 2025 presentada |
 | Estimación mensual (IIBB, autónomos, Ganancias) | sí | sí | no aplica | pendiente de parámetros del contador |
+| Portal: login, sesión persistida, detección de CAPTCHA/2FA | sí | no | paso 1 del login verificado contra el formulario real; paso 2 parcialmente | no |
+| Portal: diagnóstico de pantallas | sí | no | no | no |
+| Portal: Mis Comprobantes emitidos y recibidos | sí, selectores provisorios | no | no | no |
 
 "Validado en producción" significa contrastado contra Mis Comprobantes de ARCA para un mes.
 Hasta que esa columna diga "sí", el CSV de emitidos no se usa para conciliar.
@@ -117,6 +120,35 @@ Con `--json` imprime los comprobantes completos, con detalle de IVA y tributos.
 
 Cada comprobante consultado se guarda en `out/cache/<entorno>/<cuit>/`, así una segunda corrida
 no vuelve a consultar a ARCA. Las entradas de otra versión o de otro CUIT se ignoran.
+
+## Portal: descarga automática con sesión autenticada
+
+Para todo lo que no tiene web service (comprobantes recibidos, DDJJ, retenciones, cuenta
+tributaria, Convenio, autónomos) la app entra al portal como una persona, con un navegador
+controlado por Playwright, y usa las exportaciones de cada servicio. Ver `COBERTURA.md` para el
+detalle fuente por fuente.
+
+```bash
+npx playwright install chromium                      # una vez, baja el navegador
+npm run arca -- portal:login --visible               # primera vez: tipeás la clave en la ventana
+npm run arca -- portal:diagnostico --visible         # releva las pantallas de los 10 servicios
+npm run arca -- portal:mis-comprobantes --tipo recibidos --desde 2026-01-01 --hasta 2026-09-30
+```
+
+Reglas de la capa de portal:
+
+- **La clave fiscal no se guarda.** Se tipea en la ventana (modo `--visible`) o se pasa por la
+  variable `ARCA_CLAVE` cargada desde el llavero del sistema. Las cookies de sesión sí se
+  guardan, en `.sesion/` con permisos 0600, y se reutilizan hasta que ARCA las vence.
+- **Nada se elude.** Si ARCA muestra CAPTCHA, segundo factor o cualquier verificación, el
+  proceso se detiene con un error claro; en modo visible espera a que la resuelvas vos.
+- **Nada se da por completo sin verificar.** Cada extractor devuelve `verificado: false` hasta
+  que sus selectores se confirmaron con el diagnóstico y el primer archivo se validó a mano.
+
+`portal:diagnostico` guarda en `out/diagnostico/<servicio>/` captura, HTML, inventario de
+formularios y tráfico de red de cada servicio. Es lo que se usa para escribir los selectores
+exactos de cada extractor sin adivinar, y lo que hay que volver a correr cuando ARCA rediseña
+una pantalla.
 
 ## Estimación mensual: cuánto gano de verdad
 
