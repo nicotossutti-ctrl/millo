@@ -1,0 +1,7 @@
+node_modules/
+.env
+certs/*
+!certs/.gitkeep
+.ta/
+out/*
+!out/.gitkeep
