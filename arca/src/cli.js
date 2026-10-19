@@ -8,7 +8,7 @@ import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
 import { Sesion } from './portal/sesion.js';
 import { diagnosticar, inspeccionarPortal, limpiar, SERVICIOS } from './portal/diagnostico.js';
-import { descargarMisComprobantes } from './portal/misComprobantes.js';
+import { descargarMisComprobantes, diagnosticoMisComprobantes } from './portal/misComprobantes.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -40,8 +40,11 @@ Portal (sesión autenticada con navegador, sin certificado):
                                 Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
                                 (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
   portal:limpiar                Borra diagnóstico, descargas y sesión guardada.
-  portal:mis-comprobantes --tipo emitidos|recibidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
-                                Descarga la exportación de Mis Comprobantes (tramos de hasta 365 días).
+  portal:mc-diagnostico --tipo recibidos|emitidos [--visible]
+                                Entra a Mis Comprobantes > Recibidos/Emitidos por el enlace real y releva filtros,
+                                botones y exportación, sin tocar nada. Resumen en out/diagnostico/mis-comprobantes-<tipo>/.
+  portal:mis-comprobantes --tipo recibidos|emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
+                                Descarga la exportación (tramos de hasta 365 días) y valida el archivo.
 
 Variables (.env): ARCA_ENV, ARCA_CUIT, ARCA_CERT, ARCA_KEY, ARCA_CLAVE (opcional, solo para portal)`;
 
@@ -132,6 +135,8 @@ try {
       } else if (cmd === 'portal:diagnostico') {
         const servicios = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : SERVICIOS;
         print(await diagnosticar(sesion, { servicios, sinCapturas: o['sin-capturas'], log: (m) => console.error(m) }));
+      } else if (cmd === 'portal:mc-diagnostico') {
+        await diagnosticoMisComprobantes(sesion, { tipo: need('tipo'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
       } else if (cmd === 'portal:mis-comprobantes') {
         print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), log: (m) => console.error(m) }));
       } else {
