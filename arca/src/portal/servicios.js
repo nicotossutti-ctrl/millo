@@ -18,9 +18,9 @@ export const SERVICIOS = [
   { id: 'mis-retenciones', nombre: 'Mis Retenciones', fuente: 11, confirmado: false, extractor: 'generico' },
   { id: 'cuentas-tributarias', nombre: 'Sistema de Cuentas Tributarias', fuente: 12, confirmado: false, extractor: 'generico' },
   { id: 'ddjj-y-pagos', nombre: 'Presentación de DDJJ y Pagos', fuente: 10, confirmado: false, extractor: 'generico' },
-  { id: 'ccma', nombre: 'CCMA - Cuenta Corriente de Monotributistas y Autónomos', fuente: 13, confirmado: false, extractor: 'generico' },
+  { id: 'ccma', nombre: 'CCMA - Cuenta Corriente de Monotributistas y Autónomos', terminos: ['CCMA', 'Cuenta Corriente de Monotributistas'], fuente: 13, confirmado: false, extractor: 'generico' },
   { id: 'mis-facilidades', nombre: 'Mis Facilidades', fuente: 15, confirmado: false, extractor: 'generico' },
-  { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', fuente: 5, confirmado: false, extractor: 'generico' },
+  { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', terminos: ['SIFERE', 'Convenio Multilateral'], fuente: 5, confirmado: false, extractor: 'generico' },
   { id: 'ventanilla', nombre: 'Ventanilla Electrónica', fuente: 16, confirmado: false, extractor: 'generico' },
 ];
 

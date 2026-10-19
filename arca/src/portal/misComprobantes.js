@@ -350,17 +350,16 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     const res = resumenResultados(rel);
     const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
     log(`  resultados: ${res.tablasVisibles.length} tablas, ${filas} filas visibles, paginación ${res.paginacion.length ? JSON.stringify(res.paginacion[0]) : 'no detectada'}`);
+    // Diagnóstico saneado de la pantalla de resultados, SIEMPRE: así Emitidos queda capturado
+    // en la próxima corrida aunque dé 0 tablas, sin pedir una prueba individual.
+    fs.writeFileSync(path.join(outDir, `diagnostico-${tipo}-${d}-${h}.json`), JSON.stringify({ desde: d, hasta: h, resultados: res }, null, 2), { mode: 0o600 });
     if (res.mensajes.some((m) => /no se encontraron|sin resultados|no hay|no existen/i.test(m)) || (res.tablasVisibles.length && filas === 0)) {
       log('  sin comprobantes en el rango');
       resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: 0, motivo: 'sin comprobantes' });
       continue;
     }
     if (!res.exportacion.length) {
-      // Sin exportación visible: guardamos un diagnóstico saneado (sin HTML ni datos fiscales)
-      // para analizar la pantalla después, y seguimos sin marcarlo como validado.
-      const diag = path.join(outDir, `diagnostico-${tipo}-${d}-${h}.json`);
-      fs.writeFileSync(diag, JSON.stringify({ desde: d, hasta: h, resultados: res }, null, 2), { mode: 0o600 });
-      throw new Error(`La consulta de ${tipo} ${d} a ${h} no mostró botón de exportación (tablas ${res.tablasVisibles.length}, filas visibles ${filas}, mensajes ${JSON.stringify(res.mensajes)}). Diagnóstico en ${path.basename(diag)}. Revisar la pantalla; no asumir cero.`);
+      throw new Error(`La consulta de ${tipo} ${d} a ${h} no mostró botón de exportación (tablas ${res.tablasVisibles.length}, filas visibles ${filas}, mensajes ${JSON.stringify(res.mensajes)}). Diagnóstico en diagnostico-${tipo}-${d}-${h}.json. Revisar la pantalla; no asumir cero.`);
     }
     const cand = candidatos(rel);
     const csvPrimero = [...cand.exportar].sort((a, b) => (/csv/i.test(`${b.text}${b.cls}`) ? 1 : 0) - (/csv/i.test(`${a.text}${a.cls}`) ? 1 : 0));

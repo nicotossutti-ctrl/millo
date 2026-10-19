@@ -53,7 +53,7 @@ export function clasificarRelevamiento(rel) {
 
 /** Releva un servicio genérico: lo abre, releva la pantalla y clasifica. No descarga. */
 async function correrGenerico(sesion, servicio, dir, log) {
-  const pagina = await sesion.abrirServicio(servicio.nombre);
+  const pagina = await sesion.abrirServicio(servicio);
   await pagina.waitForTimeout(2500);
   const rel = await relevarPagina(pagina);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));

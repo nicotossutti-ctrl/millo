@@ -16,6 +16,16 @@ import { chromium } from 'playwright';
 export const URL_LOGIN = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml';
 export const URL_PORTAL = 'https://portalcf.cloud.afip.gob.ar/portal/app/';
 
+/** Normaliza para comparar nombres de servicios: sin acentos, guiones como espacio, minúsculas. */
+export function normalizarServicio(x) {
+  return String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\u2012-\u2015_-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+/** true si el texto del candidato contiene alguno de los términos (normalizados). */
+export function coincideServicio(textoCandidato, terminos) {
+  const c = normalizarServicio(textoCandidato);
+  return terminos.some((t) => { const n = normalizarServicio(t); return n.length > 0 && c.includes(n); });
+}
+
 const SELECTORES_DESAFIO = ['iframe[src*="recaptcha"]', 'iframe[src*="hcaptcha"]', '.g-recaptcha', '#captcha', 'img[alt*="captcha" i]', 'input[name*="captcha" i]', 'input[name*="token" i]', 'input[name*="otp" i]', 'input[name*="codigo" i]'];
 
 export class DesafioDeSeguridad extends Error {
@@ -171,8 +181,13 @@ export class Sesion {
    * 3. Si nada de eso existe, falla con un mensaje que remite a portal:inspeccionar.
    * Los servicios suelen abrir en una pestaña nueva; devolvemos esa página.
    */
-  async abrirServicio(nombre) {
+  async abrirServicio(target) {
     const { page } = this;
+    const nombre = typeof target === 'string' ? target : target.nombre;
+    const terminos = typeof target === 'string'
+      ? [target]
+      : (target.terminos?.length ? target.terminos : [target.nombre]);
+
     await page.goto(URL_PORTAL, { waitUntil: 'domcontentloaded' });
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(2000);
@@ -190,40 +205,44 @@ export class Sesion {
       return destino;
     };
 
-    // 1. enlace o botón directo con el nombre, en cualquier frame
-    for (const frame of page.frames()) {
-      const directo = frame.getByRole('link', { name: nombre, exact: false }).or(frame.getByRole('button', { name: nombre, exact: false })).first();
-      if (await directo.count() && await directo.isVisible().catch(() => false)) {
-        this.log(`Servicio "${nombre}": enlace directo en la página principal.`);
-        return clicYEsperar(directo);
+    // Busca, en un frame, el primer elemento clickeable y visible cuyo texto coincida con algún término.
+    const buscarClickeable = async (frame) => {
+      const items = frame.locator('a, button, [role=button], [role=option], [role=menuitem], [role=link], li');
+      const n = Math.min(await items.count(), 400);
+      for (let i = 0; i < n; i++) {
+        const it = items.nth(i);
+        if (!(await it.isVisible().catch(() => false))) continue;
+        const texto = (await it.innerText().catch(() => '')) || (await it.getAttribute('aria-label').catch(() => '')) || '';
+        if (texto && coincideServicio(texto, terminos)) return it;
       }
+      return null;
+    };
+
+    // 1. enlace o tile directo en cualquier frame (p. ej. "Más utilizados").
+    for (const frame of page.frames()) {
+      const it = await buscarClickeable(frame);
+      if (it) { this.log(`Servicio "${nombre}": encontrado directo en la página.`); return clicYEsperar(it); }
     }
 
-    // 2. buscador: cualquier campo de texto visible y ancho, en cualquier frame
+    // 2. buscador: campo de texto visible y ancho; tipeamos cada término y buscamos una sugerencia.
     for (const frame of page.frames()) {
-      const candidatos = frame.locator('input:not([type]), input[type="text"], input[type="search"], textarea');
-      const n = await candidatos.count();
-      for (let i = 0; i < n; i++) {
-        const c = candidatos.nth(i);
+      const campos = frame.locator('input:not([type]), input[type="text"], input[type="search"], input[role="combobox"], textarea');
+      const m = await campos.count();
+      for (let i = 0; i < m; i++) {
+        const c = campos.nth(i);
         if (!(await c.isVisible().catch(() => false))) continue;
         const box = await c.boundingBox();
         if (!box || box.width < 250) continue;
-        this.log(`Servicio "${nombre}": usando el buscador (${await c.evaluate((e) => e.id || e.name || e.placeholder || 'sin atributos')}).`);
-        await c.fill(nombre);
-        const resultado = frame.getByRole('link', { name: nombre, exact: false })
-          .or(frame.getByRole('button', { name: nombre, exact: false }))
-          .or(frame.getByRole('option', { name: nombre, exact: false }))
-          .or(frame.locator(`li:has-text("${nombre}"), [class*="result" i]:has-text("${nombre}"), [class*="item" i]:has-text("${nombre}")`))
-          .first();
-        try {
-          await resultado.waitFor({ state: 'visible', timeout: 15000 });
-        } catch {
-          throw new Error(`Tipeé "${nombre}" en el buscador pero no apareció un resultado con ese texto. Corré portal:inspeccionar y pasame el resumen.`);
+        for (const termino of terminos) {
+          await c.fill('');
+          await c.fill(termino);
+          await page.waitForTimeout(1500); // el typeahead tarda en poblar
+          const it = await buscarClickeable(frame);
+          if (it) { this.log(`Servicio "${nombre}": vía buscador con "${termino}".`); return clicYEsperar(it); }
         }
-        return clicYEsperar(resultado);
       }
     }
 
-    throw new Error(`No encontré en la página principal ni un enlace "${nombre}" ni un buscador. Corré portal:inspeccionar y pasame el resumen de out/diagnostico/portal/resumen.txt.`);
+    throw new Error(`No encontré "${nombre}" ni como enlace directo ni en el buscador (términos: ${terminos.join(', ')}). Corré portal:inspeccionar y revisá out/diagnostico/portal/resumen.txt.`);
   }
 }
