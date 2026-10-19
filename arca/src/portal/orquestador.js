@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { relevarPagina, resumenRelevamiento } from './relevar.js';
-import { sanitizarHtml } from './diagnostico.js';
+import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
 import { slug } from './servicios.js';
 
@@ -66,7 +66,7 @@ async function correrGenerico(sesion, servicio, dir, log) {
 
 /** Mis Comprobantes: descarga real con el extractor dedicado (validado). */
 async function correrMisComprobantes(sesion, servicio, dir, periodo, log) {
-  const r = await descargarMisComprobantes(sesion, { tipo: servicio.tipo, desde: periodo.desde, hasta: periodo.hasta, outDir: dir, log });
+  const r = await descargarMisComprobantes(sesion, { tipo: servicio.tipo, desde: periodo.desde, hasta: periodo.hasta, outDir: dir, rehacer: periodo.rehacer, log });
   escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
   const estado = r.verificado ? 'validado' : (r.archivos.length ? 'descargado' : 'con-datos');
   return { estado, archivos: r.archivos.map((a) => path.basename(a)), validaciones: r.validaciones };
@@ -91,9 +91,11 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
     return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, ...r };
   } catch (e) {
     const estado = e?.name === 'DesafioDeSeguridad' ? 'desafio' : (/no encontré|no pude abrir|timeout/i.test(e.message) ? 'sin-acceso' : 'error');
-    log(`[${servicio.id}] ${estado}: ${e.message}`);
-    escribir(path.join(dir, 'error.txt'), `${e.name}: ${e.message}\n${e.stack ?? ''}`);
-    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado, error: e.message };
+    // El mensaje y el stack pueden contener texto de la pantalla: se sanean antes de guardar o devolver.
+    const msg = sanitizarTexto(e.message);
+    log(`[${servicio.id}] ${estado}: ${msg}`);
+    escribir(path.join(dir, 'error.txt'), sanitizarTexto(`${e.name}: ${e.message}\n${e.stack ?? ''}`));
+    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado, error: msg };
   }
 }
 
@@ -103,21 +105,42 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
   const filas = [...resultados].sort((a, b) => (orden[a.estado] ?? 9) - (orden[b.estado] ?? 9));
   const conteo = {};
   for (const r of resultados) conteo[r.estado] = (conteo[r.estado] ?? 0) + 1;
+  const DESCARGA = new Set(['validado', 'descargado']);
+  const detalleDe = (r) => {
+    if (r.archivos?.length || DESCARGA.has(r.estado)) {
+      const vals = r.validaciones ?? [];
+      const totFilas = vals.map((v) => v.filas ?? 0).reduce((a, b) => a + b, 0);
+      const dup = vals.map((v) => v.duplicados ?? 0).reduce((a, b) => a + b, 0);
+      const reut = vals.filter((v) => v.reutilizado).length;
+      return `${vals.length} período(s)${reut ? `, ${reut} reutilizado(s)` : ''}; ${totFilas} filas; ${dup} duplicados`;
+    }
+    if (r.estado === 'con-datos' || r.estado === 'relevado') return `${r.filas ?? 0} filas en pantalla; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
+    if (r.error) return r.error.slice(0, 120);
+    return '';
+  };
+  const fila = (r) => `| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${detalleDe(r)} |`;
+  const descargaron = filas.filter((r) => DESCARGA.has(r.estado));
+  const resto = filas.filter((r) => !DESCARGA.has(r.estado));
+
   const txt = [];
   txt.push(`# Cobertura FiscalOS${cuit ? ` · CUIT ${cuit}` : ''}${cuando ? ` · ${cuando}` : ''}`);
   txt.push('');
   txt.push('Resumen: ' + ESTADOS.filter((e) => conteo[e]).map((e) => `${conteo[e]} ${e}`).join(', '));
   txt.push('');
-  txt.push('| Servicio | Fuente | Estado | Detalle |');
-  txt.push('|---|---|---|---|');
-  for (const r of filas) {
-    let detalle = '';
-    if (r.archivos?.length) detalle = `${r.archivos.length} archivo(s); ${(r.validaciones ?? []).map((v) => v.filas ?? 0).reduce((a, b) => a + b, 0)} filas`;
-    else if (r.estado === 'con-datos' || r.estado === 'relevado') detalle = `${r.filas ?? 0} filas; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
-    else if (r.error) detalle = r.error.slice(0, 120);
-    txt.push(`| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${detalle} |`);
+  txt.push('## Datos descargados y validados');
+  txt.push(descargaron.length ? '' : '_(ninguno todavía)_');
+  if (descargaron.length) {
+    txt.push('| Servicio | Fuente | Estado | Detalle |', '|---|---|---|---|');
+    for (const r of descargaron) txt.push(fila(r));
   }
-  return { objeto: { cuando, cuit, conteo, servicios: filas }, texto: txt.join('\n') };
+  txt.push('');
+  txt.push('## Solo inspeccionados (sin descarga)');
+  txt.push(resto.length ? '' : '_(ninguno)_');
+  if (resto.length) {
+    txt.push('| Servicio | Fuente | Estado | Detalle |', '|---|---|---|---|');
+    for (const r of resto) txt.push(fila(r));
+  }
+  return { objeto: { cuando, cuit, conteo, descargados: descargaron.map((r) => r.id), inspeccionados: resto.map((r) => r.id), servicios: filas }, texto: txt.join('\n') };
 }
 
 /** Recorre todos los servicios, aislando fallos, y persiste la corrida. */

@@ -41,7 +41,7 @@ Portal (sesión autenticada con navegador, sin certificado):
   portal:diagnostico [--visible] [--sin-capturas] [--servicios "Mis Comprobantes,Portal IVA"]
                                 Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
                                 (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
-  portal:todo [--desde AAAA-MM-DD --hasta AAAA-MM-DD] [--servicios "id1,id2"] [--visible]
+  portal:todo [--desde AAAA-MM-DD --hasta AAAA-MM-DD] [--servicios "id1,id2"] [--rehacer] [--visible]
                                 Recorre TODOS los servicios fiscales en modo lectura, aísla fallos, descarga lo
                                 que puede y guarda la corrida en out/corridas/<fecha>/ con un informe cobertura.md.
   portal:limpiar                Borra diagnóstico, descargas y sesión guardada.
@@ -75,6 +75,7 @@ const { values: o, positionals } = parseArgs({
     completo: { type: 'boolean', default: false },
     visible: { type: 'boolean', default: false },
     'sin-capturas': { type: 'boolean', default: false },
+    rehacer: { type: 'boolean', default: false },
     servicios: { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -149,7 +150,7 @@ try {
         const hoy = new Date();
         const haceUnMes = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
         const finMesPasado = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
-        const periodo = { desde: o.desde ?? haceUnMes.toISOString().slice(0, 10), hasta: o.hasta ?? finMesPasado.toISOString().slice(0, 10) };
+        const periodo = { desde: o.desde ?? haceUnMes.toISOString().slice(0, 10), hasta: o.hasta ?? finMesPasado.toISOString().slice(0, 10), rehacer: o.rehacer };
         const pedidos = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : null;
         const servicios = pedidos ? SERVICIOS_FISCALES.filter((s) => pedidos.includes(s.id)) : SERVICIOS_FISCALES;
         if (!servicios.length) throw new Error(`Ningún servicio coincide con --servicios. Ids: ${SERVICIOS_FISCALES.map((s) => s.id).join(', ')}`);
@@ -159,7 +160,7 @@ try {
       } else if (cmd === 'portal:mc-consulta') {
         await pruebaConsulta(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
       } else if (cmd === 'portal:mis-comprobantes') {
-        print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), log: (m) => console.error(m) }));
+        print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), rehacer: o.rehacer, log: (m) => console.error(m) }));
       } else {
         throw new Error(`Comando desconocido: ${cmd}`);
       }

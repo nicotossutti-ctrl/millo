@@ -138,11 +138,15 @@ npm run arca -- portal:todo --desde 2026-09-01 --hasta 2026-09-30 --visible
 
 Cada corrida se guarda en `out/corridas/<fecha>/`:
 - una carpeta por servicio (estructura, HTML saneado, resumen, archivos descargados o error),
-- `cobertura.json` y `cobertura.md`: estado por servicio (validado, descargado, con-datos,
-  relevado, sin-acceso, desafío, error), filas, exportación detectada y si está listo para
-  extractor.
+- `cobertura.json` y `cobertura.md`, con el informe en **dos secciones**: los servicios que
+  **descargaron y validaron** datos y los que quedaron **solo inspeccionados**.
 
-Los resultados quedan en disco: una segunda corrida no repite lo ya probado salvo que la pidas.
+**Mis Comprobantes** descarga un ZIP, lo descomprime (lector propio con `zlib`, sin
+dependencias), valida cada CSV (cantidad de filas, fechas dentro del rango y duplicados por
+comprobante) y registra el período en `out/portal/manifiesto.json` con su hash. Un período ya
+verificado no se vuelve a descargar salvo `--rehacer`, y el informe lo marca como reutilizado.
+
+Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 
 ### Windows: un solo script, sin Git
 

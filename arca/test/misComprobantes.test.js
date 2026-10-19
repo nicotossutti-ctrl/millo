@@ -54,3 +54,42 @@ test('resumenResultados describe tablas, paginación, exportación y mensajes', 
   assert.deepEqual(r.paginacion, ['Mostrando 1 a 25 de 61 registros']);
   assert.deepEqual(r.exportacion.map((e) => e.texto), ['Excel']);
 });
+
+test('validarContenidoCsv detecta duplicados por comprobante y fechas fuera de rango', async () => {
+  const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  const cab = 'Fecha de Emisión;Tipo de Comprobante;Punto de Venta;Número Desde;Imp. Total';
+  const ok = validarContenidoCsv(`${cab}\n05/09/2026;1;1;10;100,00\n06/09/2026;1;1;11;200,00`, '2026-09-01', '2026-09-30');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.filas, 2);
+  assert.equal(ok.duplicados, 0);
+  const dup = validarContenidoCsv(`${cab}\n05/09/2026;1;1;10;100,00\n05/09/2026;1;1;10;100,00`, '2026-09-01', '2026-09-30');
+  assert.equal(dup.ok, false);
+  assert.equal(dup.duplicados, 1);
+  const fuera = validarContenidoCsv(`${cab}\n05/10/2026;1;1;10;100,00`, '2026-09-01', '2026-09-30');
+  assert.equal(fuera.ok, false);
+  assert.equal(fuera.fueraDelRango, 1);
+});
+
+test('validarArchivo procesa un ZIP con CSV adentro y extrae el CSV', async () => {
+  const { validarArchivo } = await import('../src/portal/misComprobantes.js');
+  const { armarZip } = await import('./zip.test.js');
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-zip-'));
+  const zip = path.join(dir, 'mis-comprobantes-recibidos-2026-09-01-2026-09-30.zip');
+  fs.writeFileSync(zip, armarZip('comprobantes.csv', 'Fecha;Número Desde;Total\r\n10/09/2026;5;100,00\r\n11/09/2026;6;200,00\r\n'));
+  const v = validarArchivo(zip, '2026-09-01', '2026-09-30');
+  assert.equal(v.ok, true);
+  assert.equal(v.filas, 2);
+  assert.deepEqual(v.csv, ['comprobantes.csv']);
+  assert.ok(fs.existsSync(path.join(dir, 'mis-comprobantes-recibidos-2026-09-01-2026-09-30-csv', 'comprobantes.csv')));
+});
+
+test('el manifiesto registra y relee períodos verificados', async () => {
+  const { leerManifiesto, registrarManifiesto, claveManifiesto } = await import('../src/portal/misComprobantes.js');
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-man-'));
+  assert.deepEqual(leerManifiesto(dir), {});
+  const clave = claveManifiesto('recibidos', '2026-09-01', '2026-09-30');
+  registrarManifiesto(dir, clave, { fecha: '2026-10-19', filas: 20, hash: 'abc' });
+  assert.equal(leerManifiesto(dir)[clave].filas, 20);
+});

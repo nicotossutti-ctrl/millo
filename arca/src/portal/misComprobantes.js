@@ -16,8 +16,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { relevarPagina, resumenRelevamiento } from './relevar.js';
 import { sanitizarHtml } from './diagnostico.js';
+import { leerZipDesdeArchivo } from './zip.js';
 
 const ENLACE = { emitidos: 'comprobantesEmitidos.do', recibidos: 'comprobantesRecibidos.do' };
 export const SEL = { fecha: '#fechaEmision', buscar: '#buscarComprobantes', tabResultados: '#tabResultados' };
@@ -187,31 +189,110 @@ async function elegir(pagina, lista, que) {
   return loc;
 }
 
-/** Lee el CSV descargado y verifica que tenga filas con fechas dentro del rango. */
-export function validarArchivo(file, desde, hasta) {
-  const texto = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
-  const lineas = texto.split(/\r?\n/).filter((l) => l.trim());
+/** Valida el TEXTO de un CSV: filas dentro del rango, columnas, separador y duplicados. */
+export function validarContenidoCsv(texto, desde, hasta) {
+  const limpio = texto.replace(/^﻿/, '');
+  const lineas = limpio.split(/\r?\n/).filter((l) => l.trim());
   if (lineas.length < 2) return { ok: false, filas: 0, motivo: 'archivo sin filas de datos' };
   const sep = (lineas[0].match(/;/g) ?? []).length >= (lineas[0].match(/,/g) ?? []).length ? ';' : ',';
   const cab = lineas[0].split(sep).map((c) => c.trim());
   const iFecha = cab.findIndex((c) => /fecha/i.test(c));
+  const idCols = cab.map((c, i) => (/n[úu]mero|nro|punto de venta|tipo|emisor|c[óo]d\. aut/i.test(c) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
+  const aYmd = (x) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec((x ?? '').trim()); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
   let dentro = 0; let fuera = 0;
-  const aYmd = (s) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s.trim()); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
+  const claves = new Map();
+  let duplicados = 0;
   for (const l of lineas.slice(1)) {
-    const f = iFecha >= 0 ? aYmd(l.split(sep)[iFecha] ?? '') : null;
-    if (!f) continue;
-    if (f >= d && f <= h) dentro++; else fuera++;
+    const celdas = l.split(sep);
+    const f = iFecha >= 0 ? aYmd(celdas[iFecha]) : null;
+    if (f) { if (f >= d && f <= h) dentro++; else fuera++; }
+    const clave = idCols.length ? idCols.map((i) => (celdas[i] ?? '').trim()).join('|') : l.trim();
+    if (claves.has(clave)) duplicados++; else claves.set(clave, true);
   }
-  return { ok: iFecha >= 0 && dentro > 0 && fuera === 0, filas: lineas.length - 1, columnas: cab.length, separador: sep, columnaFecha: iFecha >= 0 ? cab[iFecha] : null, dentroDelRango: dentro, fueraDelRango: fuera, encabezados: cab };
+  const filas = lineas.length - 1;
+  return {
+    ok: iFecha >= 0 && dentro > 0 && fuera === 0 && duplicados === 0,
+    filas, columnas: cab.length, separador: sep,
+    columnaFecha: iFecha >= 0 ? cab[iFecha] : null,
+    dentroDelRango: dentro, fueraDelRango: fuera,
+    duplicados, claveDuplicados: idCols.length ? idCols.map((i) => cab[i]) : ['línea completa'],
+    encabezados: cab,
+    motivo: iFecha < 0 ? 'no se encontró columna de fecha' : fuera > 0 ? `${fuera} fuera de rango` : duplicados ? `${duplicados} duplicados` : dentro === 0 ? 'ninguna fila con fecha válida' : null,
+  };
 }
 
-export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, outDir = 'out/portal', log = () => {} }) {
+/** Valida un archivo descargado: si es ZIP, extrae y valida cada CSV; si es CSV, directo. */
+export function validarArchivo(file, desde, hasta) {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.csv') {
+    return { ...validarContenidoCsv(fs.readFileSync(file, 'utf8'), desde, hasta), csv: [path.basename(file)] };
+  }
+  if (ext === '.zip') {
+    let entradas;
+    try { entradas = leerZipDesdeArchivo(file); } catch (e) { return { ok: false, motivo: `ZIP ilegible: ${e.message}` }; }
+    const csvs = entradas.filter((e) => /\.csv$/i.test(e.name));
+    if (!csvs.length) return { ok: false, motivo: `el ZIP no contiene CSV (${entradas.map((e) => e.name).join(', ')})` };
+    const dir = path.join(path.dirname(file), path.basename(file, '.zip') + '-csv');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const partes = csvs.map((e) => {
+      fs.writeFileSync(path.join(dir, path.basename(e.name)), e.data, { mode: 0o600 });
+      return { csv: path.basename(e.name), ...validarContenidoCsv(e.data.toString('utf8'), desde, hasta) };
+    });
+    return {
+      ok: partes.every((p) => p.ok),
+      filas: partes.reduce((n, p) => n + (p.filas ?? 0), 0),
+      duplicados: partes.reduce((n, p) => n + (p.duplicados ?? 0), 0),
+      dentroDelRango: partes.reduce((n, p) => n + (p.dentroDelRango ?? 0), 0),
+      fueraDelRango: partes.reduce((n, p) => n + (p.fueraDelRango ?? 0), 0),
+      csv: partes.map((p) => p.csv), partes,
+      motivo: partes.every((p) => p.ok) ? null : partes.filter((p) => !p.ok).map((p) => `${p.csv}: ${p.motivo}`).join('; '),
+    };
+  }
+  return { ok: false, motivo: `formato ${ext || 'desconocido'}: validar a mano` };
+}
+
+// ---------- registro de períodos ya verificados (trazabilidad) ----------
+
+function rutaManifiesto(outDir) { return path.join(outDir, 'manifiesto.json'); }
+export function leerManifiesto(outDir) {
+  const f = rutaManifiesto(outDir);
+  if (!fs.existsSync(f)) return {};
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return {}; }
+}
+export function claveManifiesto(tipo, d, h) { return `${tipo}:${d}:${h}`; }
+export function registrarManifiesto(outDir, clave, registro) {
+  const m = leerManifiesto(outDir);
+  m[clave] = registro;
+  fs.writeFileSync(rutaManifiesto(outDir), JSON.stringify(m, null, 2), { mode: 0o600 });
+}
+
+export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, outDir = 'out/portal', rehacer = false, log = () => {} }) {
   fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const resultado = { tipo, desde, hasta, archivos: [], validaciones: [], verificado: false };
+  const manifiesto = leerManifiesto(outDir);
+  const tramos = rangos(desde, hasta);
+
+  // Trazabilidad: períodos ya verificados no se vuelven a descargar salvo --rehacer.
+  const pendientes = tramos.filter(([d, h]) => {
+    const prev = manifiesto[claveManifiesto(tipo, d, h)];
+    if (prev?.ok && !rehacer) {
+      log(`Mis Comprobantes ${tipo} ${d} a ${h}: ya verificado el ${prev.fecha} (${prev.filas} filas), se reutiliza.`);
+      resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: prev.filas, archivo: prev.archivo, reutilizado: true, hash: prev.hash });
+      if (prev.archivo) resultado.archivos.push(path.join(outDir, prev.archivo));
+      return false;
+    }
+    return true;
+  });
+  if (!pendientes.length) {
+    resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
+    log('Todo el período ya estaba verificado; no se descargó nada.');
+    return resultado;
+  }
+
   const pagina = await irAPantalla(sesion, tipo, log);
 
-  for (const [d, h] of rangos(desde, hasta)) {
+  for (const [d, h] of pendientes) {
     log(`Mis Comprobantes ${tipo} ${d} a ${h}`);
     await consultar(pagina, d, h, log);
     const rel = await relevarPagina(pagina);
@@ -236,9 +317,11 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     await descarga.saveAs(destino);
     fs.chmodSync(destino, 0o600);
     resultado.archivos.push(destino);
-    const val = ext.toLowerCase() === '.csv' ? validarArchivo(destino, d, h) : { ok: false, motivo: `formato ${ext}: validar a mano` };
-    resultado.validaciones.push({ desde: d, hasta: h, archivo: destino, ...val });
-    log(`  -> ${destino} · ${val.filas ?? '?'} filas · ${val.ok ? 'VALIDADO' : `NO validado: ${val.motivo ?? `${val.fueraDelRango} fuera de rango`}`}`);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(destino)).digest('hex');
+    const val = validarArchivo(destino, d, h);
+    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val });
+    log(`  -> ${path.basename(destino)} · ${val.filas ?? '?'} filas · dup ${val.duplicados ?? 0} · ${val.ok ? 'VALIDADO' : `NO validado: ${val.motivo}`}`);
+    if (val.ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), archivo: path.basename(destino), filas: val.filas, hash, csv: val.csv });
   }
   resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
   if (pagina !== sesion.page) await pagina.close().catch(() => {});

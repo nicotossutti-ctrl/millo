@@ -41,6 +41,18 @@ test('correrUno marca desafio de seguridad sin propagar el error', async () => {
   assert.ok(fs.existsSync(path.join(outDir, 'x', 'error.txt')));
 });
 
+test('correrUno sanea el CUIT y datos sensibles en el error antes de guardarlo', async () => {
+  const outDir = dirTmp();
+  const r = await correrUno(sesionFalsa, { id: 'y', nombre: 'Y', fuente: 7 }, {
+    baseDir: outDir,
+    runner: async () => { throw new Error('fallo con CUIT 20353544773 y total $ 63.871.446,29'); },
+  });
+  assert.doesNotMatch(r.error, /20353544773|871\.446/);
+  assert.match(r.error, /20-XXXXXXXX-3/);
+  const guardado = fs.readFileSync(path.join(outDir, 'y', 'error.txt'), 'utf8');
+  assert.doesNotMatch(guardado, /20353544773|871\.446/);
+});
+
 test('clasificarRelevamiento detecta datos, exportacion y si esta listo para extractor', () => {
   const rel = { frames: [{ principal: true,
     inputs: [{ tag: 'input', id: 'fechaEmision', visible: true, type: 'text', placeholder: 'dd/mm' }],
