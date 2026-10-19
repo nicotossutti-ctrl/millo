@@ -205,18 +205,25 @@ export class Sesion {
       return destino;
     };
 
-    // Busca, en un frame, el primer elemento clickeable y visible cuyo texto coincida con algún término.
-    const buscarClickeable = async (frame) => {
-      const items = frame.locator('a, button, [role=button], [role=option], [role=menuitem], [role=link], li');
-      const n = Math.min(await items.count(), 400);
-      for (let i = 0; i < n; i++) {
-        const it = items.nth(i);
-        if (!(await it.isVisible().catch(() => false))) continue;
-        const texto = (await it.innerText().catch(() => '')) || (await it.getAttribute('aria-label').catch(() => '')) || '';
-        if (texto && coincideServicio(texto, terminos)) return it;
+    // Busca un clickeable visible cuyo texto coincida con algún término. Filtra en el navegador
+    // con hasText (barato) y solo revisa las pocas coincidencias, en vez de recorrer todo el DOM.
+    const buscarEn = async (frame, selector) => {
+      for (const termino of terminos) {
+        const cand = frame.locator(selector).filter({ hasText: termino });
+        const n = Math.min(await cand.count(), 15);
+        for (let i = 0; i < n; i++) {
+          const it = cand.nth(i);
+          if (!(await it.isVisible().catch(() => false))) continue;
+          const texto = (await it.innerText().catch(() => '')) || '';
+          if (coincideServicio(texto, terminos)) return it;
+        }
       }
       return null;
     };
+    // Primero elementos claramente clickeables; los <li> (tiles grandes) solo como último recurso.
+    const buscarClickeable = async (frame) =>
+      (await buscarEn(frame, 'a, button, [role=button], [role=option], [role=menuitem], [role=link]'))
+      ?? (await buscarEn(frame, 'li'));
 
     // 1. enlace o tile directo en cualquier frame (p. ej. "Más utilizados").
     for (const frame of page.frames()) {
