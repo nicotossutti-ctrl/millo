@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sanitizarHtml, sanitizarUrl, sanitizarTexto } from '../src/portal/diagnostico.js';
@@ -26,10 +27,24 @@ test('el texto de estructura enmascara CUIT', () => {
   assert.equal(sanitizarTexto(null), null);
 });
 
-test('git ignora todo lo que la capa de portal escribe en disco', () => {
-  const rutas = ['out/diagnostico/x/pantalla.png', 'out/diagnostico/x/pagina.html', 'out/descargas/a.csv', 'out/portal/mis-comprobantes.csv', '.sesion/20111111112.json', 'certs/arca.key', '.env', '.ta/prod-wsfe.json', 'params/contribuyente.json'];
-  for (const r of rutas) {
-    const res = execFileSync('git', ['check-ignore', '-q', r], { cwd: raiz, stdio: ['ignore', 'ignore', 'ignore'], encoding: 'utf8', shell: false, env: process.env }) ?? '';
-    assert.ok(res !== null, `${r} no está ignorado`);
+const RUTAS_SENSIBLES = ['out/diagnostico/x/pantalla.png', 'out/diagnostico/x/pagina.html', 'out/descargas/a.csv', 'out/portal/mis-comprobantes.csv', '.sesion/20111111112.json', 'certs/arca.key', '.env', '.ta/prod-wsfe.json', 'params/contribuyente.json'];
+
+let hayGit = true;
+try { execFileSync('git', ['--version'], { stdio: 'ignore' }); } catch { hayGit = false; }
+
+test('git ignora todo lo que la capa de portal escribe en disco', { skip: !hayGit && 'sin git en este equipo: se verifica el .gitignore directamente' }, () => {
+  for (const r of RUTAS_SENSIBLES) {
+    let ignorado = true;
+    try { execFileSync('git', ['check-ignore', '-q', r], { cwd: raiz, stdio: 'ignore' }); } catch { ignorado = false; }
+    assert.ok(ignorado, `${r} no está ignorado por git`);
   }
+});
+
+test('el .gitignore declara cada ruta sensible (no requiere git)', () => {
+  const reglas = fs.readFileSync(path.join(raiz, '.gitignore'), 'utf8').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && !l.startsWith('!'));
+  const cubre = (ruta) => reglas.some((regla) => {
+    const base = regla.replace(/\/\*?$/, '');          // "out/*" y ".sesion/" -> "out", ".sesion"
+    return ruta === regla || ruta === base || ruta.startsWith(`${base}/`);
+  });
+  for (const r of RUTAS_SENSIBLES) assert.ok(cubre(r), `${r} no está cubierto por .gitignore`);
 });

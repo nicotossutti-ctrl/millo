@@ -150,3 +150,28 @@ export function firmarCms(contenido, certPem, keyPem, { fecha = new Date() } = {
 
   return SEQ(oid(OIDS.signedData), EXPLICITO0(signedData));
 }
+
+// ---------- verificación (usada por los tests; no depende de openssl) ----------
+
+/**
+ * Lee un SignedData generado por firmarCms y verifica: que el messageDigest firmado sea el
+ * SHA-256 del contenido y que la firma RSA valide contra el certificado incluido.
+ */
+export function verificarCms(der) {
+  const contentInfo = hijos(leerTlv(der, 0));
+  const signedData = leerTlv(contentInfo[1].contenido, 0);
+  const [, , encap, certs, signerInfos] = hijos(signedData);
+  const contenido = leerTlv(hijos(encap)[1].contenido, 0).contenido;
+  const certDer = hijos(certs)[0].raw;
+  const certificado = new crypto.X509Certificate(certDer);
+  const si = hijos(hijos(signerInfos)[0]);
+  const signedAttrs = si[3];
+  const firma = si[5].contenido;
+  const setAtributos = Buffer.concat([Buffer.from([0x31]), signedAttrs.raw.subarray(1)]);
+  const firmaValida = crypto.verify('sha256', setAtributos, { key: certificado.publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, firma);
+  const attrs = hijos(signedAttrs).map((a) => hijos(a));
+  const md = attrs.find((a) => a[0].raw.equals(oid(OIDS.messageDigest)));
+  const digestFirmado = leerTlv(md[1].contenido, 0).contenido;
+  const digestCoincide = digestFirmado.equals(crypto.createHash('sha256').update(contenido).digest());
+  return { contenido, certificado, firmaValida, digestCoincide };
+}

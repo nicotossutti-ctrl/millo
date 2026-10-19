@@ -10,6 +10,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { buildTra, signTra, loginCms, getTicket } from '../src/wsaa.js';
 import { certificadoDePrueba } from './helpers.js';
+import { verificarCms } from '../src/cms.js';
+import crypto from 'node:crypto';
 
 // Certificado autofirmado descartable, generado en el momento. No es una credencial real.
 let cfg;
@@ -40,6 +42,16 @@ test('la firma CMS con crypto de Node es verificable por openssl y contiene el T
   assert.equal(out.toString('utf8'), tra);
   // y la firma es válida contra el certificado incluido
   execFileSync('openssl', ['cms', '-verify', '-noverify', '-inform', 'DER', '-certfile', cfg.certPath, '-out', '/dev/null'], { input: der });
+});
+
+test('la firma CMS se verifica con crypto de Node, sin openssl', () => {
+  const tra = buildTra('wsfe');
+  const der = Buffer.from(signTra(tra, cfg), 'base64');
+  const v = verificarCms(der);
+  assert.equal(v.contenido.toString('utf8'), tra);
+  assert.equal(v.digestCoincide, true, 'messageDigest ≠ sha256 del contenido');
+  assert.equal(v.firmaValida, true, 'la firma RSA no verifica contra el certificado incluido');
+  assert.equal(v.certificado.subject, new crypto.X509Certificate(fs.readFileSync(cfg.certPath)).subject);
 });
 
 test('la firma con openssl produce un CMS equivalente', { skip: !hayOpenssl && 'sin openssl en este equipo' }, () => {
@@ -74,5 +86,7 @@ test('getTicket cachea el ticket mientras no venza y lo renueva cuando vence', a
   assert.equal(n, 2);
   const file = path.join(cfg.taDir, 'test-wsfe.json');
   assert.ok(fs.existsSync(file));
-  assert.equal((fs.statSync(file).mode & 0o777), 0o600);
+  // En POSIX el ticket se guarda 0600. En Windows chmod no existe: la protección es la ACL
+  // de la carpeta del usuario, y el modo reportado es siempre 0666.
+  if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777), 0o600);
 });

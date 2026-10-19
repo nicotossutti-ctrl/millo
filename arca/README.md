@@ -156,8 +156,10 @@ una pantalla.
 
 Lo que guarda el diagnóstico sale de pantallas autenticadas, así que se protege:
 
-- carpetas 0700 y archivos 0600; `out/` y `.sesion/` están en `.gitignore` y un test
-  (`test/diagnostico.test.js`) verifica en cada corrida que git los ignore;
+- carpetas 0700 y archivos 0600 en Linux y macOS. En Windows esos permisos no existen: la
+  protección es la ACL de tu carpeta de usuario, así que no instales el proyecto en una carpeta
+  compartida. `out/` y `.sesion/` están en `.gitignore` y un test lo verifica en cada corrida,
+  con git si está instalado y leyendo el `.gitignore` si no;
 - el HTML se sanea: sin scripts, sin valores de inputs ni tokens de formulario, CUIT e importes
   enmascarados; la estructura nunca incluye el valor de un input;
 - del tráfico de red se guarda solo método, host y ruta: sin query string, sin cookies ni
