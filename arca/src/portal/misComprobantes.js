@@ -138,6 +138,17 @@ export async function consultar(pagina, d, h, log = () => {}) {
   }
 }
 
+/** Total de comprobantes informado por ARCA, leído de la paginación ("... de N registros"). */
+export function totalInformado(res) {
+  for (const txt of res.paginacion ?? []) {
+    const m = /\bde\s+([\d.]+)\b|\bof\s+([\d.]+)\b/i.exec(txt);
+    if (m) return Number((m[1] ?? m[2]).replace(/\./g, ''));
+  }
+  // Sin paginación: si hay una sola tabla visible, sus filas son el total.
+  if (res.tablasVisibles.length === 1) return res.tablasVisibles[0].filas;
+  return null;
+}
+
 /** Qué hay en Resultados después de consultar: tablas, paginación, exportación, mensajes. */
 export function resumenResultados(rel) {
   const f = rel.frames.find((x) => x.principal) ?? rel.frames[0];
@@ -262,28 +273,37 @@ export function leerManifiesto(outDir) {
 }
 export function claveManifiesto(tipo, d, h) { return `${tipo}:${d}:${h}`; }
 export function registrarManifiesto(outDir, clave, registro) {
+  fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const m = leerManifiesto(outDir);
   m[clave] = registro;
   fs.writeFileSync(rutaManifiesto(outDir), JSON.stringify(m, null, 2), { mode: 0o600 });
 }
 
+/**
+ * Reparte los tramos del período en pendientes (hay que descargar) y reutilizados (ya
+ * verificados en el manifiesto persistente de outDir). Pura: no toca la red.
+ */
+export function periodosPendientes(outDir, tipo, desde, hasta, rehacer = false) {
+  const manifiesto = leerManifiesto(outDir);
+  const pendientes = []; const reutilizados = [];
+  for (const [d, h] of rangos(desde, hasta)) {
+    const prev = manifiesto[claveManifiesto(tipo, d, h)];
+    if (prev?.ok && !rehacer) reutilizados.push({ desde: d, hasta: h, ...prev });
+    else pendientes.push([d, h]);
+  }
+  return { pendientes, reutilizados };
+}
+
 export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, outDir = 'out/portal', rehacer = false, log = () => {} }) {
   fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const resultado = { tipo, desde, hasta, archivos: [], validaciones: [], verificado: false };
-  const manifiesto = leerManifiesto(outDir);
-  const tramos = rangos(desde, hasta);
-
   // Trazabilidad: períodos ya verificados no se vuelven a descargar salvo --rehacer.
-  const pendientes = tramos.filter(([d, h]) => {
-    const prev = manifiesto[claveManifiesto(tipo, d, h)];
-    if (prev?.ok && !rehacer) {
-      log(`Mis Comprobantes ${tipo} ${d} a ${h}: ya verificado el ${prev.fecha} (${prev.filas} filas), se reutiliza.`);
-      resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: prev.filas, archivo: prev.archivo, reutilizado: true, hash: prev.hash });
-      if (prev.archivo) resultado.archivos.push(path.join(outDir, prev.archivo));
-      return false;
-    }
-    return true;
-  });
+  const { pendientes, reutilizados } = periodosPendientes(outDir, tipo, desde, hasta, rehacer);
+  for (const r of reutilizados) {
+    log(`Mis Comprobantes ${tipo} ${r.desde} a ${r.hasta}: ya verificado el ${r.fecha} (${r.filas} filas), se reutiliza.`);
+    resultado.validaciones.push({ desde: r.desde, hasta: r.hasta, ok: true, filas: r.filas, informados: r.informados, archivo: r.archivo, reutilizado: true, hash: r.hash });
+    if (r.archivo) resultado.archivos.push(path.join(outDir, r.archivo));
+  }
   if (!pendientes.length) {
     resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
     log('Todo el período ya estaba verificado; no se descargó nada.');
@@ -319,9 +339,14 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     resultado.archivos.push(destino);
     const hash = crypto.createHash('sha256').update(fs.readFileSync(destino)).digest('hex');
     const val = validarArchivo(destino, d, h);
-    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val });
-    log(`  -> ${path.basename(destino)} · ${val.filas ?? '?'} filas · dup ${val.duplicados ?? 0} · ${val.ok ? 'VALIDADO' : `NO validado: ${val.motivo}`}`);
-    if (val.ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), archivo: path.basename(destino), filas: val.filas, hash, csv: val.csv });
+    // Control clave: lo descargado debe coincidir con lo que ARCA informó en la tabla paginada.
+    const informados = totalInformado(res);
+    const coincideInformado = informados == null ? null : val.filas === informados;
+    const ok = val.ok && coincideInformado !== false;
+    const motivo = val.ok && coincideInformado === false ? `descargados ${val.filas} ≠ informados ${informados}` : val.motivo;
+    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val, ok, informados, coincideInformado, motivo });
+    log(`  -> ${path.basename(destino)} · ${val.filas ?? '?'} filas / informados ${informados ?? '?'} · dup ${val.duplicados ?? 0} · ${ok ? 'VALIDADO' : `NO validado: ${motivo}`}`);
+    if (ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), ok: true, archivo: path.basename(destino), filas: val.filas, informados, hash, csv: val.csv });
   }
   resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
   if (pagina !== sesion.page) await pagina.close().catch(() => {});

@@ -142,9 +142,15 @@ Cada corrida se guarda en `out/corridas/<fecha>/`:
   **descargaron y validaron** datos y los que quedaron **solo inspeccionados**.
 
 **Mis Comprobantes** descarga un ZIP, lo descomprime (lector propio con `zlib`, sin
-dependencias), valida cada CSV (cantidad de filas, fechas dentro del rango y duplicados por
-comprobante) y registra el período en `out/portal/manifiesto.json` con su hash. Un período ya
-verificado no se vuelve a descargar salvo `--rehacer`, y el informe lo marca como reutilizado.
+dependencias) y valida cada CSV contra cuatro controles: cantidad de filas, fechas dentro del
+rango, duplicados por comprobante y **coincidencia con el total informado por ARCA** en la
+tabla paginada (los 20 descargados tienen que ser los 20 que ARCA dice). Solo si los cuatro
+pasan se da por verificado.
+
+Los archivos y el registro viven en una carpeta **persistente y compartida entre corridas**,
+`out/datos/<servicio>/manifiesto.json`, con el hash de cada archivo. Un período ya verificado
+no se vuelve a descargar salvo `--rehacer`, y el informe lo marca como reutilizado. Así el
+histórico no se vuelve a bajar en cada ejecución.
 
 Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 

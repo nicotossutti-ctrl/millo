@@ -93,3 +93,42 @@ test('el manifiesto registra y relee períodos verificados', async () => {
   registrarManifiesto(dir, clave, { fecha: '2026-10-19', filas: 20, hash: 'abc' });
   assert.equal(leerManifiesto(dir)[clave].filas, 20);
 });
+
+test('totalInformado lee el total de la paginación de ARCA en varios formatos', async () => {
+  const { totalInformado } = await import('../src/portal/misComprobantes.js');
+  assert.equal(totalInformado({ paginacion: ['Mostrando 1 a 20 de 20 registros'], tablasVisibles: [] }), 20);
+  assert.equal(totalInformado({ paginacion: ['1 a 25 de 1.234 registros'], tablasVisibles: [] }), 1234);
+  assert.equal(totalInformado({ paginacion: ['Showing 1 to 10 of 61 entries'], tablasVisibles: [] }), 61);
+  assert.equal(totalInformado({ paginacion: [], tablasVisibles: [{ filas: 7 }] }), 7);
+  assert.equal(totalInformado({ paginacion: [], tablasVisibles: [{ filas: 3 }, { filas: 4 }] }), null);
+});
+
+test('el manifiesto persistente reutiliza descargas entre dos corridas distintas', async () => {
+  const { periodosPendientes, registrarManifiesto, claveManifiesto } = await import('../src/portal/misComprobantes.js');
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  // Carpeta PERSISTENTE compartida (no por corrida).
+  const persistente = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-datos-'));
+
+  // Corrida 1: nada verificado aún -> el período está pendiente.
+  const antes = periodosPendientes(persistente, 'recibidos', '2026-09-01', '2026-09-30');
+  assert.equal(antes.pendientes.length, 1);
+  assert.equal(antes.reutilizados.length, 0);
+
+  // La corrida 1 descarga y valida: registra en el manifiesto persistente.
+  registrarManifiesto(persistente, claveManifiesto('recibidos', '2026-09-01', '2026-09-30'),
+    { fecha: '2026-10-19', ok: true, filas: 20, informados: 20, hash: 'abc', archivo: 'r.csv' });
+
+  // Corrida 2 (otra carpeta de corrida, MISMA carpeta persistente): se reutiliza, no se descarga.
+  const despues = periodosPendientes(persistente, 'recibidos', '2026-09-01', '2026-09-30');
+  assert.equal(despues.pendientes.length, 0);
+  assert.equal(despues.reutilizados.length, 1);
+  assert.equal(despues.reutilizados[0].filas, 20);
+  assert.equal(despues.reutilizados[0].informados, 20);
+
+  // Una carpeta persistente distinta NO ve ese manifiesto: vuelve a estar pendiente.
+  const otra = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-datos2-'));
+  assert.equal(periodosPendientes(otra, 'recibidos', '2026-09-01', '2026-09-30').pendientes.length, 1);
+
+  // Con --rehacer, aunque esté verificado, vuelve a pendientes.
+  assert.equal(periodosPendientes(persistente, 'recibidos', '2026-09-01', '2026-09-30', true).pendientes.length, 1);
+});

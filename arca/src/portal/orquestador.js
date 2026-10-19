@@ -64,10 +64,16 @@ async function correrGenerico(sesion, servicio, dir, log) {
   return { ...clas, url: rel.url };
 }
 
-/** Mis Comprobantes: descarga real con el extractor dedicado (validado). */
+/**
+ * Mis Comprobantes: descarga real con el extractor dedicado (validado). Los archivos y el
+ * manifiesto van a una carpeta PERSISTENTE (out/datos/<id>), compartida entre corridas, para
+ * reutilizar descargas históricas. La carpeta de la corrida solo guarda el resumen.
+ */
 async function correrMisComprobantes(sesion, servicio, dir, periodo, log) {
-  const r = await descargarMisComprobantes(sesion, { tipo: servicio.tipo, desde: periodo.desde, hasta: periodo.hasta, outDir: dir, rehacer: periodo.rehacer, log });
-  escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const datosDir = path.join(outBase, 'datos', servicio.id);
+  const r = await descargarMisComprobantes(sesion, { tipo: servicio.tipo, desde: periodo.desde, hasta: periodo.hasta, outDir: datosDir, rehacer: periodo.rehacer, log });
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ datosDir, ...r }, null, 2));
   const estado = r.verificado ? 'validado' : (r.archivos.length ? 'descargado' : 'con-datos');
   return { estado, archivos: r.archivos.map((a) => path.basename(a)), validaciones: r.validaciones };
 }
