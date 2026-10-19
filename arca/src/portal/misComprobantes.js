@@ -140,9 +140,13 @@ export async function consultar(pagina, d, h, log = () => {}) {
 
 /** Total de comprobantes informado por ARCA, leído de la paginación ("... de N registros"). */
 export function totalInformado(res) {
+  const aNum = (x) => Number(String(x).replace(/\./g, ''));
   for (const txt of res.paginacion ?? []) {
-    const m = /\bde\s+([\d.]+)\b|\bof\s+([\d.]+)\b/i.exec(txt);
-    if (m) return Number((m[1] ?? m[2]).replace(/\./g, ''));
+    // Preferimos el número inmediatamente anterior a la palabra "registros/resultados/...".
+    const pref = /([\d.]+)\s*(?:registros|resultados|comprobantes|entries)/i.exec(txt);
+    if (pref) return aNum(pref[1]);
+    const alt = /(?:\bde\b|\bof\b)\s+([\d.]+)\b/i.exec(txt);
+    if (alt) return aNum(alt[1]);
   }
   // Sin paginación: si hay una sola tabla visible, sus filas son el total.
   if (res.tablasVisibles.length === 1) return res.tablasVisibles[0].filas;
@@ -207,8 +211,10 @@ export function validarContenidoCsv(texto, desde, hasta) {
   if (lineas.length < 2) return { ok: false, filas: 0, motivo: 'archivo sin filas de datos' };
   const sep = (lineas[0].match(/;/g) ?? []).length >= (lineas[0].match(/,/g) ?? []).length ? ';' : ',';
   const cab = lineas[0].split(sep).map((c) => c.trim());
-  const iFecha = cab.findIndex((c) => /fecha/i.test(c));
-  const idCols = cab.map((c, i) => (/n[úu]mero|nro|punto de venta|tipo|emisor|c[óo]d\. aut/i.test(c) ? i : -1)).filter((i) => i >= 0);
+  // Normaliza para que la detección no dependa del encoding del CSV (acentos).
+  const norm = (c) => c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
+  const idCols = cab.map((c, i) => (/numero|nro|punto de venta|tipo|emisor|cod\.? aut/.test(norm(c)) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
   const aYmd = (x) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec((x ?? '').trim()); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
   let dentro = 0; let fuera = 0;

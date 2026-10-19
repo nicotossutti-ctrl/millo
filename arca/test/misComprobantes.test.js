@@ -132,3 +132,17 @@ test('el manifiesto persistente reutiliza descargas entre dos corridas distintas
   // Con --rehacer, aunque esté verificado, vuelve a pendientes.
   assert.equal(periodosPendientes(persistente, 'recibidos', '2026-09-01', '2026-09-30', true).pendientes.length, 1);
 });
+
+test('totalInformado soporta la paginación completa de DataTables en español', async () => {
+  const { totalInformado } = await import('../src/portal/misComprobantes.js');
+  assert.equal(totalInformado({ paginacion: ['Mostrando registros del 1 al 20 de un total de 20 registros'], tablasVisibles: [] }), 20);
+  assert.equal(totalInformado({ paginacion: ['Mostrando registros del 1 al 25 de un total de 1.234 registros'], tablasVisibles: [] }), 1234);
+});
+
+test('detección de columnas tolera acentos mal codificados (Número -> Nmero)', async () => {
+  const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  // "Nmero" simula el header con el acento perdido por encoding latin1/utf8.
+  const cab = 'Fecha de Emisin;Tipo;Punto de Venta;Nmero Desde;Total';
+  const v = validarContenidoCsv(`${cab}\n05/09/2026;1;1;10;100,00\n05/09/2026;1;1;10;100,00`, '2026-09-01', '2026-09-30');
+  assert.equal(v.duplicados, 1, 'debe detectar el duplicado por columnas aun sin acentos');
+});
