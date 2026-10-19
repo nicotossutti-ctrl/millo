@@ -192,3 +192,17 @@ test('validarArchivo sobre un CSV UTF-16LE con fecha ISO valida correctamente', 
   assert.equal(v.ok, true);
   assert.equal(v.filas, 2);
 });
+
+test('candidatos encuentra exportación y tablas dentro de un iframe (caso Cuentas Tributarias)', async () => {
+  const { candidatos } = await import('../src/portal/misComprobantes.js');
+  const rel = { frames: [
+    { principal: true, inputs: [], botones: [], enlaces: [], conRol: [] },
+    { principal: false, inputs: [{ tag: 'input', id: 'd', visible: true, type: 'text', placeholder: 'desde' }],
+      botones: [{ tag: 'button', text: 'EXPORTAR', visible: true }, { tag: 'button', text: 'Consultar', visible: true }],
+      enlaces: [{ tag: 'a', text: 'CSV', visible: true }], conRol: [] },
+  ] };
+  const c = candidatos(rel);
+  assert.deepEqual(c.exportar.map((e) => e.text).sort(), ['CSV', 'EXPORTAR']);
+  assert.deepEqual(c.buscar.map((b) => b.text), ['Consultar']);
+  assert.equal(c.fecha.length, 1);
+});

@@ -86,7 +86,8 @@ test('generarCobertura ordena por estado y cuenta', () => {
   assert.equal(objeto.servicios.at(-1).estado, 'error');
   assert.equal(objeto.conteo.validado, 1);
   assert.match(texto, /20 filas/);
-  assert.match(texto, /CUIT 20111111112/);
+  assert.match(texto, /CUIT 20-XXXXXXXX-2/);
+  assert.doesNotMatch(texto, /20111111112/);
   // las cuatro secciones de la issue #1
   assert.match(texto, /## Descargado y validado/);
   assert.match(texto, /## Descargado sin validar/);

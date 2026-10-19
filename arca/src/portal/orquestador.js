@@ -29,9 +29,10 @@ function selectorDe(x) {
  * Devuelve estado y los elementos candidatos para escribir después el extractor confirmado.
  */
 export function clasificarRelevamiento(rel) {
-  const f = rel?.frames?.find((x) => x.principal) ?? rel?.frames?.[0] ?? {};
+  const frames = rel?.frames ?? [{}];
   const cand = candidatos(rel ?? { frames: [{}] });
-  const tablas = (f.tablas ?? []).filter((t) => t.visible);
+  const tablas = frames.flatMap((f) => f.tablas ?? []).filter((t) => t.visible);
+  const paginacionTxt = frames.flatMap((f) => f.paginacion ?? []).map((p) => p.text).filter(Boolean);
   const filas = tablas.reduce((n, t) => n + (t.filas ?? 0), 0);
   const hayExport = cand.exportar.length > 0;
   const hayFiltroFecha = cand.fecha.length > 0;
@@ -45,7 +46,7 @@ export function clasificarRelevamiento(rel) {
     exportacion: cand.exportar.map((x) => ({ texto: x.text, selector: selectorDe(x), href: x.href })),
     filtroFecha: cand.fecha.map((x) => ({ selector: selectorDe(x), placeholder: x.placeholder })),
     botonConsulta: cand.buscar.map((x) => ({ texto: x.text, selector: selectorDe(x) })),
-    paginacion: (f.paginacion ?? []).map((p) => p.text).filter(Boolean),
+    paginacion: paginacionTxt,
     listoParaExtractor: hayFiltroFecha && hayConsulta,
   };
 }
@@ -133,8 +134,9 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
     ['Sin acceso o bloqueo', (r) => ['sin-acceso', 'desafio', 'error'].includes(r.estado)],
   ];
 
+  const cuitMask = cuit ? String(cuit).replace(/^(\d{2})\d{6,8}(\d)$/, '$1-XXXXXXXX-$2') : null;
   const txt = [];
-  txt.push(`# Cobertura FiscalOS${cuit ? ` · CUIT ${cuit}` : ''}${cuando ? ` · ${cuando}` : ''}`);
+  txt.push(`# Cobertura FiscalOS${cuitMask ? ` · CUIT ${cuitMask}` : ''}${cuando ? ` · ${cuando}` : ''}`);
   txt.push('');
   txt.push('Resumen: ' + ESTADOS.filter((e) => conteo[e]).map((e) => `${conteo[e]} ${e}`).join(', '));
   for (const [titulo, filtro] of secciones) {

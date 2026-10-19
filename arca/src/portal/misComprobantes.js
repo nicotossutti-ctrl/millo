@@ -65,14 +65,16 @@ export async function irAPantalla(sesion, tipo, log = () => {}) {
 
 /** Candidatos a filtro de fecha, botón de consulta y exportación, a partir del relevamiento. */
 export function candidatos(rel) {
-  const f = rel.frames.find((x) => x.principal) ?? rel.frames[0];
+  // Aplana todos los frames: servicios como Cuentas Tributarias viven dentro de un iframe.
+  const frames = rel.frames ?? [];
+  const todo = (k) => frames.flatMap((fr) => fr[k] ?? []);
   const txt = (x) => `${x.id ?? ''} ${x.name ?? ''} ${x.placeholder ?? ''} ${x.ariaLabel ?? ''} ${x.title ?? ''} ${x.text ?? ''}`.toLowerCase();
-  const vis = (arr) => (arr ?? []).filter((x) => x.visible);
+  const vis = (arr) => arr.filter((x) => x.visible);
   return {
-    fecha: vis(f.inputs).filter((x) => /fecha|emisi|desde|hasta|period/.test(txt(x)) && x.type !== 'hidden'),
-    buscar: vis(f.botones).filter((x) => /buscar|consultar/.test(txt(x))),
-    exportar: [...vis(f.botones), ...vis(f.enlaces)].filter((x) => /\bcsv\b|excel|exportar|xls/.test(txt(x))),
-    tabla: (f.conRol ?? []).filter((x) => /grid|table/.test(x.role ?? '')).length,
+    fecha: vis(todo('inputs')).filter((x) => /fecha|emisi|desde|hasta|period/.test(txt(x)) && x.type !== 'hidden'),
+    buscar: vis(todo('botones')).filter((x) => /buscar|consultar/.test(txt(x))),
+    exportar: [...vis(todo('botones')), ...vis(todo('enlaces'))].filter((x) => /\bcsv\b|excel|exportar|xls/.test(txt(x))),
+    tabla: todo('conRol').filter((x) => /grid|table/.test(x.role ?? '')).length,
   };
 }
 
