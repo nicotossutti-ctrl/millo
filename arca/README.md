@@ -138,14 +138,15 @@ npm run arca -- portal:todo --desde 2026-09-01 --hasta 2026-09-30 --visible
 
 Cada corrida se guarda en `out/corridas/<fecha>/`:
 - una carpeta por servicio (estructura, HTML saneado, resumen, archivos descargados o error),
-- `cobertura.json` y `cobertura.md`, con el informe en **dos secciones**: los servicios que
-  **descargaron y validaron** datos y los que quedaron **solo inspeccionados**.
+- `cobertura.json` y `cobertura.md`, con el informe en **cuatro categorías**: *Descargado y
+  validado*, *Descargado sin validar*, *Solo relevado* y *Sin acceso o bloqueo*.
 
 **Mis Comprobantes** descarga un ZIP, lo descomprime (lector propio con `zlib`, sin
 dependencias) y valida cada CSV contra cuatro controles: cantidad de filas, fechas dentro del
 rango, duplicados por comprobante y **coincidencia con el total informado por ARCA** en la
 tabla paginada (los 20 descargados tienen que ser los 20 que ARCA dice). Solo si los cuatro
-pasan se da por verificado.
+pasan se da por verificado. Si ARCA no informa el total, el período queda como *descargado sin
+validar* con el motivo "cantidad no verificada", nunca como cotejo completo.
 
 Los archivos y el registro viven en una carpeta **persistente y compartida entre corridas**,
 `out/datos/<servicio>/manifiesto.json`, con el hash de cada archivo. Un período ya verificado

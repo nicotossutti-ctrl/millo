@@ -87,4 +87,19 @@ test('generarCobertura ordena por estado y cuenta', () => {
   assert.equal(objeto.conteo.validado, 1);
   assert.match(texto, /20 filas/);
   assert.match(texto, /CUIT 20111111112/);
+  // las cuatro secciones de la issue #1
+  assert.match(texto, /## Descargado y validado/);
+  assert.match(texto, /## Descargado sin validar/);
+  assert.match(texto, /## Solo relevado/);
+  assert.match(texto, /## Sin acceso o bloqueo/);
+  assert.deepEqual(objeto.categorias['Descargado y validado'], ['b']);
+});
+
+test('un período con cantidad no verificada queda como descargado sin validar, no validado', () => {
+  const res = [{ id: 'rec', nombre: 'Mis Comprobantes', fuente: 2, estado: 'descargado',
+    archivos: ['r.csv'], validaciones: [{ filas: 18, duplicados: 0, cantidadVerificada: false }] }];
+  const { texto, objeto } = generarCobertura(res, {});
+  assert.deepEqual(objeto.categorias['Descargado sin validar'], ['rec']);
+  assert.deepEqual(objeto.categorias['Descargado y validado'], []);
+  assert.match(texto, /cantidad no verificada/);
 });

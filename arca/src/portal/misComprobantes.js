@@ -347,10 +347,15 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     const val = validarArchivo(destino, d, h);
     // Control clave: lo descargado debe coincidir con lo que ARCA informó en la tabla paginada.
     const informados = totalInformado(res);
+    // El cotejo de cantidad solo es completo si ARCA informó el total y coincide con lo descargado.
+    const cantidadVerificada = informados != null && val.filas === informados;
     const coincideInformado = informados == null ? null : val.filas === informados;
-    const ok = val.ok && coincideInformado !== false;
-    const motivo = val.ok && coincideInformado === false ? `descargados ${val.filas} ≠ informados ${informados}` : val.motivo;
-    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val, ok, informados, coincideInformado, motivo });
+    const ok = val.ok && cantidadVerificada;
+    const motivo = !val.ok ? val.motivo
+      : informados == null ? 'cantidad no verificada: ARCA no informó el total'
+      : coincideInformado === false ? `descargados ${val.filas} ≠ informados ${informados}`
+      : null;
+    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val, ok, informados, coincideInformado, cantidadVerificada, motivo });
     log(`  -> ${path.basename(destino)} · ${val.filas ?? '?'} filas / informados ${informados ?? '?'} · dup ${val.duplicados ?? 0} · ${ok ? 'VALIDADO' : `NO validado: ${motivo}`}`);
     if (ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), ok: true, archivo: path.basename(destino), filas: val.filas, informados, hash, csv: val.csv });
   }

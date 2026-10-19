@@ -111,42 +111,41 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
   const filas = [...resultados].sort((a, b) => (orden[a.estado] ?? 9) - (orden[b.estado] ?? 9));
   const conteo = {};
   for (const r of resultados) conteo[r.estado] = (conteo[r.estado] ?? 0) + 1;
-  const DESCARGA = new Set(['validado', 'descargado']);
   const detalleDe = (r) => {
-    if (r.archivos?.length || DESCARGA.has(r.estado)) {
+    if (r.estado === 'validado' || r.estado === 'descargado') {
       const vals = r.validaciones ?? [];
       const totFilas = vals.map((v) => v.filas ?? 0).reduce((a, b) => a + b, 0);
       const dup = vals.map((v) => v.duplicados ?? 0).reduce((a, b) => a + b, 0);
       const reut = vals.filter((v) => v.reutilizado).length;
-      return `${vals.length} período(s)${reut ? `, ${reut} reutilizado(s)` : ''}; ${totFilas} filas; ${dup} duplicados`;
+      const sinVerif = vals.filter((v) => v.cantidadVerificada === false).length;
+      return `${vals.length} período(s)${reut ? `, ${reut} reutilizado(s)` : ''}; ${totFilas} filas; ${dup} duplicados${sinVerif ? `; ${sinVerif} con cantidad no verificada` : ''}`;
     }
     if (r.estado === 'con-datos' || r.estado === 'relevado') return `${r.filas ?? 0} filas en pantalla; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
     if (r.error) return r.error.slice(0, 120);
     return '';
   };
   const fila = (r) => `| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${detalleDe(r)} |`;
-  const descargaron = filas.filter((r) => DESCARGA.has(r.estado));
-  const resto = filas.filter((r) => !DESCARGA.has(r.estado));
+  // Las cuatro categorías que pide la issue #1.
+  const secciones = [
+    ['Descargado y validado', (r) => r.estado === 'validado'],
+    ['Descargado sin validar', (r) => r.estado === 'descargado'],
+    ['Solo relevado (inspeccionado, sin descarga)', (r) => r.estado === 'con-datos' || r.estado === 'relevado'],
+    ['Sin acceso o bloqueo', (r) => ['sin-acceso', 'desafio', 'error'].includes(r.estado)],
+  ];
 
   const txt = [];
   txt.push(`# Cobertura FiscalOS${cuit ? ` · CUIT ${cuit}` : ''}${cuando ? ` · ${cuando}` : ''}`);
   txt.push('');
   txt.push('Resumen: ' + ESTADOS.filter((e) => conteo[e]).map((e) => `${conteo[e]} ${e}`).join(', '));
-  txt.push('');
-  txt.push('## Datos descargados y validados');
-  txt.push(descargaron.length ? '' : '_(ninguno todavía)_');
-  if (descargaron.length) {
+  for (const [titulo, filtro] of secciones) {
+    const grupo = filas.filter(filtro);
+    txt.push('', `## ${titulo}`);
+    if (!grupo.length) { txt.push('_(ninguno)_'); continue; }
     txt.push('| Servicio | Fuente | Estado | Detalle |', '|---|---|---|---|');
-    for (const r of descargaron) txt.push(fila(r));
+    for (const r of grupo) txt.push(fila(r));
   }
-  txt.push('');
-  txt.push('## Solo inspeccionados (sin descarga)');
-  txt.push(resto.length ? '' : '_(ninguno)_');
-  if (resto.length) {
-    txt.push('| Servicio | Fuente | Estado | Detalle |', '|---|---|---|---|');
-    for (const r of resto) txt.push(fila(r));
-  }
-  return { objeto: { cuando, cuit, conteo, descargados: descargaron.map((r) => r.id), inspeccionados: resto.map((r) => r.id), servicios: filas }, texto: txt.join('\n') };
+  const porCategoria = Object.fromEntries(secciones.map(([t, f]) => [t, filas.filter(f).map((r) => r.id)]));
+  return { objeto: { cuando, cuit, conteo, categorias: porCategoria, servicios: filas }, texto: txt.join('\n') };
 }
 
 /** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
