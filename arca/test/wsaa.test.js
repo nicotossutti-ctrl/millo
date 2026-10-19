@@ -1,19 +1,27 @@
 import { test, before } from 'node:test';
+import { execFileSync as run } from 'node:child_process';
+
+let hayOpenssl = true;
+try { run('openssl', ['version'], { stdio: 'ignore' }); } catch { hayOpenssl = false; }
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { buildTra, signTra, loginCms, getTicket } from '../src/wsaa.js';
+import { certificadoDePrueba } from './helpers.js';
 
 // Certificado autofirmado descartable, generado en el momento. No es una credencial real.
 let cfg;
 before(() => {
+  // Certificado autofirmado descartable generado con crypto de Node: no requiere openssl.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-wsaa-'));
   const certPath = path.join(dir, 'test.crt');
   const keyPath = path.join(dir, 'test.key');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', certPath, '-days', '1', '-subj', '/C=AR/O=test/CN=test'], { stdio: 'ignore' });
-  cfg = { env: 'test', cuit: '20111111112', certPath, keyPath, signer: 'forge', taDir: path.join(dir, 'ta'), endpoints: { wsaa: 'https://wsaa.test/LoginCms' } };
+  const { cert, key } = certificadoDePrueba();
+  fs.writeFileSync(certPath, cert);
+  fs.writeFileSync(keyPath, key);
+  cfg = { env: 'test', cuit: '20111111112', certPath, keyPath, signer: 'node', taDir: path.join(dir, 'ta'), endpoints: { wsaa: 'https://wsaa.test/LoginCms' } };
 });
 
 test('el TRA tiene la estructura que exige WSAA, con hora de Buenos Aires', () => {
@@ -24,15 +32,17 @@ test('el TRA tiene la estructura que exige WSAA, con hora de Buenos Aires', () =
   assert.match(tra, /<uniqueId>\d+<\/uniqueId>/);
 });
 
-test('la firma CMS con node-forge es verificable por openssl y contiene el TRA', () => {
+test('la firma CMS con crypto de Node es verificable por openssl y contiene el TRA', { skip: !hayOpenssl && 'sin openssl en este equipo' }, () => {
   const tra = buildTra('wsfe');
   const b64 = signTra(tra, cfg);
   const der = Buffer.from(b64, 'base64');
   const out = execFileSync('openssl', ['cms', '-verify', '-noverify', '-inform', 'DER'], { input: der });
   assert.equal(out.toString('utf8'), tra);
+  // y la firma es válida contra el certificado incluido
+  execFileSync('openssl', ['cms', '-verify', '-noverify', '-inform', 'DER', '-certfile', cfg.certPath, '-out', '/dev/null'], { input: der });
 });
 
-test('la firma con openssl produce un CMS equivalente', () => {
+test('la firma con openssl produce un CMS equivalente', { skip: !hayOpenssl && 'sin openssl en este equipo' }, () => {
   const tra = buildTra('wsfe');
   const b64 = signTra(tra, { ...cfg, signer: 'openssl' });
   const out = execFileSync('openssl', ['cms', '-verify', '-noverify', '-inform', 'DER'], { input: Buffer.from(b64, 'base64') });

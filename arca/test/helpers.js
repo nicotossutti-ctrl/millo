@@ -1,3 +1,4 @@
+import { certificadoAutofirmado } from './cert-autofirmado.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,4 +63,12 @@ export function wsfeSimulado(series, { fallar = new Set(), ptosVenta = null, tip
       };
     },
   };
+}
+
+/**
+ * Certificado X.509 autofirmado + clave RSA generados con crypto de Node. Solo para tests:
+ * no es una credencial y no sirve para ARCA. Sin openssl.
+ */
+export function certificadoDePrueba() {
+  return certificadoAutofirmado();
 }

@@ -1,14 +1,14 @@
 /**
  * WSAA: autenticación de web services de ARCA.
  * 1. Armamos un Ticket de Requerimiento de Acceso (TRA) en XML.
- * 2. Lo firmamos en formato CMS/PKCS#7 con nuestro certificado.
+ * 2. Lo firmamos en formato CMS/PKCS#7 con nuestro certificado (crypto de Node, sin dependencias).
  * 3. Lo mandamos a loginCms y recibimos token + sign válidos ~12 h.
  * El ticket se cachea en .ta/<env>-<servicio>.json y se reutiliza hasta que vence.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import forge from 'node-forge';
+import { firmarCms } from './cms.js';
 import { soapCall, parseXml, escapeXml } from './soap.js';
 
 const TZ = 'America/Argentina/Buenos_Aires';
@@ -39,25 +39,8 @@ export function buildTra(service, now = new Date()) {
 </loginTicketRequest>`;
 }
 
-function signWithForge(tra, certPem, keyPem) {
-  const cert = forge.pki.certificateFromPem(certPem);
-  const key = forge.pki.privateKeyFromPem(keyPem);
-  const p7 = forge.pkcs7.createSignedData();
-  p7.content = forge.util.createBuffer(tra, 'utf8');
-  p7.addCertificate(cert);
-  p7.addSigner({
-    key,
-    certificate: cert,
-    digestAlgorithm: forge.pki.oids.sha256,
-    authenticatedAttributes: [
-      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-      { type: forge.pki.oids.messageDigest },
-      { type: forge.pki.oids.signingTime, value: new Date() },
-    ],
-  });
-  p7.sign();
-  const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
-  return forge.util.encode64(der);
+function signWithNode(tra, certPem, keyPem) {
+  return firmarCms(tra, certPem, keyPem).toString('base64');
 }
 
 function signWithOpenssl(tra, certPath, keyPath) {
@@ -71,7 +54,7 @@ function signWithOpenssl(tra, certPath, keyPath) {
 
 export function signTra(tra, cfg) {
   if (cfg.signer === 'openssl') return signWithOpenssl(tra, cfg.certPath, cfg.keyPath);
-  return signWithForge(tra, fs.readFileSync(cfg.certPath, 'utf8'), fs.readFileSync(cfg.keyPath, 'utf8'));
+  return signWithNode(tra, fs.readFileSync(cfg.certPath, 'utf8'), fs.readFileSync(cfg.keyPath, 'utf8'));
 }
 
 export async function loginCms(cfg, service) {

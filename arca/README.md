@@ -15,7 +15,7 @@ forma provisoria y se extrae a su propio repositorio sin cambios.
 
 | Componente | Implementado | Probado con mocks | Probado en homologación | Validado en producción |
 |---|---|---|---|---|
-| WSAA: TRA, firma CMS, ticket y cache | sí | sí (firma verificada con openssl) | parcial: formato aceptado, certificado de prueba rechazado por no ser de ARCA | no |
+| WSAA: TRA, firma CMS con crypto de Node, ticket y cache | sí | sí (firma verificada con openssl) | parcial: formato aceptado, certificado de prueba rechazado por no ser de ARCA | no |
 | WSFEv1: consultas, lista de solo lectura | sí | sí | `FEDummy` sí; el resto requiere certificado | no |
 | Recorrido de emitidos y reporte de integridad | sí | sí (series simuladas con huecos, errores y desorden) | no | no |
 | Validaciones de importes, IVA, moneda, fecha | sí | sí | no | no |
@@ -39,7 +39,11 @@ npm install
 cp .env.example .env   # completar ARCA_CUIT, ARCA_ENV
 ```
 
-Requiere Node 20.6 o superior.
+Requiere Node 20.6 o superior. En Windows, si PowerShell bloquea `npm`, usá `npm.cmd` y `npx.cmd`.
+
+Dependencias: `playwright` y `fast-xml-parser`, nada más. `npm audit` debe dar cero
+vulnerabilidades; si alguna vez no, actualizar antes de usar la capa de portal. Cada vez que
+cambia la versión de Playwright hay que volver a correr `npx playwright install chromium`.
 
 ## 2. Generar el certificado (una sola vez)
 
@@ -210,8 +214,10 @@ descartable que se genera en el momento para probar la firma CMS. No usan certif
 
 ## Cómo funciona
 
-- `src/wsaa.js` arma el Ticket de Requerimiento de Acceso, lo firma en CMS (PKCS#7) con
-  node-forge (o con `openssl cms` si `ARCA_SIGNER=openssl`) y lo manda a `loginCms`.
+- `src/wsaa.js` arma el Ticket de Requerimiento de Acceso, lo firma en CMS (PKCS#7) y lo manda
+  a `loginCms`. La firma la hace `src/cms.js` con el módulo `crypto` de Node, sin dependencias
+  (o `openssl cms` si `ARCA_SIGNER=openssl`); los tests la verifican con openssl cuando está
+  instalado.
 - `src/wsfe.js` envuelve los métodos de consulta de WSFEv1: `FEDummy`, `FEParamGetPtosVenta`,
   `FEParamGetTiposCbte`, `FECompUltimoAutorizado`, `FECompConsultar`.
 - `src/emitidos.js`: recorrido por serie, validaciones, notas de crédito y reporte de integridad.
