@@ -204,6 +204,29 @@ async function elegir(pagina, lista, que) {
   return loc;
 }
 
+/** Decodifica el CSV según su BOM/encoding: UTF-16, UTF-8 o, si hay bytes inválidos, latin1. */
+export function decodificar(buf) {
+  if (!Buffer.isBuffer(buf)) return String(buf);
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.toString('utf16le').replace(/^\uFEFF/, '');
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    const sw = Buffer.from(buf); for (let i = 0; i + 1 < sw.length; i += 2) { const t = sw[i]; sw[i] = sw[i + 1]; sw[i + 1] = t; }
+    return sw.toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.toString('utf8').replace(/^\uFEFF/, '');
+  const utf8 = buf.toString('utf8');
+  return utf8.includes('\uFFFD') ? buf.toString('latin1') : utf8;
+}
+
+/** dd/mm/aaaa, aaaa-mm-dd o dd-mm-aaaa (con hora opcional) -> aaaammdd. */
+export function aYmd(x) {
+  const t = (x ?? '').trim().replace(/^"|"$/g, '');
+  let m = /^(\d{4})[-/](\d{2})[-/](\d{2})/.exec(t);
+  if (m) return `${m[1]}${m[2]}${m[3]}`;
+  m = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(t);
+  if (m) return `${m[3]}${m[2]}${m[1]}`;
+  return null;
+}
+
 /** Valida el TEXTO de un CSV: filas dentro del rango, columnas, separador y duplicados. */
 export function validarContenidoCsv(texto, desde, hasta) {
   const limpio = texto.replace(/^﻿/, '');
@@ -216,7 +239,6 @@ export function validarContenidoCsv(texto, desde, hasta) {
   const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
   const idCols = cab.map((c, i) => (/numero|nro|punto de venta|tipo|emisor|cod\.? aut/.test(norm(c)) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
-  const aYmd = (x) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec((x ?? '').trim()); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
   let dentro = 0; let fuera = 0;
   const claves = new Map();
   let duplicados = 0;
@@ -232,6 +254,7 @@ export function validarContenidoCsv(texto, desde, hasta) {
     ok: iFecha >= 0 && dentro > 0 && fuera === 0 && duplicados === 0,
     filas, columnas: cab.length, separador: sep,
     columnaFecha: iFecha >= 0 ? cab[iFecha] : null,
+    muestraFecha: iFecha >= 0 && lineas[1] ? (lineas[1].split(sep)[iFecha] ?? '').trim() : null,
     dentroDelRango: dentro, fueraDelRango: fuera,
     duplicados, claveDuplicados: idCols.length ? idCols.map((i) => cab[i]) : ['línea completa'],
     encabezados: cab,
@@ -243,7 +266,7 @@ export function validarContenidoCsv(texto, desde, hasta) {
 export function validarArchivo(file, desde, hasta) {
   const ext = path.extname(file).toLowerCase();
   if (ext === '.csv') {
-    return { ...validarContenidoCsv(fs.readFileSync(file, 'utf8'), desde, hasta), csv: [path.basename(file)] };
+    return { ...validarContenidoCsv(decodificar(fs.readFileSync(file)), desde, hasta), csv: [path.basename(file)] };
   }
   if (ext === '.zip') {
     let entradas;
@@ -254,7 +277,7 @@ export function validarArchivo(file, desde, hasta) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const partes = csvs.map((e) => {
       fs.writeFileSync(path.join(dir, path.basename(e.name)), e.data, { mode: 0o600 });
-      return { csv: path.basename(e.name), ...validarContenidoCsv(e.data.toString('utf8'), desde, hasta) };
+      return { csv: path.basename(e.name), ...validarContenidoCsv(decodificar(e.data), desde, hasta) };
     });
     return {
       ok: partes.every((p) => p.ok),
@@ -331,7 +354,11 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
       continue;
     }
     if (!res.exportacion.length) {
-      throw new Error(`La consulta mostró ${filas} filas pero no hay botón de exportación visible. Corré portal:mc-consulta y pasame el resumen para ver cómo se exporta en esta pantalla.`);
+      // Sin exportación visible: guardamos un diagnóstico saneado (sin HTML ni datos fiscales)
+      // para analizar la pantalla después, y seguimos sin marcarlo como validado.
+      const diag = path.join(outDir, `diagnostico-${tipo}-${d}-${h}.json`);
+      fs.writeFileSync(diag, JSON.stringify({ desde: d, hasta: h, resultados: res }, null, 2), { mode: 0o600 });
+      throw new Error(`La consulta de ${tipo} ${d} a ${h} no mostró botón de exportación (tablas ${res.tablasVisibles.length}, filas visibles ${filas}, mensajes ${JSON.stringify(res.mensajes)}). Diagnóstico en ${path.basename(diag)}. Revisar la pantalla; no asumir cero.`);
     }
     const cand = candidatos(rel);
     const csvPrimero = [...cand.exportar].sort((a, b) => (/csv/i.test(`${b.text}${b.cls}`) ? 1 : 0) - (/csv/i.test(`${a.text}${a.cls}`) ? 1 : 0));

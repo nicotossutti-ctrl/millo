@@ -146,3 +146,49 @@ test('detección de columnas tolera acentos mal codificados (Número -> Nmero)',
   const v = validarContenidoCsv(`${cab}\n05/09/2026;1;1;10;100,00\n05/09/2026;1;1;10;100,00`, '2026-09-01', '2026-09-30');
   assert.equal(v.duplicados, 1, 'debe detectar el duplicado por columnas aun sin acentos');
 });
+
+test('aYmd acepta los formatos de fecha que usa ARCA', async () => {
+  const { aYmd } = await import('../src/portal/misComprobantes.js');
+  assert.equal(aYmd('01/09/2026'), '20260901');
+  assert.equal(aYmd('2026-09-01'), '20260901');
+  assert.equal(aYmd('01-09-2026'), '20260901');
+  assert.equal(aYmd('"05/09/2026"'), '20260905');
+  assert.equal(aYmd('01/09/2026 00:00:00'), '20260901');
+  assert.equal(aYmd(''), null);
+});
+
+test('validarContenidoCsv valida un CSV con fecha ISO (el caso que falló en la corrida real)', async () => {
+  const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  const cab = 'Fecha de Emisión;Tipo;Punto de Venta;Número Desde;Imp. Total';
+  const filas = Array.from({ length: 62 }, (_, i) => `2026-09-${String((i % 7) + 1).padStart(2, '0')};1;1;${i + 1};100,00`).join('\n');
+  const v = validarContenidoCsv(`${cab}\n${filas}`, '2026-09-01', '2026-09-30');
+  assert.equal(v.ok, true);
+  assert.equal(v.filas, 62);
+  assert.equal(v.dentroDelRango, 62);
+  assert.equal(v.muestraFecha, '2026-09-01');
+});
+
+test('decodificar maneja UTF-16LE, latin1 y utf8', async () => {
+  const { decodificar } = await import('../src/portal/misComprobantes.js');
+  const texto = 'Fecha;Número\n2026-09-01;10';
+  // UTF-16LE con BOM
+  const u16 = Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(texto, 'utf16le')]);
+  assert.equal(decodificar(u16), texto);
+  // latin1 con acento (0xFA = ú) que en utf8 sería inválido
+  const lat = Buffer.from('Número', 'latin1');
+  assert.equal(decodificar(lat), 'Número');
+  // utf8 normal
+  assert.equal(decodificar(Buffer.from(texto, 'utf8')), texto);
+});
+
+test('validarArchivo sobre un CSV UTF-16LE con fecha ISO valida correctamente', async () => {
+  const { validarArchivo } = await import('../src/portal/misComprobantes.js');
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-enc-'));
+  const f = path.join(dir, 'r.csv');
+  const texto = 'Fecha de Emisión;Número Desde;Total\r\n2026-09-10;5;100,00\r\n2026-09-11;6;200,00\r\n';
+  fs.writeFileSync(f, Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(texto, 'utf16le')]));
+  const v = validarArchivo(f, '2026-09-01', '2026-09-30');
+  assert.equal(v.ok, true);
+  assert.equal(v.filas, 2);
+});
