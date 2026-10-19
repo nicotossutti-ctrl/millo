@@ -8,7 +8,7 @@ import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
 import { Sesion } from './portal/sesion.js';
 import { diagnosticar, inspeccionarPortal, limpiar, SERVICIOS } from './portal/diagnostico.js';
-import { descargarMisComprobantes, diagnosticoMisComprobantes } from './portal/misComprobantes.js';
+import { descargarMisComprobantes, diagnosticoMisComprobantes, pruebaConsulta } from './portal/misComprobantes.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -43,8 +43,11 @@ Portal (sesión autenticada con navegador, sin certificado):
   portal:mc-diagnostico --tipo recibidos|emitidos [--visible]
                                 Entra a Mis Comprobantes > Recibidos/Emitidos por el enlace real y releva filtros,
                                 botones y exportación, sin tocar nada. Resumen en out/diagnostico/mis-comprobantes-<tipo>/.
+  portal:mc-consulta --tipo recibidos|emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
+                                Prueba real de consulta: carga el rango en #fechaEmision, pulsa #buscarComprobantes,
+                                abre Resultados y releva tablas, paginación y exportación. No descarga nada.
   portal:mis-comprobantes --tipo recibidos|emitidos --desde AAAA-MM-DD --hasta AAAA-MM-DD [--visible]
-                                Descarga la exportación (tramos de hasta 365 días) y valida el archivo.
+                                Consulta y, solo si hay exportación visible, descarga y valida el archivo.
 
 Variables (.env): ARCA_ENV, ARCA_CUIT, ARCA_CERT, ARCA_KEY, ARCA_CLAVE (opcional, solo para portal)`;
 
@@ -137,6 +140,8 @@ try {
         print(await diagnosticar(sesion, { servicios, sinCapturas: o['sin-capturas'], log: (m) => console.error(m) }));
       } else if (cmd === 'portal:mc-diagnostico') {
         await diagnosticoMisComprobantes(sesion, { tipo: need('tipo'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
+      } else if (cmd === 'portal:mc-consulta') {
+        await pruebaConsulta(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
       } else if (cmd === 'portal:mis-comprobantes') {
         print(await descargarMisComprobantes(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), log: (m) => console.error(m) }));
       } else {

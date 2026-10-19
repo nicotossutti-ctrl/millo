@@ -42,3 +42,15 @@ test('validarArchivo acepta un CSV con fechas dentro del rango y rechaza uno fue
   fs.writeFileSync(f, 'Fecha\r\n');
   assert.equal(validarArchivo(f, '2026-03-01', '2026-03-31').ok, false);
 });
+
+test('resumenResultados describe tablas, paginación, exportación y mensajes', async () => {
+  const { resumenResultados } = await import('../src/portal/misComprobantes.js');
+  const rel = { frames: [{ principal: true, inputs: [], botones: [{ tag: 'button', text: 'Excel', cls: 'buttons-excel', visible: true }], enlaces: [],
+    tablas: [{ id: 'tablaDataTables', visible: true, filas: 25, encabezados: ['Fecha', 'Tipo', 'Total'] }, { id: 'oculta', visible: false, filas: 0, encabezados: [] }],
+    paginacion: [{ text: 'Mostrando 1 a 25 de 61 registros' }], mensajes: [], conRol: [] }] };
+  const r = resumenResultados(rel);
+  assert.equal(r.tablasVisibles.length, 1);
+  assert.equal(r.tablasVisibles[0].filas, 25);
+  assert.deepEqual(r.paginacion, ['Mostrando 1 a 25 de 61 registros']);
+  assert.deepEqual(r.exportacion.map((e) => e.texto), ['Excel']);
+});

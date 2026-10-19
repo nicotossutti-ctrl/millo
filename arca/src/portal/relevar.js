@@ -64,6 +64,13 @@ function relevarEnDocumento() {
     })), 50),
     conRol: lim(todos.filter((x) => x.e.getAttribute('role') && !es(x, 'button, a, nav, [role=navigation], [role=menu], [role=menubar]')).map(desc), 200),
     textosVisibles: lim(todos.filter((x) => es(x, 'h1, h2, h3, h4, label, legend, summary, [role=heading]') && vis(x.e)).map((x) => (x.e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 100)).filter(Boolean), 200),
+    tablas: lim(todos.filter((x) => es(x, 'table')).map((x) => ({
+      id: x.e.id || null, cls: x.e.className?.toString?.().slice(0, 100) || null, visible: vis(x.e),
+      encabezados: [...x.e.querySelectorAll('thead th, thead td, tr:first-child th')].map((th) => (th.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60)).filter(Boolean).slice(0, 40),
+      filas: x.e.querySelectorAll('tbody tr').length,
+    })), 30),
+    paginacion: lim(todos.filter((x) => es(x, '.dataTables_info, .dataTables_paginate, .dataTables_length, .pagination, [class*="pagin" i], [id*="pagin" i], [class*="_info"], [id*="_info"], select[name*="length"]') && vis(x.e)).map(desc), 30),
+    mensajes: lim(todos.filter((x) => es(x, '.alert, .mensaje, .error, .warning, [role=alert], .dataTables_empty, .text-danger, .text-warning') && vis(x.e)).map((x) => (x.e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 160)).filter(Boolean), 20),
   };
 }
 
@@ -109,6 +116,9 @@ export function resumenRelevamiento(rel) {
     for (const i of f.iframes) l.push(`  iframe ${attrs(i)} src=${i.src ?? ''}`);
     for (const m of f.menus.slice(0, 10)) l.push(`  menú   ${attrs(m)}: ${m.items.slice(0, 25).join(' | ')}`);
     if (f.textosVisibles.length) l.push(`  títulos: ${f.textosVisibles.slice(0, 30).join(' | ')}`);
+    for (const t of f.tablas ?? []) l.push(`  tabla  ${attrs(t)} ${t.visible ? 'visible' : 'oculta'} · ${t.filas} filas · columnas: ${t.encabezados.join(' | ')}`);
+    for (const pg of f.paginacion ?? []) l.push(`  paginación ${attrs(pg)}: ${JSON.stringify(pg.text ?? '')}`);
+    for (const m of f.mensajes ?? []) l.push(`  mensaje: ${JSON.stringify(m)}`);
   }
   return l;
 }

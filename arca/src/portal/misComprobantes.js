@@ -4,12 +4,15 @@
  *   enlace  comprobantesEmitidos.do   -> pantalla Emitidos
  *   enlace  comprobantesRecibidos.do  -> pantalla Recibidos
  *
- * Dentro de cada pantalla NO usamos selectores fijos: relevamos la página y elegimos
- *   - el campo de fecha: input visible cuyo id/name/placeholder/aria-label mencione "fecha",
- *   - el botón de consulta: botón visible con texto Buscar/Consultar,
- *   - la exportación: botón o enlace visible con texto CSV/Excel/Exportar.
- * Si alguna de las tres cosas no es única o no existe, el extractor se detiene y muestra lo
- * que vio, para ajustar con datos reales. Solo consulta: nunca presenta, modifica ni paga.
+ * Selectores confirmados en la pantalla real (diagnóstico del 19/10/2026):
+ *   #fechaEmision        rango de fechas "dd/mm/aaaa - dd/mm/aaaa"
+ *   #buscarComprobantes  botón de consulta
+ *   #cuitConsultada      CUIT del receptor (no se toca)
+ *   #tabResultados       pestaña de resultados
+ *   #comprobanteDesde / #comprobanteHasta son números de comprobante, no fechas (no se tocan)
+ * La exportación NO está en la pantalla inicial: se busca recién después de consultar, en
+ * Resultados, y no se asume que exista hasta verla. Solo consulta: nunca presenta,
+ * modifica ni paga.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +20,7 @@ import { relevarPagina, resumenRelevamiento } from './relevar.js';
 import { sanitizarHtml } from './diagnostico.js';
 
 const ENLACE = { emitidos: 'comprobantesEmitidos.do', recibidos: 'comprobantesRecibidos.do' };
+export const SEL = { fecha: '#fechaEmision', buscar: '#buscarComprobantes', tabResultados: '#tabResultados' };
 const fechaArca = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 
 export function rangos(desde, hasta, maxDias = 365) {
@@ -101,10 +105,81 @@ export async function diagnosticoMisComprobantes(sesion, { tipo, outDir = 'out/d
   return { rel, candidatos: cand, dir };
 }
 
+// ---------- consulta ----------
+
+/** Carga el rango en #fechaEmision y consulta con #buscarComprobantes. */
+export async function consultar(pagina, d, h, log = () => {}) {
+  const valor = `${fechaArca(d)} - ${fechaArca(h)}`;
+  const campo = pagina.locator(SEL.fecha);
+  await campo.waitFor({ state: 'visible', timeout: 20000 });
+  await campo.click();
+  await campo.fill(valor);
+  // El selector de rango puede abrir un panel: Enter lo aplica; si queda abierto, Escape lo cierra.
+  await pagina.keyboard.press('Enter');
+  await pagina.waitForTimeout(400);
+  const aplicar = pagina.locator('.applyBtn, button:has-text("Aplicar")').first();
+  if (await aplicar.count() && await aplicar.isVisible().catch(() => false)) await aplicar.click();
+  else await pagina.keyboard.press('Escape');
+  const leido = await campo.inputValue();
+  if (leido.replace(/\s/g, '') !== valor.replace(/\s/g, '')) {
+    // Último recurso: asignar el valor y avisar al formulario, sin tocar nada más.
+    await campo.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, valor);
+  }
+  log(`  rango cargado en ${SEL.fecha}: "${await campo.inputValue()}"`);
+  await pagina.locator(SEL.buscar).click();
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  await pagina.waitForTimeout(2500);
+  const tab = pagina.locator(SEL.tabResultados);
+  if (await tab.count() && await tab.isVisible().catch(() => false)) {
+    await tab.click().catch(() => {});
+    await pagina.waitForTimeout(800);
+  }
+}
+
+/** Qué hay en Resultados después de consultar: tablas, paginación, exportación, mensajes. */
+export function resumenResultados(rel) {
+  const f = rel.frames.find((x) => x.principal) ?? rel.frames[0];
+  const cand = candidatos(rel);
+  const tablas = (f.tablas ?? []).filter((t) => t.visible);
+  return {
+    tablasVisibles: tablas.map((t) => ({ id: t.id, filas: t.filas, columnas: t.encabezados })),
+    paginacion: (f.paginacion ?? []).map((p) => p.text).filter(Boolean),
+    exportacion: cand.exportar.map((x) => ({ texto: x.text, id: x.id, cls: x.cls, href: x.href })),
+    mensajes: f.mensajes ?? [],
+  };
+}
+
+/** Prueba real de consulta de un período corto: consulta, releva Resultados, no descarga nada. */
+export async function pruebaConsulta(sesion, { tipo, desde, hasta, outDir = 'out/diagnostico', sinCapturas = true, log = () => {} }) {
+  const dir = path.join(outDir, `mis-comprobantes-${tipo}-resultados`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const pagina = await irAPantalla(sesion, tipo, log);
+  log(`Consulta ${tipo} ${desde} a ${hasta}`);
+  await consultar(pagina, desde, hasta, log);
+  const rel = await relevarPagina(pagina);
+  const res = resumenResultados(rel);
+  escribirProtegido(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
+  escribirProtegido(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
+  if (!sinCapturas) { await pagina.screenshot({ path: path.join(dir, 'pantalla.png'), fullPage: true }); fs.chmodSync(path.join(dir, 'pantalla.png'), 0o600); }
+  const lineas = [
+    ...resumenRelevamiento(rel),
+    '',
+    '== Resultados de la consulta',
+    `tablas visibles: ${res.tablasVisibles.length}` + res.tablasVisibles.map((t) => `\n  ${t.id ?? '(sin id)'}: ${t.filas} filas · ${t.columnas.join(' | ')}`).join(''),
+    `paginación: ${res.paginacion.length ? res.paginacion.join(' || ') : 'no se detectó'}`,
+    `exportación: ${res.exportacion.length ? res.exportacion.map((e) => `${JSON.stringify(e.texto)} ${e.id ? `#${e.id}` : ''} ${e.cls ?? ''} ${e.href ?? ''}`.trim()).join(' | ') : 'NO HAY botón de exportación visible'}`,
+    `mensajes: ${res.mensajes.length ? res.mensajes.join(' || ') : 'ninguno'}`,
+  ];
+  escribirProtegido(path.join(dir, 'resumen.txt'), lineas.join('\n'));
+  for (const l of lineas) log(l);
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  return { rel, resultados: res, dir };
+}
+
 // ---------- descarga ----------
 
 async function elegir(pagina, lista, que) {
-  if (lista.length === 0) throw new Error(`No encontré ${que} en la pantalla. Corré portal:mc-diagnostico y pasame el resumen.`);
+  if (lista.length === 0) throw new Error(`No encontré ${que} en la pantalla. Corré portal:mc-consulta y pasame el resumen.`);
   const x = lista[0];
   const sel = selectorDe(x);
   const loc = sel ? pagina.locator(sel).first() : pagina.getByText(x.text ?? '', { exact: false }).first();
@@ -138,32 +213,23 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
 
   for (const [d, h] of rangos(desde, hasta)) {
     log(`Mis Comprobantes ${tipo} ${d} a ${h}`);
+    await consultar(pagina, d, h, log);
     const rel = await relevarPagina(pagina);
+    const res = resumenResultados(rel);
+    const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
+    log(`  resultados: ${res.tablasVisibles.length} tablas, ${filas} filas visibles, paginación ${res.paginacion.length ? JSON.stringify(res.paginacion[0]) : 'no detectada'}`);
+    if (res.mensajes.some((m) => /no se encontraron|sin resultados|no hay|no existen/i.test(m)) || (res.tablasVisibles.length && filas === 0)) {
+      log('  sin comprobantes en el rango');
+      resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: 0, motivo: 'sin comprobantes' });
+      continue;
+    }
+    if (!res.exportacion.length) {
+      throw new Error(`La consulta mostró ${filas} filas pero no hay botón de exportación visible. Corré portal:mc-consulta y pasame el resumen para ver cómo se exporta en esta pantalla.`);
+    }
     const cand = candidatos(rel);
-    if (cand.fecha.length > 1) log(`  aviso: ${cand.fecha.length} campos de fecha visibles; uso el primero (${selectorDe(cand.fecha[0])}).`);
-
-    const campo = await elegir(pagina, cand.fecha, 'el campo de fecha');
-    await campo.click();
-    await campo.fill('');
-    await campo.type(`${fechaArca(d)} - ${fechaArca(h)}`);
-    await pagina.keyboard.press('Enter');
-    await pagina.waitForTimeout(500);
-    // Si el selector de rango abrió un panel con "Aplicar", lo confirmamos; si no, Escape lo cierra.
-    const aplicar = pagina.locator('button:has-text("Aplicar"), .applyBtn').first();
-    if (await aplicar.count() && await aplicar.isVisible().catch(() => false)) await aplicar.click(); else await pagina.keyboard.press('Escape');
-
-    const buscar = await elegir(pagina, cand.buscar, 'el botón Buscar/Consultar');
-    await buscar.click();
-    await pagina.waitForLoadState('networkidle').catch(() => {});
-    await pagina.waitForTimeout(2000);
-
-    const sinDatos = await pagina.locator('text=/No se encontraron|sin resultados|no hay comprobantes|No existen/i').count();
-    if (sinDatos) { log('  sin comprobantes en el rango'); resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: 0, motivo: 'sin comprobantes' }); continue; }
-
-    const rel2 = await relevarPagina(pagina);
-    const cand2 = candidatos(rel2);
-    const csvPrimero = [...cand2.exportar].sort((a, b) => (/csv/i.test(`${b.text}${b.cls}`) ? 1 : 0) - (/csv/i.test(`${a.text}${a.cls}`) ? 1 : 0));
-    const exportar = await elegir(pagina, csvPrimero, 'el botón de exportación (CSV/Excel)');
+    const csvPrimero = [...cand.exportar].sort((a, b) => (/csv/i.test(`${b.text}${b.cls}`) ? 1 : 0) - (/csv/i.test(`${a.text}${a.cls}`) ? 1 : 0));
+    const exportar = await elegir(pagina, csvPrimero, 'el botón de exportación');
+    log(`  exportando con ${JSON.stringify(csvPrimero[0].text)}`);
     const [descarga] = await Promise.all([pagina.waitForEvent('download', { timeout: 120000 }), exportar.click()]);
     const ext = path.extname(descarga.suggestedFilename()) || '.csv';
     const destino = path.join(outDir, `mis-comprobantes-${tipo}-${d}-${h}${ext}`);
