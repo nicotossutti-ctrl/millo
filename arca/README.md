@@ -125,6 +125,37 @@ Con `--json` imprime los comprobantes completos, con detalle de IVA y tributos.
 Cada comprobante consultado se guarda en `out/cache/<entorno>/<cuit>/`, así una segunda corrida
 no vuelve a consultar a ARCA. Las entradas de otra versión o de otro CUIT se ignoran.
 
+## FiscalOS: una corrida que recorre todo (orquestador)
+
+`portal:todo` recorre en una sola corrida todos los servicios fiscales declarados en
+`src/portal/servicios.js`, **en modo lectura**. Un servicio que falla no detiene a los demás.
+Los servicios con selectores confirmados (Mis Comprobantes recibidos y emitidos) descargan y
+validan; los demás se relevan y el informe dice qué les falta para escribir su extractor.
+
+```bash
+npm run arca -- portal:todo --desde 2026-09-01 --hasta 2026-09-30 --visible
+```
+
+Cada corrida se guarda en `out/corridas/<fecha>/`:
+- una carpeta por servicio (estructura, HTML saneado, resumen, archivos descargados o error),
+- `cobertura.json` y `cobertura.md`: estado por servicio (validado, descargado, con-datos,
+  relevado, sin-acceso, desafío, error), filas, exportación detectada y si está listo para
+  extractor.
+
+Los resultados quedan en disco: una segunda corrida no repite lo ya probado salvo que la pidas.
+
+### Windows: un solo script, sin Git
+
+`fiscalos.ps1` instala, actualiza, inicia sesión y ejecuta, sin necesitar Git:
+
+```powershell
+.\fiscalos.ps1 actualizar     # baja la última versión y reinstala, sin tocar .env ni la sesión
+.\fiscalos.ps1 login          # inicia sesión en ARCA (ventana visible; la clave se tipea ahí)
+.\fiscalos.ps1 correr         # recorre todos los servicios y abre el informe de cobertura
+.\fiscalos.ps1 correr -Desde 2026-09-01 -Hasta 2026-09-30
+.\fiscalos.ps1 test           # corre las pruebas
+```
+
 ## Portal: descarga automática con sesión autenticada
 
 Para todo lo que no tiene web service (comprobantes recibidos, DDJJ, retenciones, cuenta

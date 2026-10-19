@@ -9,6 +9,8 @@ import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './e
 import { Sesion } from './portal/sesion.js';
 import { diagnosticar, inspeccionarPortal, limpiar, SERVICIOS } from './portal/diagnostico.js';
 import { descargarMisComprobantes, diagnosticoMisComprobantes, pruebaConsulta } from './portal/misComprobantes.js';
+import { ejecutarTodo } from './portal/orquestador.js';
+import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -39,6 +41,9 @@ Portal (sesión autenticada con navegador, sin certificado):
   portal:diagnostico [--visible] [--sin-capturas] [--servicios "Mis Comprobantes,Portal IVA"]
                                 Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
                                 (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
+  portal:todo [--desde AAAA-MM-DD --hasta AAAA-MM-DD] [--servicios "id1,id2"] [--visible]
+                                Recorre TODOS los servicios fiscales en modo lectura, aísla fallos, descarga lo
+                                que puede y guarda la corrida en out/corridas/<fecha>/ con un informe cobertura.md.
   portal:limpiar                Borra diagnóstico, descargas y sesión guardada.
   portal:mc-diagnostico --tipo recibidos|emitidos [--visible]
                                 Entra a Mis Comprobantes > Recibidos/Emitidos por el enlace real y releva filtros,
@@ -140,6 +145,17 @@ try {
         print(await diagnosticar(sesion, { servicios, sinCapturas: o['sin-capturas'], log: (m) => console.error(m) }));
       } else if (cmd === 'portal:mc-diagnostico') {
         await diagnosticoMisComprobantes(sesion, { tipo: need('tipo'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
+      } else if (cmd === 'portal:todo') {
+        const hoy = new Date();
+        const haceUnMes = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+        const finMesPasado = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+        const periodo = { desde: o.desde ?? haceUnMes.toISOString().slice(0, 10), hasta: o.hasta ?? finMesPasado.toISOString().slice(0, 10) };
+        const pedidos = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : null;
+        const servicios = pedidos ? SERVICIOS_FISCALES.filter((s) => pedidos.includes(s.id)) : SERVICIOS_FISCALES;
+        if (!servicios.length) throw new Error(`Ningún servicio coincide con --servicios. Ids: ${SERVICIOS_FISCALES.map((s) => s.id).join(', ')}`);
+        const { baseDir, cobertura } = await ejecutarTodo(sesion, { servicios, periodo, log: (m) => console.error(m) });
+        console.log('\n' + cobertura.texto);
+        console.error(`\nCorrida guardada en ${baseDir}`);
       } else if (cmd === 'portal:mc-consulta') {
         await pruebaConsulta(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
       } else if (cmd === 'portal:mis-comprobantes') {

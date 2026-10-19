@@ -7,3 +7,4 @@ out/*
 !out/.gitkeep
 params/contribuyente.json
 .sesion/
+out/corridas/
