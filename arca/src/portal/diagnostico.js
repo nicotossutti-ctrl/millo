@@ -13,6 +13,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { relevarPagina, resumenRelevamiento } from './relevar.js';
+import { URL_PORTAL } from './sesion.js';
 
 const MASCARA_CUIT = /\b(\d{2})-?\d{8}-?(\d)\b/g;
 const MASCARA_IMPORTE = /\$?\s?\d{1,3}(\.\d{3})+(,\d{2})?/g;
@@ -71,17 +73,9 @@ export async function diagnosticar(sesion, { servicios = SERVICIOS, outDir = 'ou
       item.url = sanitizarUrl(pagina.url());
       if (!sinCapturas) { await pagina.screenshot({ path: path.join(dir, 'pantalla.png'), fullPage: true }); fs.chmodSync(path.join(dir, 'pantalla.png'), 0o600); }
       escribirProtegido(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
-      // formularios, inputs, botones y links: lo que hace falta para escribir selectores
-      const estructura = await pagina.evaluate(() => {
-        const q = (sel) => [...document.querySelectorAll(sel)].slice(0, 300).map((e) => ({
-          tag: e.tagName.toLowerCase(), id: e.id || null, name: e.getAttribute('name'), type: e.getAttribute('type'),
-          // inputs: nunca su valor; botones y links: su texto
-          text: /^(input|select|textarea)$/i.test(e.tagName) ? null : (e.innerText || '').trim().slice(0, 80) || null,
-          placeholder: e.getAttribute('placeholder'), href: e.getAttribute('href'), cls: e.className?.toString().slice(0, 80) || null,
-        }));
-        return { title: document.title, forms: q('form'), inputs: q('input, select, textarea'), botones: q('button, input[type=submit], a.btn, [role=button]'), links: q('a[href]'), iframes: q('iframe') };
-      });
-      escribirProtegido(path.join(dir, 'estructura.json'), sanitizarTexto(JSON.stringify(estructura, null, 2)));
+      const estructura = await relevarPagina(pagina);
+      escribirProtegido(path.join(dir, 'estructura.json'), JSON.stringify(estructura, null, 2));
+      escribirProtegido(path.join(dir, 'resumen.txt'), resumenRelevamiento(estructura).join('\n'));
       item.ok = true;
       if (pagina !== sesion.page) await pagina.close();
     } catch (e) {
@@ -96,6 +90,41 @@ export async function diagnosticar(sesion, { servicios = SERVICIOS, outDir = 'ou
   }
   escribirProtegido(path.join(outDir, 'resumen.json'), JSON.stringify(resumen.map((r) => ({ ...r, error: sanitizarTexto(r.error) })), null, 2));
   return resumen;
+}
+
+/**
+ * Inspección de la página principal del portal, sin depender de ningún buscador ni menú:
+ * releva documento, frames y shadow DOM, guarda estructura y HTML saneados en
+ * out/diagnostico/portal/ y devuelve un resumen para pegar en el chat.
+ */
+export async function inspeccionarPortal(sesion, { outDir = 'out/diagnostico', sinCapturas = false, log = () => {} } = {}) {
+  const dir = path.join(outDir, 'portal');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const { page } = sesion;
+  const red = [];
+  const onReq = (req) => red.push({ method: req.method(), url: sanitizarUrl(req.url()), type: req.resourceType() });
+  sesion.context.on('request', onReq);
+  try {
+    await page.goto(URL_PORTAL, { waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(4000); // el portal es una SPA: dejamos que termine de pintar
+    const rel = await relevarPagina(page);
+    escribirProtegido(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
+    escribirProtegido(path.join(dir, 'pagina.html'), sanitizarHtml(await page.content()));
+    for (const [i, frame] of page.frames().entries()) {
+      if (frame === page.mainFrame()) continue;
+      const html = await frame.content().catch(() => null);
+      if (html) escribirProtegido(path.join(dir, `frame-${i}.html`), sanitizarHtml(html));
+    }
+    if (!sinCapturas) { await page.screenshot({ path: path.join(dir, 'pantalla.png'), fullPage: true }); fs.chmodSync(path.join(dir, 'pantalla.png'), 0o600); }
+    const resumen = resumenRelevamiento(rel);
+    escribirProtegido(path.join(dir, 'resumen.txt'), resumen.join('\n'));
+    for (const l of resumen) log(l);
+    return rel;
+  } finally {
+    sesion.context.off('request', onReq);
+    escribirProtegido(path.join(dir, 'red.json'), JSON.stringify(red.filter((r) => !/\.(png|jpg|gif|css|woff2?|svg|ico)$/.test(r.url)), null, 2));
+  }
 }
 
 /** Borra todo lo que la capa de portal guarda en disco: diagnóstico, descargas y sesión. */

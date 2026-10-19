@@ -163,27 +163,67 @@ export class Sesion {
   }
 
   /**
-   * Abre un servicio del portal por nombre, usando el buscador. Los servicios abren en una
-   * pestaña nueva; devolvemos esa página.
+   * Abre un servicio del portal por nombre. No depende de un buscador con selector fijo:
+   * 1. Si en la página principal (en cualquier frame) hay un enlace o botón visible con ese
+   *    nombre, por ejemplo en "Más utilizados", lo usa.
+   * 2. Si no, busca un campo de texto visible y grande (el buscador del portal, tenga el
+   *    atributo que tenga), tipea el nombre y espera un resultado con ese texto.
+   * 3. Si nada de eso existe, falla con un mensaje que remite a portal:inspeccionar.
+   * Los servicios suelen abrir en una pestaña nueva; devolvemos esa página.
    */
   async abrirServicio(nombre) {
     const { page } = this;
     await page.goto(URL_PORTAL, { waitUntil: 'domcontentloaded' });
     await page.waitForLoadState('networkidle').catch(() => {});
-    const buscador = page.locator('input[type="search"], input[placeholder*="Buscar" i], input[aria-label*="Buscar" i]').first();
-    await buscador.waitFor({ timeout: 20000 });
-    await buscador.fill(nombre);
-    await page.waitForTimeout(1500);
-    const resultado = page.locator(`a:has-text("${nombre}"), button:has-text("${nombre}"), [role="option"]:has-text("${nombre}"), li:has-text("${nombre}")`).first();
-    await resultado.waitFor({ timeout: 20000 });
-    const [nueva] = await Promise.all([
-      this.context.waitForEvent('page', { timeout: 30000 }).catch(() => null),
-      resultado.click(),
-    ]);
-    const destino = nueva ?? page;
-    await destino.waitForLoadState('domcontentloaded');
-    await destino.waitForLoadState('networkidle').catch(() => {});
-    if (await hayDesafio(destino)) throw new DesafioDeSeguridad(await hayDesafio(destino));
-    return destino;
+    await page.waitForTimeout(2000);
+
+    const clicYEsperar = async (locator) => {
+      const [nueva] = await Promise.all([
+        this.context.waitForEvent('page', { timeout: 15000 }).catch(() => null),
+        locator.click(),
+      ]);
+      const destino = nueva ?? page;
+      await destino.waitForLoadState('domcontentloaded');
+      await destino.waitForLoadState('networkidle').catch(() => {});
+      const desafio = await hayDesafio(destino);
+      if (desafio) throw new DesafioDeSeguridad(desafio);
+      return destino;
+    };
+
+    // 1. enlace o botón directo con el nombre, en cualquier frame
+    for (const frame of page.frames()) {
+      const directo = frame.getByRole('link', { name: nombre, exact: false }).or(frame.getByRole('button', { name: nombre, exact: false })).first();
+      if (await directo.count() && await directo.isVisible().catch(() => false)) {
+        this.log(`Servicio "${nombre}": enlace directo en la página principal.`);
+        return clicYEsperar(directo);
+      }
+    }
+
+    // 2. buscador: cualquier campo de texto visible y ancho, en cualquier frame
+    for (const frame of page.frames()) {
+      const candidatos = frame.locator('input:not([type]), input[type="text"], input[type="search"], textarea');
+      const n = await candidatos.count();
+      for (let i = 0; i < n; i++) {
+        const c = candidatos.nth(i);
+        if (!(await c.isVisible().catch(() => false))) continue;
+        const box = await c.boundingBox();
+        if (!box || box.width < 250) continue;
+        this.log(`Servicio "${nombre}": usando el buscador (${await c.evaluate((e) => e.id || e.name || e.placeholder || 'sin atributos')}).`);
+        await c.fill(nombre);
+        const resultado = frame.getByRole('link', { name: nombre, exact: false })
+          .or(frame.getByRole('button', { name: nombre, exact: false }))
+          .or(frame.getByRole('option', { name: nombre, exact: false }))
+          .or(frame.locator(`li:has-text("${nombre}"), [class*="result" i]:has-text("${nombre}"), [class*="item" i]:has-text("${nombre}")`))
+          .first();
+        try {
+          await resultado.waitFor({ state: 'visible', timeout: 15000 });
+        } catch {
+          throw new Error(`Tipeé "${nombre}" en el buscador pero no apareció un resultado con ese texto. Corré portal:inspeccionar y pasame el resumen.`);
+        }
+        return clicYEsperar(resultado);
+      }
+    }
+
+    throw new Error(`No encontré en la página principal ni un enlace "${nombre}" ni un buscador. Corré portal:inspeccionar y pasame el resumen de out/diagnostico/portal/resumen.txt.`);
   }
 }

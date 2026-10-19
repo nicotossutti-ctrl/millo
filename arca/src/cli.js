@@ -7,7 +7,7 @@ import { exportarEmitidos, escribirCsv, escribirReporte, resumenReporte } from '
 import { liquidacionAnual } from './ganancias.js';
 import { cargarContribuyente, estimar, leerMeses, escribirEstimacion } from './estimacion.js';
 import { Sesion } from './portal/sesion.js';
-import { diagnosticar, limpiar, SERVICIOS } from './portal/diagnostico.js';
+import { diagnosticar, inspeccionarPortal, limpiar, SERVICIOS } from './portal/diagnostico.js';
 import { descargarMisComprobantes } from './portal/misComprobantes.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
@@ -32,6 +32,10 @@ Comandos:
 Portal (sesión autenticada con navegador, sin certificado):
   portal:login [--visible]      Inicia sesión en el portal y guarda las cookies en .sesion/. Sin ARCA_CLAVE
                                 hay que usar --visible y tipear la clave a mano. Nunca elude CAPTCHA ni 2FA.
+  portal:inspeccionar [--visible] [--sin-capturas]
+                                Releva la página principal del portal (documento, frames, shadow DOM):
+                                inputs, botones, enlaces, iframes y menús, saneados, en out/diagnostico/portal/.
+                                Imprime un resumen para pegar en el chat. No abre ningún servicio.
   portal:diagnostico [--visible] [--sin-capturas] [--servicios "Mis Comprobantes,Portal IVA"]
                                 Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
                                 (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
@@ -122,6 +126,9 @@ try {
       await sesion.asegurarLogin();
       if (cmd === 'portal:login') {
         console.log('OK: sesión guardada.');
+      } else if (cmd === 'portal:inspeccionar') {
+        await inspeccionarPortal(sesion, { sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
+        console.error('\nGuardado en out/diagnostico/portal/. Pegá en el chat el contenido de resumen.txt.');
       } else if (cmd === 'portal:diagnostico') {
         const servicios = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : SERVICIOS;
         print(await diagnosticar(sesion, { servicios, sinCapturas: o['sin-capturas'], log: (m) => console.error(m) }));
