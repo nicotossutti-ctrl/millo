@@ -43,7 +43,8 @@ test('elegirTabla sin encabezados esperados cae al puntaje por tamaño', () => {
 });
 
 test('decidirEstado diferencia validado / extraido / parcial / sin-datos', () => {
-  assert.deepEqual(decidirEstado({ filas: 0, informados: null, conFiltroPeriodo: true, rangoOk: true }), { estado: 'sin-datos', verificado: false });
+  // 0 filas con grilla confirmada y rango OK -> cero CONFIRMADO (sin-datos real).
+  assert.deepEqual(decidirEstado({ filas: 0, informados: null, conFiltroPeriodo: true, rangoOk: true, gridPresente: true }), { estado: 'sin-datos', verificado: false, ceroConfirmado: true });
   assert.deepEqual(decidirEstado({ filas: 20, informados: 20, conFiltroPeriodo: true, rangoOk: true }), { estado: 'validado', verificado: true });
   assert.deepEqual(decidirEstado({ filas: 18, informados: 20, conFiltroPeriodo: true, rangoOk: true }), { estado: 'parcial', verificado: false });
   assert.deepEqual(decidirEstado({ filas: 7, informados: null, conFiltroPeriodo: false, rangoOk: null }), { estado: 'extraido', verificado: false });
@@ -54,6 +55,26 @@ test('decidirEstado diferencia validado / extraido / parcial / sin-datos', () =>
   assert.deepEqual(decidirEstado({ error: 'fill falló', filas: 20, informados: 20, conFiltroPeriodo: true, rangoOk: true }), { estado: 'parcial', verificado: false });
   // Datos acumulados (sin filtro de período) -> nunca validado por período.
   assert.deepEqual(decidirEstado({ filas: 14, informados: null, conFiltroPeriodo: false, rangoOk: null }), { estado: 'extraido', verificado: false });
+});
+
+test('decidirEstado distingue 0 filas CONFIRMADO (grilla vacía) de ausencia INCIERTA (sin grilla)', () => {
+  // Retenciones: consulta con selectores OK, grilla presente y vacía -> cero real, no error.
+  assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: true, rangoOk: true, gridPresente: true }), { estado: 'sin-datos', verificado: false, ceroConfirmado: true });
+  // No se encontró la grilla (pestaña/consulta sin verificar): NO es un cero, es incierto -> parcial.
+  assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: true, rangoOk: true, gridPresente: false }), { estado: 'parcial', verificado: false, ceroConfirmado: false });
+  // Grilla confirmada pero el rango aplicado no se confirmó: tampoco se afirma el cero -> parcial.
+  assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: true, rangoOk: null, gridPresente: true }), { estado: 'parcial', verificado: false, ceroConfirmado: false });
+  // Servicio acumulado sin filtro: grilla vacía confirmada basta para el cero real.
+  assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: false, rangoOk: null, gridPresente: true }), { estado: 'sin-datos', verificado: false, ceroConfirmado: true });
+});
+
+test('elegirTabla reconoce una grilla esperada vacía (encabezados, 0 filas) para confirmar el cero', () => {
+  const vacia = { headers: ['Impuesto', 'Fecha', 'Importe'], rows: [] };
+  const navegacion = { headers: ['Inicio', 'Ayuda'], rows: [['x', 'y']] };
+  const elegida = elegirTabla([navegacion, vacia], ['impuesto', 'fecha', 'importe']);
+  assert.deepEqual(elegida.headers, vacia.headers);
+  assert.equal(elegida.rows.length, 0);
+  assert.ok(elegida.coincideCols >= 3);
 });
 
 // Locator falso con estado por instancia, para probar completarFiltros sin navegador.

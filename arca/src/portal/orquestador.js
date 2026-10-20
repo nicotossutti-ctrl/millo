@@ -71,18 +71,23 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
   const outBase = sesion?.cfg?.outDir ?? 'out';
   const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
   escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
-  // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe
+  // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe.
+  // Solo cuenta como "descargado" si realmente trajo filas; 0 filas (cero confirmado o ausencia
+  // incierta) va a "relevado", nunca a "descargado sin validar".
   const estado = r.estado === 'validado' ? 'validado'
-    : (r.estado === 'extraido' || r.estado === 'parcial') ? 'descargado'
+    : (r.filas > 0 && (r.estado === 'extraido' || r.estado === 'parcial')) ? 'descargado'
     : 'relevado';
   return {
     estado,
     archivos: r.archivos,
     filas: r.filas,
+    motivo: r.motivo,
+    ceroConfirmado: r.ceroConfirmado,
     validaciones: [{
       desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados,
       ok: r.verificado, cantidadVerificada: r.coincideInformado === true,
-      estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado, paginas: r.paginas,
+      estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado,
+      paginas: r.paginas, motivo: r.motivo, ceroConfirmado: r.ceroConfirmado,
     }],
   };
 }
@@ -144,7 +149,11 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
       const sinVerif = vals.filter((v) => v.cantidadVerificada === false).length;
       return `${vals.length} período(s)${reut ? `, ${reut} reutilizado(s)` : ''}; ${totFilas} filas; ${dup} duplicados${sinVerif ? `; ${sinVerif} con cantidad no verificada` : ''}`;
     }
-    if (r.estado === 'con-datos' || r.estado === 'relevado') return `${r.filas ?? 0} filas en pantalla; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
+    if (r.estado === 'con-datos' || r.estado === 'relevado') {
+      // Resultado de un extractor de tabla con 0 filas: mostrar si es cero confirmado o incierto.
+      if (r.motivo) return r.motivo;
+      return `${r.filas ?? 0} filas en pantalla; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
+    }
     if (r.error) return r.error.slice(0, 120);
     return '';
   };

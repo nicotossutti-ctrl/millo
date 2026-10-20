@@ -41,7 +41,9 @@ function extraerTablasEnDocumento() {
     const headers = headerCells.map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
     const bodyTrs = t.querySelector('tbody') ? [...t.querySelectorAll('tbody tr')] : trs.slice(1);
     const rows = bodyTrs.map((tr) => [...tr.querySelectorAll('td, th')].map((c) => tx(c))).filter((r) => r.some((x) => x));
-    if (rows.length) out.push({ headers, rows });
+    // Incluimos también grillas con encabezados pero SIN filas: sirven para confirmar un cero real
+    // (grilla presente y vacía) y distinguirlo de "no encontré la grilla" (pestaña/consulta falló).
+    if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
   }
   return out;
 }
@@ -175,9 +177,17 @@ export const COLUMNAS_LIBRES = (headers) => headers.map((h, i) => ({ header: h |
  * sin total para cotejar), parcial (hay datos pero el rango aplicado no coincide con el pedido),
  * sin-datos (no se encontró la grilla).
  */
-export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, error }) {
+export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, error, gridPresente }) {
   if (error) return { estado: 'parcial', verificado: false };            // fallo de interacción: nunca validado
-  if (!filas) return { estado: 'sin-datos', verificado: false };
+  if (!filas) {
+    // 0 filas: NO afirmar "no hay datos" salvo que la grilla esperada esté presente y vacía
+    // (cero confirmado) y, si hay filtro de fechas, el rango aplicado esté confirmado. Si no se
+    // encontró la grilla (pestaña/consulta falló), queda 'parcial': ausencia incierta, no un cero.
+    const ceroConfirmado = gridPresente === true && (!conFiltroPeriodo || rangoOk === true);
+    return ceroConfirmado
+      ? { estado: 'sin-datos', verificado: false, ceroConfirmado: true }
+      : { estado: 'parcial', verificado: false, ceroConfirmado: false };
+  }
   if (conFiltroPeriodo) {
     // Con filtro de fechas, 'validado' exige que el rango aplicado esté CONFIRMADO (rangoOk===true).
     // Que el conteo coincida con el total informado no alcanza si no sabemos qué período quedó.
@@ -219,9 +229,13 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
   let headers = null;
   const filas = [];
   const vistas = new Set();
+  let gridPresente = false;
   for (let p = 0; p < 100; p++) {
     const tabla = await scrapearFrames(pagina, expected);
     if (!tabla) break;
+    // En la primera vuelta decidimos si la grilla esperada está realmente presente: con
+    // encabezados esperados exige coincidencia; sin ellos, basta con haber encontrado una grilla.
+    if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
     if (!headers) headers = tabla.headers;
     let nuevas = 0;
     for (const r of tabla.rows) {
@@ -250,10 +264,18 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
   } else {
     escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(resumenResultados(rel), null, 2));
   }
-  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk, error: filtro.error });
+  resultado.gridPresente = gridPresente;
+  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk, error: filtro.error, gridPresente });
   resultado.estado = d.estado;
   resultado.verificado = d.verificado;
-  log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}`);
+  if (d.ceroConfirmado != null) resultado.ceroConfirmado = d.ceroConfirmado;
+  // 0 filas: dejar explícito si es un cero confirmado o una ausencia incierta (no afirmar "no hay").
+  if (resultado.filas === 0) {
+    resultado.motivo = d.ceroConfirmado
+      ? 'grilla presente y vacía: 0 filas confirmado para el rango'
+      : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
+  }
+  log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}${resultado.motivo ? ` · ${resultado.motivo}` : ''}`);
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
   return resultado;
 }
