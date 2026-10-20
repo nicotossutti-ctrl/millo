@@ -157,14 +157,14 @@ export function totalInformado(res) {
 
 /** Qué hay en Resultados después de consultar: tablas, paginación, exportación, mensajes. */
 export function resumenResultados(rel) {
-  const f = rel.frames.find((x) => x.principal) ?? rel.frames[0];
+  const frames = rel.frames ?? [];
   const cand = candidatos(rel);
-  const tablas = (f.tablas ?? []).filter((t) => t.visible);
+  const tablas = frames.flatMap((f) => f.tablas ?? []).filter((t) => t.visible);
   return {
     tablasVisibles: tablas.map((t) => ({ id: t.id, filas: t.filas, columnas: t.encabezados })),
-    paginacion: (f.paginacion ?? []).map((p) => p.text).filter(Boolean),
+    paginacion: frames.flatMap((f) => f.paginacion ?? []).map((p) => p.text).filter(Boolean),
     exportacion: cand.exportar.map((x) => ({ texto: x.text, id: x.id, cls: x.cls, href: x.href })),
-    mensajes: f.mensajes ?? [],
+    mensajes: frames.flatMap((f) => f.mensajes ?? []),
   };
 }
 
@@ -331,10 +331,18 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
   // Trazabilidad: períodos ya verificados no se vuelven a descargar salvo --rehacer.
   const { pendientes, reutilizados } = periodosPendientes(outDir, tipo, desde, hasta, rehacer);
   for (const r of reutilizados) {
+    // Solo reutilizamos si el archivo sigue existiendo; si falta, se vuelve a descargar.
+    const abs = r.archivo ? path.join(outDir, r.archivo) : null;
+    if (!abs || !fs.existsSync(abs)) {
+      log(`Mis Comprobantes ${tipo} ${r.desde} a ${r.hasta}: estaba en el manifiesto pero falta el archivo; se vuelve a descargar.`);
+      pendientes.push([r.desde, r.hasta]);
+      continue;
+    }
     log(`Mis Comprobantes ${tipo} ${r.desde} a ${r.hasta}: ya verificado el ${r.fecha} (${r.filas} filas), se reutiliza.`);
     resultado.validaciones.push({ desde: r.desde, hasta: r.hasta, ok: true, filas: r.filas, informados: r.informados, archivo: r.archivo, reutilizado: true, hash: r.hash });
-    if (r.archivo) resultado.archivos.push(path.join(outDir, r.archivo));
+    resultado.archivos.push(abs);
   }
+  pendientes.sort((a, b) => a[0].localeCompare(b[0]));
   if (!pendientes.length) {
     resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
     log('Todo el período ya estaba verificado; no se descargó nada.');

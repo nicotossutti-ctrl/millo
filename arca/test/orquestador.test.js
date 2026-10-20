@@ -104,3 +104,14 @@ test('un período con cantidad no verificada queda como descargado sin validar, 
   assert.deepEqual(objeto.categorias['Descargado y validado'], []);
   assert.match(texto, /cantidad no verificada/);
 });
+
+test('correrUno con extractor tabla está cableado: no es ReferenceError (regresión de correrTabla)', async () => {
+  const outDir = dirTmp();
+  const sesion = { cfg: { cuit: '20111111112', outDir }, abrirServicio: async () => { throw new Error('boom-abrir'); } };
+  const r = await correrUno(sesion, { id: 'mis-retenciones', nombre: 'Mis Retenciones', fuente: 11, extractor: 'tabla' }, {
+    baseDir: outDir, periodo: { desde: '2026-09-01', hasta: '2026-09-30' },
+  });
+  // El error debe venir de abrirServicio (boom-abrir), NO de 'correrTabla is not defined'.
+  assert.match(r.error, /boom-abrir/);
+  assert.doesNotMatch(r.error, /is not defined|no está definid/i);
+});

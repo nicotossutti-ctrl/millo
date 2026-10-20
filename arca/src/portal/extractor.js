@@ -36,7 +36,7 @@ function extraerTablaEnDocumento() {
     // Puntaje: filas por columnas con nombre. Evita elegir una tablita de título o layout.
     const cols = headers.filter(Boolean).length;
     const score = rows.length * Math.max(1, cols);
-    if (rows.length && cols >= 2 && (!mejor || score > mejor.score)) mejor = { headers, rows, score };
+    if (rows.length && (!mejor || score > mejor.score)) mejor = { headers, rows, score };
   }
   return mejor;
 }

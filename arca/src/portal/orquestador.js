@@ -66,6 +66,20 @@ async function correrGenerico(sesion, servicio, dir, log) {
   return { ...clas, url: rel.url };
 }
 
+/** Extractor de tabla (solo lectura): Mis Retenciones, Cuentas Tributarias, Mis Facilidades. */
+async function correrTabla(sesion, servicio, dir, periodo, log) {
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
+  const estado = r.verificado ? 'validado' : (r.archivos.length ? 'descargado' : 'relevado');
+  return {
+    estado,
+    archivos: r.archivos,
+    filas: r.filas,
+    validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados, ok: r.verificado, cantidadVerificada: r.coincideInformado === true }],
+  };
+}
+
 /**
  * Mis Comprobantes: descarga real con el extractor dedicado (validado). Los archivos y el
  * manifiesto van a una carpeta PERSISTENTE (out/datos/<id>), compartida entre corridas, para
