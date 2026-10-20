@@ -33,17 +33,22 @@ function extraerTablaEnDocumento() {
     const headers = headerCells.map((c) => texto(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
     const bodyTrs = t.querySelector('tbody') ? [...t.querySelectorAll('tbody tr')] : trs.slice(1);
     const rows = bodyTrs.map((tr) => [...tr.querySelectorAll('td, th')].map((c) => texto(c))).filter((r) => r.some((x) => x));
-    if (rows.length && (!mejor || rows.length > mejor.rows.length)) mejor = { headers, rows };
+    // Puntaje: filas por columnas con nombre. Evita elegir una tablita de título o layout.
+    const cols = headers.filter(Boolean).length;
+    const score = rows.length * Math.max(1, cols);
+    if (rows.length && cols >= 2 && (!mejor || score > mejor.score)) mejor = { headers, rows, score };
   }
   return mejor;
 }
 
+/** Elige la MEJOR tabla entre todos los frames (no la primera): la grilla real suele estar en un iframe. */
 async function scrapearFrames(pagina) {
+  let mejor = null;
   for (const frame of pagina.frames()) {
     const r = await frame.evaluate(extraerTablaEnDocumento).catch(() => null);
-    if (r && r.rows.length) return r;
+    if (r && r.rows.length && (!mejor || r.score > mejor.score)) mejor = r;
   }
-  return null;
+  return mejor;
 }
 
 /** Botón de paginación "siguiente" habilitado, en cualquier frame; null si no hay o está deshabilitado. */
