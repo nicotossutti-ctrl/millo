@@ -71,12 +71,19 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
   const outBase = sesion?.cfg?.outDir ?? 'out';
   const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
   escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
-  const estado = r.verificado ? 'validado' : (r.archivos.length ? 'descargado' : 'relevado');
+  // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe
+  const estado = r.estado === 'validado' ? 'validado'
+    : (r.estado === 'extraido' || r.estado === 'parcial') ? 'descargado'
+    : 'relevado';
   return {
     estado,
     archivos: r.archivos,
     filas: r.filas,
-    validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados, ok: r.verificado, cantidadVerificada: r.coincideInformado === true }],
+    validaciones: [{
+      desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados,
+      ok: r.verificado, cantidadVerificada: r.coincideInformado === true,
+      estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado, paginas: r.paginas,
+    }],
   };
 }
 

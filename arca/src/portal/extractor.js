@@ -2,12 +2,16 @@
  * Extractor de tabla genérico, SOLO LECTURA. Para servicios que muestran los datos en una
  * grilla (Mis Retenciones, Cuentas Tributarias dentro de un iframe, Mis Facilidades):
  *   1. abre el servicio,
- *   2. si hay filtros de fecha, los completa con el período y pulsa Consultar/Buscar,
- *   3. lee la tabla de resultados recorriendo la paginación,
- *   4. guarda un CSV propio (formato estable, no depende de la exportación de ARCA) y,
- *      si ARCA informa un total, lo coteja.
- * Nunca presenta, paga, emite ni modifica: los únicos clics permitidos son filtros de fecha,
- * Consultar/Buscar y la paginación. Cualquier control de trámite está vetado por lista.
+ *   2. completa filtros de fecha (con selectores confirmados por servicio si existen) y consulta,
+ *   3. elige la grilla REAL por encabezados esperados, no solo por tamaño,
+ *   4. la lee recorriendo la paginación, con tope de seguridad y corte verificable,
+ *   5. guarda un CSV propio y reporta estado diferenciado: validado | extraido | parcial | sin-datos.
+ *
+ * Nunca presenta, paga, emite ni modifica: los únicos clics son filtros de fecha,
+ * Consultar/Buscar y la paginación. Todo control de trámite está vetado por lista (esProhibido).
+ *
+ * Importante: los datos acumulados (cuenta tributaria, planes) NO se atribuyen al mes consultado;
+ * el resultado marca conFiltroPeriodo=false para que el panel no los lea como del período.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,40 +19,59 @@ import { relevarPagina } from './relevar.js';
 import { totalInformado, resumenResultados } from './misComprobantes.js';
 import { toCsv } from '../csv.js';
 
-// Textos de controles que NUNCA se tocan (trámite, pago, emisión, modificación).
 export const PROHIBIDO = /presentar|pagar|generar vep|\bvep\b|enviar|confirmar|eliminar|anular|modificar|dar de baja|adherir|solicitar plan/i;
 /** true si un control no debe tocarse por ser de trámite, pago, emisión o modificación. */
 export const esProhibido = (texto) => PROHIBIDO.test(texto ?? '');
+
+export const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const fechaArca = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 
-/** Elige la tabla con más filas de datos, en cualquier frame; devuelve {headers, rows}. */
-function extraerTablaEnDocumento() {
-  const visible = (e) => { try { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
-  const texto = (c) => (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
-  let mejor = null;
+/**
+ * Corre en el navegador. Elige la mejor tabla del documento. Si `expected` trae encabezados,
+ * da prioridad fuerte a la tabla que los contiene (evita grillas de navegación/título).
+ */
+function extraerTablasEnDocumento() {
+  const vis = (e) => { try { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
+  const tx = (c) => (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
+  const out = [];
   for (const t of document.querySelectorAll('table')) {
-    if (!visible(t)) continue;
+    if (!vis(t)) continue;
     const trs = [...t.querySelectorAll('tr')];
-    const headerCells = [...(t.querySelectorAll('thead th, thead td')[0] ? t.querySelectorAll('thead th, thead td') : (trs[0]?.querySelectorAll('th, td') ?? []))];
-    const headers = headerCells.map((c) => texto(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
+    const headerCells = (t.querySelectorAll('thead th, thead td')[0] ? [...t.querySelectorAll('thead th, thead td')] : [...(trs[0]?.querySelectorAll('th, td') ?? [])]);
+    const headers = headerCells.map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
     const bodyTrs = t.querySelector('tbody') ? [...t.querySelectorAll('tbody tr')] : trs.slice(1);
-    const rows = bodyTrs.map((tr) => [...tr.querySelectorAll('td, th')].map((c) => texto(c))).filter((r) => r.some((x) => x));
-    // Puntaje: filas por columnas con nombre. Evita elegir una tablita de título o layout.
-    const cols = headers.filter(Boolean).length;
-    const score = rows.length * Math.max(1, cols);
-    if (rows.length && (!mejor || score > mejor.score)) mejor = { headers, rows, score };
+    const rows = bodyTrs.map((tr) => [...tr.querySelectorAll('td, th')].map((c) => tx(c))).filter((r) => r.some((x) => x));
+    if (rows.length) out.push({ headers, rows });
   }
+  return out;
+}
+
+/**
+ * Elige la grilla real entre varias candidatas. Puntaje = filas × columnas con nombre, con un
+ * bonus fuerte por cada encabezado esperado presente. Si se esperan encabezados y ninguna
+ * candidata coincide, devuelve null (era tabla de navegación/título, no la grilla fiscal).
+ */
+export function elegirTabla(tablas, expected = []) {
+  let mejor = null;
+  for (const t of tablas) {
+    const cols = (t.headers ?? []).filter(Boolean).length;
+    const hn = (t.headers ?? []).map(norm);
+    const coincideCols = expected.filter((e) => hn.some((h) => h.includes(e))).length;
+    const score = t.rows.length * Math.max(1, cols) + coincideCols * 100000;
+    if (!mejor || score > mejor.score) mejor = { ...t, score, coincideCols };
+  }
+  if (mejor && expected.length && mejor.coincideCols === 0) return null;
   return mejor;
 }
 
-/** Elige la MEJOR tabla entre todos los frames (no la primera): la grilla real suele estar en un iframe. */
-async function scrapearFrames(pagina) {
-  let mejor = null;
+/** Elige la mejor tabla entre todos los frames. Con encabezados esperados, descarta la que no coincide. */
+async function scrapearFrames(pagina, expected) {
+  const todas = [];
   for (const frame of pagina.frames()) {
-    const r = await frame.evaluate(extraerTablaEnDocumento).catch(() => null);
-    if (r && r.rows.length && (!mejor || r.score > mejor.score)) mejor = r;
+    const t = await frame.evaluate(extraerTablasEnDocumento).catch(() => []);
+    for (const x of t) todas.push(x);
   }
-  return mejor;
+  return elegirTabla(todas, expected);
 }
 
 /** Botón de paginación "siguiente" habilitado, en cualquier frame; null si no hay o está deshabilitado. */
@@ -59,8 +82,7 @@ async function botonSiguiente(pagina) {
     for (let i = 0; i < n; i++) {
       const b = loc.nth(i);
       if (!(await b.isVisible().catch(() => false))) continue;
-      const txt = (await b.innerText().catch(() => '')) || '';
-      if (PROHIBIDO.test(txt)) continue;
+      if (esProhibido((await b.innerText().catch(() => '')) || '')) continue;
       const dis = (await b.getAttribute('disabled').catch(() => null)) !== null
         || /disabled/.test((await b.getAttribute('class').catch(() => '')) || '')
         || (await b.getAttribute('aria-disabled').catch(() => null)) === 'true';
@@ -70,7 +92,31 @@ async function botonSiguiente(pagina) {
   return null;
 }
 
-async function completarFiltrosYConsultar(pagina, desde, hasta, log) {
+/** Completa filtros de fecha y consulta. Usa selectores por servicio si están confirmados. */
+async function completarFiltros(pagina, desde, hasta, servicio, log) {
+  const sel = servicio.selectores;
+  const fijar = async (frame, selector, valor) => {
+    const inp = frame.locator(selector).first();
+    if (!(await inp.count()) || !(await inp.isVisible().catch(() => false))) return false;
+    await inp.fill('').catch(() => {});
+    await inp.fill(valor).catch(() => {});
+    return true;
+  };
+  if (sel?.fechaDesde && sel?.fechaHasta) {
+    for (const frame of pagina.frames()) {
+      const a = await fijar(frame, sel.fechaDesde, fechaArca(desde));
+      const b = await fijar(frame, sel.fechaHasta, fechaArca(hasta));
+      if (a && b) {
+        const btn = frame.locator(sel.consultar ?? 'button:has-text("Consultar"), button:has-text("Buscar")').first();
+        if (await btn.count()) { log('  consultando con selectores confirmados'); await btn.click().catch(() => {}); await pagina.waitForLoadState('networkidle').catch(() => {}); await pagina.waitForTimeout(2500); }
+        // Verificar qué rango quedó aplicado en la UI.
+        const leidoDesde = await frame.locator(sel.fechaDesde).first().inputValue().catch(() => '');
+        const leidoHasta = await frame.locator(sel.fechaHasta).first().inputValue().catch(() => '');
+        return { conFiltroPeriodo: true, rangoAplicado: `${leidoDesde} - ${leidoHasta}`, rangoOk: leidoDesde.includes(fechaArca(desde)) && leidoHasta.includes(fechaArca(hasta)) };
+      }
+    }
+  }
+  // Genérico: inputs con placeholder dd/mm/aaaa o id/name con "fecha".
   let fechas = 0;
   for (const frame of pagina.frames()) {
     const inputs = frame.locator('input[placeholder="dd/mm/aaaa" i], input[id*="fecha" i], input[name*="fecha" i]');
@@ -83,22 +129,22 @@ async function completarFiltrosYConsultar(pagina, desde, hasta, log) {
     }
     if (fechas) break;
   }
-  if (!fechas) return false; // sin filtros de fecha: el servicio ya muestra sus datos
+  if (!fechas) return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null };
   for (const frame of pagina.frames()) {
     const btn = frame.locator('button, [role=button], input[type=submit]').filter({ hasText: /consultar|buscar/i });
-    const n = Math.min(await btn.count(), 6);
-    for (let i = 0; i < n; i++) {
+    const k = Math.min(await btn.count(), 6);
+    for (let i = 0; i < k; i++) {
       const b = btn.nth(i);
       if (!(await b.isVisible().catch(() => false))) continue;
-      if (PROHIBIDO.test((await b.innerText().catch(() => '')) || '')) continue;
+      if (esProhibido((await b.innerText().catch(() => '')) || '')) continue;
       log('  consultando con el período');
-      await b.click();
+      await b.click().catch(() => {});
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
-      return true;
+      return { conFiltroPeriodo: true, rangoAplicado: null, rangoOk: null };
     }
   }
-  return true;
+  return { conFiltroPeriodo: true, rangoAplicado: null, rangoOk: null };
 }
 
 function escribirProtegido(file, contenido) {
@@ -108,37 +154,52 @@ function escribirProtegido(file, contenido) {
 
 export const COLUMNAS_LIBRES = (headers) => headers.map((h, i) => ({ header: h || `col${i + 1}`, value: (r) => r[i] ?? '' }));
 
+/**
+ * Decide el estado del extractor: validado (coteja con total informado), extraido (hay datos
+ * sin total para cotejar), parcial (hay datos pero el rango aplicado no coincide con el pedido),
+ * sin-datos (no se encontró la grilla).
+ */
+export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk }) {
+  if (!filas) return { estado: 'sin-datos', verificado: false };
+  if (conFiltroPeriodo && rangoOk === false) return { estado: 'parcial', verificado: false };
+  if (informados != null) return filas === informados ? { estado: 'validado', verificado: true } : { estado: 'parcial', verificado: false };
+  return { estado: 'extraido', verificado: false };
+}
+
 export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'out/datos', log = () => {} }) {
   const dir = path.join(outDir, servicio.id);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const resultado = { id: servicio.id, archivos: [], filas: 0, paginas: 0, informados: null, verificado: false };
+  const expected = (servicio.columnasEsperadas ?? []).map(norm);
+  const resultado = { id: servicio.id, archivos: [], filas: 0, paginas: 0, informados: null, duplicadosEnTabla: 0, conFiltroPeriodo: false, rangoAplicado: null, estado: 'sin-datos', verificado: false };
+
   const pagina = await sesion.abrirServicio(servicio);
   await pagina.waitForTimeout(2500);
 
-  await completarFiltrosYConsultar(pagina, desde, hasta, log);
+  const filtro = await completarFiltros(pagina, desde, hasta, servicio, log);
+  resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
+  resultado.rangoAplicado = filtro.rangoAplicado;
 
   let headers = null;
   const filas = [];
   const vistas = new Set();
   for (let p = 0; p < 100; p++) {
-    const tabla = await scrapearFrames(pagina);
+    const tabla = await scrapearFrames(pagina, expected);
     if (!tabla) break;
     if (!headers) headers = tabla.headers;
     let nuevas = 0;
     for (const r of tabla.rows) {
       const firma = r.join('|');
-      if (vistas.has(firma)) continue;
+      if (vistas.has(firma)) { resultado.duplicadosEnTabla++; continue; }
       vistas.add(firma); filas.push(r); nuevas++;
     }
     resultado.paginas = p + 1;
-    if (!nuevas) break; // página repetida: fin
+    if (!nuevas) break; // página repetida: corte verificable
     const sig = await botonSiguiente(pagina);
     if (!sig) break;
     await sig.click().catch(() => {});
     await pagina.waitForTimeout(1500);
   }
 
-  // Total informado (si hay paginación tipo "de N registros"), para cotejar.
   const rel = await relevarPagina(pagina);
   resultado.informados = totalInformado(resumenResultados(rel));
 
@@ -149,12 +210,13 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
     resultado.filas = filas.length;
     resultado.columnas = headers;
     resultado.coincideInformado = resultado.informados == null ? null : filas.length === resultado.informados;
-    resultado.verificado = resultado.coincideInformado === true;
-    log(`  -> ${path.basename(file)} · ${filas.length} filas / informados ${resultado.informados ?? '?'} · ${resultado.verificado ? 'VALIDADO' : 'descargado sin cotejo'}`);
   } else {
     escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(resumenResultados(rel), null, 2));
-    log('  sin tabla de resultados; guardado diagnóstico');
   }
+  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk });
+  resultado.estado = d.estado;
+  resultado.verificado = d.verificado;
+  log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}`);
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
   return resultado;
 }
