@@ -74,6 +74,15 @@ function extraerTablasEnDocumento() {
     // (grilla presente y vacía) y distinguirlo de "no encontré la grilla" (pestaña/consulta falló).
     if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
   }
+  // Grillas de componente (no <table>): ARIA role=grid y Syncfusion EJ2 (.e-grid), usadas por los
+  // portales nuevos de ARCA (IVA, Bienes Personales, DDJJ y Pagos: clases e-*). Mismo formato.
+  for (const g of document.querySelectorAll('[role="grid"], [role="table"], .e-grid, .ag-root-wrapper, .k-grid')) {
+    if (!vis(g)) continue;
+    const headers = [...g.querySelectorAll('[role="columnheader"], .e-headercelldiv, .e-headertext, th')].map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
+    const rowEls = [...g.querySelectorAll('[role="row"], .e-row')].filter((r) => r.querySelector('[role="gridcell"], [role="cell"], .e-rowcell, td'));
+    const rows = rowEls.map((r) => [...r.querySelectorAll('[role="gridcell"], [role="cell"], .e-rowcell, td')].map((c) => tx(c))).filter((r) => r.some((x) => x));
+    if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
+  }
   return out;
 }
 

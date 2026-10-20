@@ -66,11 +66,20 @@ function relevarEnDocumento() {
     })), 50),
     conRol: lim(todos.filter((x) => x.e.getAttribute('role') && !es(x, 'button, a, nav, [role=navigation], [role=menu], [role=menubar]')).map(desc), 200),
     textosVisibles: lim(todos.filter((x) => es(x, 'h1, h2, h3, h4, label, legend, summary, [role=heading]') && vis(x.e)).map((x) => (x.e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 100)).filter(Boolean), 200),
-    tablas: lim(todos.filter((x) => es(x, 'table')).map((x) => ({
-      id: x.e.id || null, cls: x.e.className?.toString?.().slice(0, 100) || null, visible: vis(x.e),
-      encabezados: [...x.e.querySelectorAll('thead th, thead td, tr:first-child th')].map((th) => (th.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60)).filter(Boolean).slice(0, 40),
-      filas: x.e.querySelectorAll('tbody tr').length,
-    })), 30),
+    // Captura <table> clásicas Y grillas de componente (ARIA role=grid, Syncfusion .e-grid, etc.),
+    // que son las que usan los portales nuevos de ARCA (IVA, Bienes Personales, DDJJ y Pagos).
+    tablas: lim(todos.filter((x) => es(x, 'table, [role=grid], [role=table], .e-grid, .ag-root-wrapper, .k-grid')).map((x) => {
+      const e = x.e;
+      const esComp = !/^table$/i.test(e.tagName);
+      const txt = (c) => (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      const encabezados = (esComp
+        ? [...e.querySelectorAll('[role=columnheader], .e-headercelldiv, .e-headertext')]
+        : [...e.querySelectorAll('thead th, thead td, tr:first-child th')]).map(txt).filter(Boolean).slice(0, 40);
+      const filas = esComp
+        ? [...e.querySelectorAll('[role=row]')].filter((r) => r.querySelector('[role=gridcell], [role=cell], .e-rowcell')).length
+        : e.querySelectorAll('tbody tr').length;
+      return { id: e.id || null, cls: e.className?.toString?.().slice(0, 100) || null, visible: vis(e), tipo: esComp ? 'componente' : 'table', encabezados, filas };
+    }), 30),
     paginacion: lim(todos.filter((x) => es(x, '.dataTables_info, .dataTables_paginate, .dataTables_length, .pagination, [class*="pagin" i], [id*="pagin" i], [class*="_info"], [id*="_info"], select[name*="length"]') && vis(x.e)).map(desc), 30),
     mensajes: lim(todos.filter((x) => es(x, '.alert, .mensaje, .error, .warning, [role=alert], .dataTables_empty, .text-danger, .text-warning') && vis(x.e)).map((x) => (x.e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 160)).filter(Boolean), 20),
   };

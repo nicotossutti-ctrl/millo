@@ -26,6 +26,11 @@ test('grillaLista detecta grilla con datos, grilla esperada y filtros de fecha',
 
   const nada = { frames: [{ tablas: [], inputs: [{ placeholder: 'texto' }] }] };
   assert.equal(grillaLista(nada).lista, false);
+
+  // Una grilla de componente (tipo 'componente', p. ej. e-grid) cuenta igual que una <table>.
+  const comp = { frames: [{ tablas: [{ visible: true, tipo: 'componente', filas: 3, encabezados: ['Periodo', 'Formulario'] }], inputs: [] }] };
+  assert.equal(grillaLista(comp, ['periodo', 'formulario']).hayGrillaEsperada, true);
+  assert.equal(grillaLista(comp).hayGrillaConDatos, true);
 });
 
 test('drillHaciaGrilla NO clickea nada si el servicio no tiene ruta (no adivina por palabras)', async () => {

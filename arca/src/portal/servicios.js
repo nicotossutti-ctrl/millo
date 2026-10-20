@@ -26,21 +26,27 @@ export const SERVICIOS = [
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   // Portal IVA: dos botones "CONSULTAR" iguales de texto; el de DDJJ presentadas se distingue por
   // su aria-label (…declaraciones.anteriores.portal…). Abre la grilla en una pestaña nueva.
+  // Portal IVA: el CONSULTAR de "Declaraciones juradas presentadas" (aria-label varía entre
+  // ...declaraciones.anteriores.alt y ...declaraciones.anteriores.portal.alt; matcheamos el común).
+  // Abre la grilla en una pestaña nueva (el drill la sigue).
   { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }] },
   // Mis Retenciones exige elegir un impuesto antes de Consultar (error real: "Seleccioná un impuesto").
   { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
     selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
     requiereImpuesto: true, columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
-  // DDJJ y Pagos: modal de novedades ("Entendido") que puede o no estar, y pestañas Presentaciones/Pagos.
+  // DDJJ y Pagos (Syncfusion EJ2): modal de novedades ("Entendido", puede o no estar) y tabs
+  // "Presentaciones"/"Pagos". La tab no es un control estándar; la dejamos opcional y confiamos en
+  // que la grilla de componente aparezca (la lee el extractor de grillas e-grid/role=grid).
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Presentaciones' }] },
-  // Ganancias: la portada no expone controles clickeables en el relevamiento (tarjetas sin botón
-  // capturado). Pendiente de un diagnóstico con la estructura de esas tarjetas para la ruta real.
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
+  // Ganancias: la portada no expone controles clickeables en el relevamiento (tarjetas con botones
+  // que renderizan tarde). Pendiente de capturar esos botones para la ruta real; no se adivina.
   { id: 'ganancias-ph', nombre: 'GANANCIAS PERSONAS HUMANAS', terminos: ['GANANCIAS PERSONAS HUMANAS'], fuente: 8, confirmado: false, extractor: 'generico' },
-  // Bienes Personales (F.762): título "Mis declaraciones juradas presentadas" + un CONSULTAR.
+  // Bienes Personales (F.762, mismo template integrado que IVA): CONSULTAR lleva a "Mis
+  // declaraciones juradas presentadas"; la grilla aparece async (la espera la cubre).
   { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'CONSULTAR' }] },
   { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
