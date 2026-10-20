@@ -52,15 +52,21 @@ async function seleccionarImpuesto(frame, servicio) {
       await combo.click().catch(() => {});
       await frame.page().waitForTimeout(700).catch(() => {});
       const opciones = frame.locator('.e-list-item, [role="option"], li[role="option"], .e-ddl-item');
-      const n = Math.min(await opciones.count().catch(() => 0), 40);
+      const n = Math.min(await opciones.count().catch(() => 0), 60);
+      // Recolectamos los textos visibles y elegimos un IMPUESTO REAL (código "NNN - ..."), no un
+      // encabezado de grupo ("Impositivas", "Aduaneras", "Recursos de la Seguridad Social").
+      const items = [];
       for (let i = 0; i < n; i++) {
         const o = opciones.nth(i);
         if (!(await o.isVisible().catch(() => false))) continue;
         const t = ((await o.innerText().catch(() => '')) || '').trim();
-        if (!t || OPCION_PLACEHOLDER.test(norm(t))) continue;
-        await o.click().catch(() => {});
-        return t;
+        if (t) items.push({ i, t });
       }
+      const esGrupo = (t) => /^(impositiv|aduaner|recursos de la seg|seguridad social)/i.test(norm(t));
+      const reales = items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupo(x.t));
+      const elegido = reales.find((x) => /\biva\b/i.test(x.t)) || reales.find((x) => /ganancia/i.test(x.t)) || reales[0]
+        || items.find((x) => !OPCION_PLACEHOLDER.test(norm(x.t)) && !esGrupo(x.t));
+      if (elegido) { await opciones.nth(elegido.i).click().catch(() => {}); return elegido.t; }
     }
   }
   const selects = frame.locator('select');
