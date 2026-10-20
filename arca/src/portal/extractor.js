@@ -92,29 +92,45 @@ async function botonSiguiente(pagina) {
   return null;
 }
 
-/** Completa filtros de fecha y consulta. Usa selectores por servicio si están confirmados. */
-async function completarFiltros(pagina, desde, hasta, servicio, log) {
+/**
+ * Completa filtros de fecha y consulta. Con selectores por servicio NO silencia errores:
+ * si un filtro o el botón Consultar fallan, devuelve { error } para que el extractor no siga
+ * con datos potencialmente viejos. Devuelve rangoOk solo si el campo tomó realmente la fecha.
+ */
+export async function completarFiltros(pagina, desde, hasta, servicio, log) {
   const sel = servicio.selectores;
+  // Fija una fecha y verifica que el campo la haya tomado. Lanza si falla; false si el
+  // selector no está en este frame (para probar el siguiente).
   const fijar = async (frame, selector, valor) => {
     const inp = frame.locator(selector).first();
-    if (!(await inp.count()) || !(await inp.isVisible().catch(() => false))) return false;
-    await inp.fill('').catch(() => {});
-    await inp.fill(valor).catch(() => {});
+    if (!(await inp.count())) return false;
+    await inp.waitFor({ state: 'visible', timeout: 8000 });
+    await inp.fill('');
+    await inp.fill(valor);
+    const leido = await inp.inputValue();
+    if (!String(leido).includes(valor)) throw new Error(`el campo ${selector} no tomó "${valor}" (quedó "${leido}")`);
     return true;
   };
   if (sel?.fechaDesde && sel?.fechaHasta) {
     for (const frame of pagina.frames()) {
-      const a = await fijar(frame, sel.fechaDesde, fechaArca(desde));
-      const b = await fijar(frame, sel.fechaHasta, fechaArca(hasta));
-      if (a && b) {
+      let a;
+      try { a = await fijar(frame, sel.fechaDesde, fechaArca(desde)); }
+      catch (e) { return { conFiltroPeriodo: true, error: `fecha desde: ${e.message}` }; }
+      if (!a) continue; // los filtros no están en este frame
+      try {
+        await fijar(frame, sel.fechaHasta, fechaArca(hasta));
         const btn = frame.locator(sel.consultar ?? 'button:has-text("Consultar"), button:has-text("Buscar")').first();
-        if (await btn.count()) { log('  consultando con selectores confirmados'); await btn.click().catch(() => {}); await pagina.waitForLoadState('networkidle').catch(() => {}); await pagina.waitForTimeout(2500); }
-        // Verificar qué rango quedó aplicado en la UI.
+        if (!(await btn.count())) throw new Error('no se encontró el botón Consultar');
+        log('  consultando con selectores confirmados');
+        await btn.click();
+        await pagina.waitForLoadState('networkidle').catch(() => {});
+        await pagina.waitForTimeout(2500);
         const leidoDesde = await frame.locator(sel.fechaDesde).first().inputValue().catch(() => '');
         const leidoHasta = await frame.locator(sel.fechaHasta).first().inputValue().catch(() => '');
         return { conFiltroPeriodo: true, rangoAplicado: `${leidoDesde} - ${leidoHasta}`, rangoOk: leidoDesde.includes(fechaArca(desde)) && leidoHasta.includes(fechaArca(hasta)) };
-      }
+      } catch (e) { return { conFiltroPeriodo: true, error: `filtro/consulta: ${e.message}` }; }
     }
+    return { conFiltroPeriodo: true, error: 'no se encontraron los filtros de fecha confirmados' };
   }
   // Genérico: inputs con placeholder dd/mm/aaaa o id/name con "fecha".
   let fechas = 0;
@@ -159,10 +175,18 @@ export const COLUMNAS_LIBRES = (headers) => headers.map((h, i) => ({ header: h |
  * sin total para cotejar), parcial (hay datos pero el rango aplicado no coincide con el pedido),
  * sin-datos (no se encontró la grilla).
  */
-export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk }) {
+export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, error }) {
+  if (error) return { estado: 'parcial', verificado: false };            // fallo de interacción: nunca validado
   if (!filas) return { estado: 'sin-datos', verificado: false };
-  if (conFiltroPeriodo && rangoOk === false) return { estado: 'parcial', verificado: false };
-  if (informados != null) return filas === informados ? { estado: 'validado', verificado: true } : { estado: 'parcial', verificado: false };
+  if (conFiltroPeriodo) {
+    // Con filtro de fechas, 'validado' exige que el rango aplicado esté CONFIRMADO (rangoOk===true).
+    // Que el conteo coincida con el total informado no alcanza si no sabemos qué período quedó.
+    if (rangoOk !== true) return { estado: 'parcial', verificado: false };
+    if (informados != null) return filas === informados ? { estado: 'validado', verificado: true } : { estado: 'parcial', verificado: false };
+    return { estado: 'extraido', verificado: false };
+  }
+  // Sin filtro de período (datos acumulados: cuenta tributaria, planes): no se atribuyen al mes
+  // de la ejecución, así que nunca se marcan 'validado' por período.
   return { estado: 'extraido', verificado: false };
 }
 
@@ -178,6 +202,19 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
   const filtro = await completarFiltros(pagina, desde, hasta, servicio, log);
   resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
   resultado.rangoAplicado = filtro.rangoAplicado;
+
+  // Si la consulta con selectores falló, no seguimos con datos potencialmente viejos.
+  if (filtro.error) {
+    const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
+    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify({ error: filtro.error, resultados: resumenResultados(rel0) }, null, 2));
+    const d0 = decidirEstado({ filas: 0, error: filtro.error });
+    resultado.estado = d0.estado;
+    resultado.verificado = d0.verificado;
+    resultado.motivo = filtro.error;
+    log(`  ${servicio.id}: parcial · ${filtro.error}`);
+    if (pagina !== sesion.page) await pagina.close().catch(() => {});
+    return resultado;
+  }
 
   let headers = null;
   const filas = [];
@@ -213,7 +250,7 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
   } else {
     escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(resumenResultados(rel), null, 2));
   }
-  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk });
+  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk, error: filtro.error });
   resultado.estado = d.estado;
   resultado.verificado = d.verificado;
   log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}`);
