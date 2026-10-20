@@ -52,7 +52,7 @@ export function grillaLista(rel, expected = []) {
  * Muchos servicios de ARCA abren la grilla en una PESTAÑA NUEVA; por eso, si el clic abre una
  * página nueva, la devolvemos en `nueva` para seguir ahí. Devuelve { clickeado, nueva }.
  */
-async function ejecutarPaso(pagina, paso, log) {
+async function ubicarPaso(pagina, paso) {
   for (const frame of pagina.frames()) {
     let loc = null;
     if (paso.id) {
@@ -66,15 +66,26 @@ async function ejecutarPaso(pagina, paso, log) {
       const l = frame.locator('a, button, [role=button], [role=menuitem], [role=tab], [role=option], li').filter({ hasText: exacto });
       if (await l.count().catch(() => 0)) loc = l.first();
     }
-    if (!loc) continue;
-    if (!(await loc.isVisible().catch(() => false))) continue;
-    const real = (await loc.innerText().catch(() => '')) || paso.texto || '';
-    if (!esPasoSeguro(real)) throw new Error(`paso de ruta bloqueado por seguridad (parece trámite): ${JSON.stringify(real)}`);
-    log(`  ruta (lectura): ${JSON.stringify(paso.texto ?? paso.id ?? paso.selector)}`);
-    const nueva = await clickSiguiendoPestaña(pagina, loc);
-    return { clickeado: true, nueva };
+    if (loc && (await loc.isVisible().catch(() => false))) return loc;
   }
-  return { clickeado: false, nueva: null };
+  return null;
+}
+
+async function ejecutarPaso(pagina, paso, log) {
+  // Reintentamos unas veces: muchos servicios renderizan el control tarde (SPA). Un paso
+  // opcional (p. ej. un modal que puede no estar) no espera.
+  const intentos = paso.opcional ? 1 : 5;
+  let loc = null;
+  for (let i = 0; i < intentos && !loc; i++) {
+    loc = await ubicarPaso(pagina, paso);
+    if (!loc && i < intentos - 1) await pagina.waitForTimeout?.(1200);
+  }
+  if (!loc) return { clickeado: false, nueva: null };
+  const real = (await loc.innerText().catch(() => '')) || paso.texto || '';
+  if (!esPasoSeguro(real)) throw new Error(`paso de ruta bloqueado por seguridad (parece trámite): ${JSON.stringify(real)}`);
+  log(`  ruta (lectura): ${JSON.stringify(paso.texto ?? paso.id ?? paso.selector)}`);
+  const nueva = await clickSiguiendoPestaña(pagina, loc);
+  return { clickeado: true, nueva };
 }
 
 /** Clic que, si abre una pestaña nueva, la espera y la devuelve. Si no, devuelve null. */
@@ -105,10 +116,21 @@ async function clickSiguiendoPestaña(pagina, loc) {
  * ella. Devuelve también `pagina` (la página final, que puede ser una pestaña nueva) para que
  * el extractor trabaje ahí. `relevar` es inyectable para test.
  */
+// Espera a que la grilla/filtros aparezcan (tras navegar, la SPA puede renderizar tarde).
+async function esperarLista(relevarPagina, pagina, expected, veces) {
+  let señales = { lista: false };
+  for (let i = 0; i < veces; i++) {
+    señales = grillaLista(await relevarPagina(pagina), expected);
+    if (señales.lista) return señales;
+    if (i < veces - 1) await pagina.waitForTimeout?.(1500);
+  }
+  return señales;
+}
+
 export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log = () => {}, relevar } = {}) {
   const relevarPagina = relevar ?? (await import('./relevar.js')).relevarPagina;
   let actual = pagina;
-  let señales = grillaLista(await relevarPagina(actual), expected);
+  let señales = await esperarLista(relevarPagina, actual, expected, 1);
   if (señales.lista) return { lista: true, pasos: 0, señales, pagina: actual };
   if (!ruta.length) return { lista: false, pasos: 0, señales, pagina: actual, motivo: 'sin ruta de navegación confirmada' };
 
@@ -121,7 +143,8 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
     }
     if (r.nueva) actual = r.nueva;
     pasos++;
-    señales = grillaLista(await relevarPagina(actual), expected);
+    // Tras navegar, damos tiempo a que la grilla aparezca (iframe/SPA).
+    señales = await esperarLista(relevarPagina, actual, expected, 4);
     if (señales.lista) return { lista: true, pasos, señales, pagina: actual };
   }
   return { lista: señales.lista, pasos, señales, pagina: actual, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };

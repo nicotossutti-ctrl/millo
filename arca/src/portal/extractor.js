@@ -264,13 +264,25 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   // Si la consulta con selectores falló, no seguimos con datos potencialmente viejos.
   if (filtro.error) {
     const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
-    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify({ error: filtro.error, resultados: resumenResultados(rel0) }, null, 2));
+    // Guardamos la estructura COMPLETA (inputs, selects con sus opciones, botones): sirve para ver
+    // controles no nativos, como el combo de impuesto de Mis Retenciones.
+    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify({ error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
     const d0 = decidirEstado({ filas: 0, error: filtro.error });
     resultado.estado = d0.estado;
     resultado.verificado = d0.verificado;
     resultado.motivo = filtro.error;
     log(`  ${servicio.id}: parcial · ${filtro.error}`);
     return resultado;
+  }
+
+  // La grilla puede tardar en aparecer (iframe que carga tarde, SPA, pestaña recién abierta).
+  // Esperamos hasta ~9s a que aparezca antes de dar 0 filas: así no regresionamos servicios que
+  // ya funcionaban (p. ej. Cuentas Tributarias dentro de un iframe) por una simple carrera de carga.
+  for (let i = 0; i < 6; i++) {
+    const t = await scrapearFrames(pagina, expected);
+    const hayAlgo = t && (t.rows.length > 0 || (expected.length && (t.coincideCols ?? 0) > 0));
+    if (hayAlgo) break;
+    await pagina.waitForTimeout(1500);
   }
 
   let headers = null;

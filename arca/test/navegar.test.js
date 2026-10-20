@@ -70,6 +70,25 @@ test('drillHaciaGrilla sigue la ruta explícita hasta la grilla', async () => {
   assert.equal(r.pasos, 1);
 });
 
+test('drillHaciaGrilla espera el render tardío de la grilla tras navegar (no da por fallida enseguida)', async () => {
+  let llamadas = 0;
+  const relevar = async () => {
+    llamadas++;
+    // 1: hub sin grilla. 2: tras el click, todavía cargando. 3: ya con grilla.
+    return llamadas >= 3
+      ? { frames: [{ tablas: [{ visible: true, filas: 2, encabezados: ['A'] }], inputs: [] }] }
+      : { frames: [{ tablas: [], inputs: [] }] };
+  };
+  const control = { isVisible: async () => true, innerText: async () => 'Ver', click: async () => {} };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Ver' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
 test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {
   const relevar = async () => ({ frames: [{ tablas: [], inputs: [] }] });
   const pagina = { frames: () => [{ locator: () => locatorFalso({ present: false }) }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };

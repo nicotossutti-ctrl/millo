@@ -49,7 +49,7 @@ export const SERVICIOS = [
   // SIFERE / Convenio Multilateral NO figura entre los servicios adheridos a esta clave fiscal
   // (no aparece en mis-servicios). Hay que adherirlo en Administrador de Relaciones (paso manual).
   { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'generico',
-    bloqueo: 'SIFERE/Convenio Multilateral no está entre los servicios adheridos a la clave fiscal (no aparece en el listado del portal). Hay que adherirlo en Administrador de Relaciones; es un paso manual que no se automatiza.' },
+    bloqueo: 'SIFERE/Convenio Multilateral no aparece en el listado de servicios de ARCA de esta clave fiscal. Esto NO prueba que no haya acceso: SIFERE es de COMARB y puede entrarse (a) adhiriéndolo en Administrador de Relaciones o (b) por el portal de COMARB con la misma clave fiscal. A confirmar con un diagnóstico del listado completo y del portal COMARB antes de descartarlo.' },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
 ];
