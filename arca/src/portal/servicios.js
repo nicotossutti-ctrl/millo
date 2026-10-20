@@ -19,23 +19,39 @@
  * Ningún servicio presenta, modifica, emite ni paga: solo navega, consulta y exporta.
  * COBERTURA.md tiene el detalle de qué datos trae cada fuente y el estado real de cada una.
  */
+// Nombres y rutas tomados del listado real de servicios (portal/app/mis-servicios) y de los
+// diagnósticos de cada hub del 20/10/2026. No se adivina: cada ruta es un paso concreto visto.
 export const SERVICIOS = [
-  { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
-  { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
-  { id: 'portal-iva', nombre: 'Portal IVA', terminos: ['Portal IVA', 'IVA'], fuente: 3, confirmado: false, extractor: 'generico' },
-  { id: 'mis-retenciones', nombre: 'Mis Retenciones', fuente: 11, confirmado: true, extractor: 'tabla',
+  { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
+  { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
+  // Portal IVA: dos botones "CONSULTAR" iguales de texto; el de DDJJ presentadas se distingue por
+  // su aria-label (…declaraciones.anteriores.portal…). Abre la grilla en una pestaña nueva.
+  { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
+  // Mis Retenciones exige elegir un impuesto antes de Consultar (error real: "Seleccioná un impuesto").
+  { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
     selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
-    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
-  { id: 'cuentas-tributarias', nombre: 'Sistema de Cuentas Tributarias', fuente: 12, confirmado: true, extractor: 'tabla',
+    requiereImpuesto: true, columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
+  { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
-  { id: 'ddjj-y-pagos', nombre: 'Presentación de DDJJ y Pagos', terminos: ['Presentación de DDJJ y Pagos', 'Mis DDJJ', 'Presentacion de DDJJ'], fuente: 10, confirmado: false, extractor: 'generico' },
-  { id: 'ganancias-ph', nombre: 'Ganancias Personas Humanas', terminos: ['Ganancias Personas Humanas', 'Ganancias y Bienes Personales Web', 'Ganancias'], fuente: 8, confirmado: false, extractor: 'generico' },
-  { id: 'bienes-personales', nombre: 'Bienes Personales Web', terminos: ['Bienes Personales', 'Ganancias y Bienes Personales Web'], fuente: 9, confirmado: false, extractor: 'generico' },
-  { id: 'ccma', nombre: 'CCMA - Cuenta Corriente de Monotributistas y Autónomos', terminos: ['CCMA', 'Cuenta Corriente de Monotributistas'], fuente: 13, confirmado: false, extractor: 'generico' },
-  { id: 'mis-facilidades', nombre: 'Mis Facilidades', fuente: 15, confirmado: true, extractor: 'tabla',
+  // DDJJ y Pagos: modal de novedades ("Entendido") que puede o no estar, y pestañas Presentaciones/Pagos.
+  { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Presentaciones' }] },
+  // Ganancias: la portada no expone controles clickeables en el relevamiento (tarjetas sin botón
+  // capturado). Pendiente de un diagnóstico con la estructura de esas tarjetas para la ruta real.
+  { id: 'ganancias-ph', nombre: 'GANANCIAS PERSONAS HUMANAS', terminos: ['GANANCIAS PERSONAS HUMANAS'], fuente: 8, confirmado: false, extractor: 'generico' },
+  // Bienes Personales (F.762): título "Mis declaraciones juradas presentadas" + un CONSULTAR.
+  { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'CONSULTAR' }] },
+  { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
+  { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },
-  { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', terminos: ['SIFERE', 'Convenio Multilateral'], fuente: 5, confirmado: false, extractor: 'generico' },
-  { id: 'ventanilla', nombre: 'Ventanilla Electrónica', terminos: ['Ventanilla Electrónica', 'Domicilio Fiscal Electrónico', 'e-Ventanilla'], fuente: 16, confirmado: false, extractor: 'generico' },
+  // SIFERE / Convenio Multilateral NO figura entre los servicios adheridos a esta clave fiscal
+  // (no aparece en mis-servicios). Hay que adherirlo en Administrador de Relaciones (paso manual).
+  { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'generico',
+    bloqueo: 'SIFERE/Convenio Multilateral no está entre los servicios adheridos a la clave fiscal (no aparece en el listado del portal). Hay que adherirlo en Administrador de Relaciones; es un paso manual que no se automatiza.' },
+  // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
+  { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
 ];
 
 export function slug(s) {

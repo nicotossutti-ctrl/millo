@@ -44,6 +44,8 @@ function relevarEnDocumento() {
     visible: vis(e),
     enShadow,
     ...(e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' ? { rect: (() => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })() } : {}),
+    // Para <select> guardamos las opciones (p. ej. el desplegable de impuesto en Mis Retenciones).
+    ...(e.tagName === 'SELECT' ? { opciones: [...e.options].map((o) => (o.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)).filter(Boolean).slice(0, 40) } : {}),
   });
 
   const es = (x, sel) => { try { return x.e.matches(sel); } catch { return false; } };
@@ -110,7 +112,7 @@ export function resumenRelevamiento(rel) {
     if (f.error) { l.push(`  error: ${f.error}`); continue; }
     l.push(`  elementos ${f.totalElementos} · inputs ${f.inputs.length} · botones ${f.botones.length} · enlaces ${f.enlaces.length} · iframes ${f.iframes.length} · menús ${f.menus.length}`);
     const attrs = (x) => ['tag', 'type', 'id', 'name', 'placeholder', 'ariaLabel', 'role', 'cls'].filter((k) => x[k]).map((k) => `${k}=${JSON.stringify(x[k])}`).join(' ');
-    for (const i of f.inputs.filter((x) => x.visible)) l.push(`  input  ${attrs(i)} ${i.rect ? `${i.rect.w}x${i.rect.h}` : ''}${i.enShadow ? ' [shadow]' : ''}`);
+    for (const i of f.inputs.filter((x) => x.visible)) l.push(`  input  ${attrs(i)} ${i.rect ? `${i.rect.w}x${i.rect.h}` : ''}${i.opciones?.length ? ` opciones=[${i.opciones.join(' | ')}]` : ''}${i.enShadow ? ' [shadow]' : ''}`);
     for (const b of f.botones.filter((x) => x.visible).slice(0, 40)) l.push(`  botón  ${JSON.stringify(b.text ?? b.ariaLabel ?? b.title ?? '')} ${attrs(b)}${b.enShadow ? ' [shadow]' : ''}`);
     for (const a of f.enlaces.filter((x) => x.visible && x.text).slice(0, 120)) l.push(`  enlace ${JSON.stringify(a.text)} -> ${a.href ?? ''}${a.enShadow ? ' [shadow]' : ''}`);
     for (const i of f.iframes) l.push(`  iframe ${attrs(i)} src=${i.src ?? ''}`);

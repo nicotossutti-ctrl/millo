@@ -47,7 +47,10 @@ export function grillaLista(rel, expected = []) {
  *   { id }        -> por id exacto.
  *   { selector }  -> por selector CSS.
  *   { texto }     -> por texto EXACTO (no subcadena: así no cae en el chrome del portal que
- *                    apenas contiene la palabra). Devuelve true si clickeó.
+ *                    apenas contiene la palabra).
+ *   { opcional }  -> si no se encuentra, no es error (p. ej. cerrar un modal que puede no estar).
+ * Muchos servicios de ARCA abren la grilla en una PESTAÑA NUEVA; por eso, si el clic abre una
+ * página nueva, la devolvemos en `nueva` para seguir ahí. Devuelve { clickeado, nueva }.
  */
 async function ejecutarPaso(pagina, paso, log) {
   for (const frame of pagina.frames()) {
@@ -68,32 +71,58 @@ async function ejecutarPaso(pagina, paso, log) {
     const real = (await loc.innerText().catch(() => '')) || paso.texto || '';
     if (!esPasoSeguro(real)) throw new Error(`paso de ruta bloqueado por seguridad (parece trámite): ${JSON.stringify(real)}`);
     log(`  ruta (lectura): ${JSON.stringify(paso.texto ?? paso.id ?? paso.selector)}`);
-    await loc.click().catch(() => {});
-    await pagina.waitForLoadState('networkidle').catch(() => {});
-    await pagina.waitForTimeout(2000);
-    return true;
+    const nueva = await clickSiguiendoPestaña(pagina, loc);
+    return { clickeado: true, nueva };
   }
-  return false;
+  return { clickeado: false, nueva: null };
+}
+
+/** Clic que, si abre una pestaña nueva, la espera y la devuelve. Si no, devuelve null. */
+async function clickSiguiendoPestaña(pagina, loc) {
+  const ctx = typeof pagina.context === 'function' ? pagina.context() : null;
+  if (ctx && typeof ctx.waitForEvent === 'function') {
+    const [nueva] = await Promise.all([
+      ctx.waitForEvent('page', { timeout: 8000 }).catch(() => null),
+      loc.click().catch(() => {}),
+    ]);
+    if (nueva) {
+      await nueva.waitForLoadState('domcontentloaded').catch(() => {});
+      await nueva.waitForLoadState('networkidle').catch(() => {});
+      await nueva.waitForTimeout(1500).catch(() => {});
+      return nueva;
+    }
+  } else {
+    await loc.click().catch(() => {});
+  }
+  await pagina.waitForLoadState?.('networkidle').catch(() => {});
+  await pagina.waitForTimeout?.(2000);
+  return null;
 }
 
 /**
- * Lleva la página hasta la grilla del servicio siguiendo su `ruta` explícita, en solo lectura.
- * Si ya hay grilla/filtros, no navega. Sin ruta, NO adivina: devuelve lista=false y deja la
- * estructura capturada para escribir la ruta. `relevar` es inyectable para test.
+ * Lleva hasta la grilla del servicio siguiendo su `ruta` explícita, en solo lectura. Si ya hay
+ * grilla/filtros, no navega. Sin ruta, NO adivina. Si un paso abre una pestaña nueva, sigue en
+ * ella. Devuelve también `pagina` (la página final, que puede ser una pestaña nueva) para que
+ * el extractor trabaje ahí. `relevar` es inyectable para test.
  */
 export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log = () => {}, relevar } = {}) {
   const relevarPagina = relevar ?? (await import('./relevar.js')).relevarPagina;
-  let señales = grillaLista(await relevarPagina(pagina), expected);
-  if (señales.lista) return { lista: true, pasos: 0, señales };
-  if (!ruta.length) return { lista: false, pasos: 0, señales, motivo: 'sin ruta de navegación confirmada' };
+  let actual = pagina;
+  let señales = grillaLista(await relevarPagina(actual), expected);
+  if (señales.lista) return { lista: true, pasos: 0, señales, pagina: actual };
+  if (!ruta.length) return { lista: false, pasos: 0, señales, pagina: actual, motivo: 'sin ruta de navegación confirmada' };
 
   let pasos = 0;
   for (const paso of ruta) {
-    const ok = await ejecutarPaso(pagina, paso, log);
-    if (!ok) return { lista: false, pasos, señales, motivo: `no se encontró el paso ${JSON.stringify(paso)}` };
+    const r = await ejecutarPaso(actual, paso, log);
+    if (!r.clickeado) {
+      if (paso.opcional) continue; // p. ej. un modal de novedades que puede no aparecer
+      return { lista: false, pasos, señales, pagina: actual, motivo: `no se encontró el paso ${JSON.stringify(paso)}` };
+    }
+    if (r.nueva) actual = r.nueva;
     pasos++;
-    señales = grillaLista(await relevarPagina(pagina), expected);
-    if (señales.lista) return { lista: true, pasos, señales };
+    señales = grillaLista(await relevarPagina(actual), expected);
+    if (señales.lista) return { lista: true, pasos, señales, pagina: actual };
   }
-  return { lista: señales.lista, pasos, señales, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };
+  return { lista: señales.lista, pasos, señales, pagina: actual, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };
 }

@@ -103,16 +103,26 @@ Terceros como Afip SDK no tienen un cuarto mecanismo: usan el 2 con tu clave en 
   si no, guarda la estructura saneada para escribir el extractor exacto. Así una sola corrida
   integral avanza todas las fuentes sin pedir pruebas pantalla por pantalla.
 
-**Estado real por fuente (acceso ≠ descarga ≠ validación)**
+**Estado real por fuente (acceso ≠ descarga ≠ validación), al 20/10/2026**
 
-- **Descargado y validado**: Facturas recibidas (fuente 2).
-- **Extractor de tabla activo, a validar en corrida**: Mis Retenciones (11), Cuentas
-  Tributarias (12), Mis Facilidades (15).
-- **Hub con drill de lectura, pendiente de confirmar la grilla real**: Portal IVA (3),
-  DDJJ y Pagos (10), Ganancias (8), Bienes Personales (9), SIFERE/CM03/CM05/SIRCREB (5-7),
-  CCMA/Autónomos (13), Ventanilla (16).
+- **Descargado y validado**: Facturas recibidas (2) — 62/62 en 09/2026.
+- **Descargado sin cotejo (datos acumulados)**: Cuentas Tributarias (12, 7 filas), CCMA/Autónomos
+  (13, 11 filas), Mis Facilidades (15, 14 filas), Ventanilla/DFE (16, 5 filas).
+- **Con ruta de navegación escrita, a probar en la próxima corrida**:
+  - Portal IVA (3): botón CONSULTAR de "Declaraciones juradas presentadas" (aria-label
+    `…declaraciones.anteriores.portal`), abre en pestaña nueva.
+  - DDJJ y Pagos (10): cerrar modal "Entendido" (si está) y abrir pestaña "Presentaciones".
+  - Bienes Personales (9): botón CONSULTAR de "Mis declaraciones juradas presentadas".
+- **Mis Retenciones (11)**: la consulta exige **elegir un impuesto** ("Seleccioná un impuesto");
+  0 filas era un error de filtro, no un cero. Se agregó la selección de impuesto; si el control no
+  es un `<select>` nativo, el diagnóstico ahora captura las opciones del desplegable para afinarlo.
 - **Facturas emitidas (1b)**: la pantalla de resultados da 0 tablas; se captura diagnóstico
   saneado en cada corrida, sin asumir cero ventas.
+- **Ganancias Personas Humanas (8)**: la portada no expone controles clickeables en el
+  relevamiento; falta un diagnóstico de la estructura de sus tarjetas para escribir la ruta.
+- **SIFERE / Convenio Multilateral (5-7, CM03/CM05/SIRCREB)**: **bloqueo real** — no está entre los
+  servicios adheridos a la clave fiscal (no aparece en el listado del portal). Requiere adherirlo
+  en Administrador de Relaciones, paso manual del contribuyente; no se automatiza.
 - **Sin web service para el dato**: DDJJ, pagos, retenciones sufridas, cuenta tributaria y
   comprobantes recibidos solo salen por portal (mecanismo 2).
 

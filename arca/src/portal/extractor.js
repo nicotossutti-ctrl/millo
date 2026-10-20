@@ -26,6 +26,35 @@ export const esProhibido = (texto) => PROHIBIDO.test(texto ?? '');
 export const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const fechaArca = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 
+// Opciones que NO son un impuesto real (placeholders / agregados), para el desplegable de impuesto.
+// Se compara sin acentos y en minúsculas, así "Seleccioná" cae igual que "selecciona".
+const OPCION_PLACEHOLDER = /^$|selecciona|seleccione|elegi|^todos?$|^-+$/;
+/** Primera opción "real" de un desplegable de impuesto (saltea placeholders). Pura, testeable. */
+export function elegirOpcionImpuesto(opciones = []) {
+  for (let i = 0; i < opciones.length; i++) {
+    const t = String(opciones[i] ?? '').trim();
+    if (!t || OPCION_PLACEHOLDER.test(norm(t))) continue;
+    return { index: i, texto: t };
+  }
+  return null;
+}
+
+/** Selecciona un impuesto en el primer <select> visible cuyas opciones lo ofrezcan. Solo lectura. */
+async function seleccionarImpuesto(frame) {
+  const selects = frame.locator('select');
+  const n = Math.min(await selects.count().catch(() => 0), 10);
+  for (let i = 0; i < n; i++) {
+    const s = selects.nth(i);
+    if (!(await s.isVisible().catch(() => false))) continue;
+    const textos = await s.locator('option').allTextContents().catch(() => []);
+    const op = elegirOpcionImpuesto(textos);
+    if (!op) continue;
+    await s.selectOption({ index: op.index }).catch(() => {});
+    return op.texto;
+  }
+  return null;
+}
+
 /**
  * Corre en el navegador. Elige la mejor tabla del documento. Si `expected` trae encabezados,
  * da prioridad fuerte a la tabla que los contiene (evita grillas de navegación/título).
@@ -121,6 +150,12 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log) {
       if (!a) continue; // los filtros no están en este frame
       try {
         await fijar(frame, sel.fechaHasta, fechaArca(hasta));
+        // Algunos servicios (Mis Retenciones) exigen elegir un impuesto antes de Consultar.
+        if (servicio.requiereImpuesto) {
+          const imp = await seleccionarImpuesto(frame);
+          if (!imp) return { conFiltroPeriodo: true, error: 'requiere elegir un impuesto y no se encontró un desplegable de impuesto (puede ser un combo no nativo: revisar el diagnóstico de controles)' };
+          log(`  impuesto seleccionado: ${imp}`);
+        }
         const btn = frame.locator(sel.consultar ?? 'button:has-text("Consultar"), button:has-text("Buscar")').first();
         if (!(await btn.count())) throw new Error('no se encontró el botón Consultar');
         log('  consultando con selectores confirmados');
@@ -264,7 +299,10 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   }
 
   const rel = await relevarPagina(pagina);
-  resultado.informados = totalInformado(resumenResultados(rel));
+  const res = resumenResultados(rel);
+  resultado.informados = totalInformado(res);
+  // Mensajes de la propia pantalla (errores/avisos), útiles cuando no hay filas.
+  const mensajesArca = (res.mensajes ?? []).map((m) => String(m).trim()).filter(Boolean);
 
   if (headers && filas.length) {
     const file = path.join(dir, `${servicio.id}-${desde}-${hasta}.csv`);
@@ -274,7 +312,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
     resultado.columnas = headers;
     resultado.coincideInformado = resultado.informados == null ? null : filas.length === resultado.informados;
   } else {
-    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(resumenResultados(rel), null, 2));
+    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
   }
   resultado.gridPresente = gridPresente;
   const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk, error: filtro.error, gridPresente });
@@ -286,6 +324,8 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
     resultado.motivo = d.ceroConfirmado
       ? 'grilla presente y vacía: 0 filas confirmado para el rango'
       : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
+    // Si la pantalla mostró un mensaje propio (ej. "Seleccioná un impuesto"), lo exponemos.
+    if (mensajesArca.length) { resultado.mensajes = mensajesArca; resultado.motivo += ` · pantalla: ${mensajesArca.join(' / ')}`; }
   }
   log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}${resultado.motivo ? ` · ${resultado.motivo}` : ''}`);
   return resultado;

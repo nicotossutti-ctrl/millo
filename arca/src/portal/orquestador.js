@@ -63,25 +63,29 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   await pagina.waitForTimeout(2500);
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).
+  // Puede terminar en una pestaña nueva: trabajamos sobre drill.pagina.
   const drill = await drillHaciaGrilla(pagina, { expected, ruta: servicio.ruta ?? [], log });
+  const paginaDatos = drill.pagina ?? pagina;
 
-  // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en la misma página.
+  // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en esa página.
   let extraccion = null;
   if (drill.lista && periodo) {
     const outBase = sesion?.cfg?.outDir ?? 'out';
-    extraccion = await extraerTablaEnPagina(pagina, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log })
+    extraccion = await extraerTablaEnPagina(paginaDatos, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log })
       .catch((e) => ({ error: sanitizarTexto(e.message) }));
     escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
   }
 
-  const rel = await relevarPagina(pagina);
+  const rel = await relevarPagina(paginaDatos);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
-  escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
+  escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await paginaDatos.content()));
   const clas = clasificarRelevamiento(rel);
   const lineas = [...resumenRelevamiento(rel), '',
     `== Drill (solo lectura, ruta explícita): pasos ${drill.pasos}, lista=${drill.lista}${drill.motivo ? `, ${drill.motivo}` : ''}`,
     '', '== Clasificación', JSON.stringify(clas, null, 2)];
   escribir(path.join(dir, 'resumen.txt'), lineas.join('\n'));
+  // Cerrar las pestañas abiertas por este servicio (la del servicio y la que haya abierto el drill).
+  if (paginaDatos !== sesion.page && paginaDatos !== pagina) await paginaDatos.close().catch(() => {});
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
 
   const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo };
@@ -152,6 +156,13 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
   const dir = path.join(baseDir, slug(servicio.id));
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const inicio = Date.now();
+  // Servicio con bloqueo conocido (p. ej. no adherido a la clave fiscal): se reporta, no se abre.
+  if (servicio.bloqueo && !runner) {
+    const msg = sanitizarTexto(servicio.bloqueo);
+    escribir(path.join(dir, 'bloqueo.txt'), msg);
+    log(`[${servicio.id}] sin-acceso (bloqueo): ${msg}`);
+    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado: 'sin-acceso', error: msg };
+  }
   const run = runner ?? (async () => {
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
     if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log);

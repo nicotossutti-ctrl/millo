@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros } from '../src/portal/extractor.js';
+import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto } from '../src/portal/extractor.js';
 import { toCsv } from '../src/csv.js';
 
 test('COLUMNAS_LIBRES arma el CSV a partir de headers y filas de la tabla scrapeada', () => {
@@ -66,6 +66,13 @@ test('decidirEstado distingue 0 filas CONFIRMADO (grilla vacía) de ausencia INC
   assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: true, rangoOk: null, gridPresente: true }), { estado: 'parcial', verificado: false, ceroConfirmado: false });
   // Servicio acumulado sin filtro: grilla vacía confirmada basta para el cero real.
   assert.deepEqual(decidirEstado({ filas: 0, conFiltroPeriodo: false, rangoOk: null, gridPresente: true }), { estado: 'sin-datos', verificado: false, ceroConfirmado: true });
+});
+
+test('elegirOpcionImpuesto saltea placeholders y toma el primer impuesto real', () => {
+  assert.deepEqual(elegirOpcionImpuesto(['Seleccioná un impuesto', 'IVA', 'Ganancias']), { index: 1, texto: 'IVA' });
+  assert.deepEqual(elegirOpcionImpuesto(['Todos', '----', 'Ganancias']), { index: 2, texto: 'Ganancias' });
+  assert.equal(elegirOpcionImpuesto(['Seleccioná', '']), null);
+  assert.equal(elegirOpcionImpuesto([]), null);
 });
 
 test('elegirTabla reconoce una grilla esperada vacía (encabezados, 0 filas) para confirmar el cero', () => {
