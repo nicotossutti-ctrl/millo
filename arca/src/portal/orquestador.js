@@ -60,7 +60,8 @@ export function clasificarRelevamiento(rel) {
  */
 async function correrGenerico(sesion, servicio, dir, periodo, log) {
   const pagina = await sesion.abrirServicio(servicio);
-  await pagina.waitForTimeout(2500);
+  // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
+  await pagina.waitForTimeout(3500);
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).
   // Puede terminar en una pestaña nueva: trabajamos sobre drill.pagina.

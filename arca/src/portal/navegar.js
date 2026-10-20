@@ -93,7 +93,7 @@ async function clickSiguiendoPestaña(pagina, loc) {
   const ctx = typeof pagina.context === 'function' ? pagina.context() : null;
   if (ctx && typeof ctx.waitForEvent === 'function') {
     const [nueva] = await Promise.all([
-      ctx.waitForEvent('page', { timeout: 8000 }).catch(() => null),
+      ctx.waitForEvent('page', { timeout: 12000 }).catch(() => null),
       loc.click().catch(() => {}),
     ]);
     if (nueva) {
@@ -143,8 +143,8 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
     }
     if (r.nueva) actual = r.nueva;
     pasos++;
-    // Tras navegar, damos tiempo a que la grilla aparezca (iframe/SPA).
-    señales = await esperarLista(relevarPagina, actual, expected, 4);
+    // Tras navegar, damos tiempo generoso a que la grilla aparezca (iframe/SPA Angular/EJ2).
+    señales = await esperarLista(relevarPagina, actual, expected, 6);
     if (señales.lista) return { lista: true, pasos, señales, pagina: actual };
   }
   return { lista: señales.lista, pasos, señales, pagina: actual, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };

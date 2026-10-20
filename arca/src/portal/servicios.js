@@ -32,9 +32,11 @@ export const SERVICIOS = [
   { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
     ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }] },
   // Mis Retenciones exige elegir un impuesto antes de Consultar (error real: "Seleccioná un impuesto").
+  // Mis Retenciones (mirequa-web): exige elegir un impuesto en el combo EJ2 #selectImpuestos
+  // (no es <select> nativo) antes de Consultar. La grilla de resultados es de componente.
   { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
     selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
-    requiereImpuesto: true, columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
+    requiereImpuesto: true, selectorImpuesto: '#selectImpuestos', columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
   // DDJJ y Pagos (Syncfusion EJ2): modal de novedades ("Entendido", puede o no estar) y tabs

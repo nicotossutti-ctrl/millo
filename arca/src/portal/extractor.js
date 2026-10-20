@@ -39,8 +39,30 @@ export function elegirOpcionImpuesto(opciones = []) {
   return null;
 }
 
-/** Selecciona un impuesto en el primer <select> visible cuyas opciones lo ofrezcan. Solo lectura. */
-async function seleccionarImpuesto(frame) {
+/**
+ * Selecciona un impuesto. Soporta dos formas:
+ *  1) Combo NO nativo (EJ2/Syncfusion) por selector confirmado del servicio (Mis Retenciones usa
+ *     #selectImpuestos): clic en el combo y elección de una opción real del popup (.e-list-item).
+ *  2) <select> nativo: elige la primera opción real. Solo lectura. Devuelve el impuesto elegido.
+ */
+async function seleccionarImpuesto(frame, servicio) {
+  if (servicio?.selectorImpuesto) {
+    const combo = frame.locator(servicio.selectorImpuesto).first();
+    if ((await combo.count().catch(() => 0)) && (await combo.isVisible().catch(() => false))) {
+      await combo.click().catch(() => {});
+      await frame.page().waitForTimeout(700).catch(() => {});
+      const opciones = frame.locator('.e-list-item, [role="option"], li[role="option"], .e-ddl-item');
+      const n = Math.min(await opciones.count().catch(() => 0), 40);
+      for (let i = 0; i < n; i++) {
+        const o = opciones.nth(i);
+        if (!(await o.isVisible().catch(() => false))) continue;
+        const t = ((await o.innerText().catch(() => '')) || '').trim();
+        if (!t || OPCION_PLACEHOLDER.test(norm(t))) continue;
+        await o.click().catch(() => {});
+        return t;
+      }
+    }
+  }
   const selects = frame.locator('select');
   const n = Math.min(await selects.count().catch(() => 0), 10);
   for (let i = 0; i < n; i++) {
@@ -161,8 +183,8 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log) {
         await fijar(frame, sel.fechaHasta, fechaArca(hasta));
         // Algunos servicios (Mis Retenciones) exigen elegir un impuesto antes de Consultar.
         if (servicio.requiereImpuesto) {
-          const imp = await seleccionarImpuesto(frame);
-          if (!imp) return { conFiltroPeriodo: true, error: 'requiere elegir un impuesto y no se encontró un desplegable de impuesto (puede ser un combo no nativo: revisar el diagnóstico de controles)' };
+          const imp = await seleccionarImpuesto(frame, servicio);
+          if (!imp) return { conFiltroPeriodo: true, error: 'requiere elegir un impuesto y no se encontró el desplegable (ni combo EJ2 ni <select>): revisar el diagnóstico de controles' };
           log(`  impuesto seleccionado: ${imp}`);
         }
         const btn = frame.locator(sel.consultar ?? 'button:has-text("Consultar"), button:has-text("Buscar")').first();

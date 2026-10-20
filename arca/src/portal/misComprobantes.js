@@ -140,6 +140,25 @@ export async function consultar(pagina, d, h, log = () => {}) {
   }
 }
 
+/**
+ * Espera a que los resultados de la consulta se estabilicen: la grilla de Mis Comprobantes
+ * (sobre todo Emitidos) carga async, así que leer enseguida daba "0 tablas" cuando en realidad
+ * había datos. Poll hasta ~16s: corta al ver filas, botón de exportación o un mensaje de "sin
+ * resultados". Devuelve el último relevamiento y su resumen.
+ */
+export async function esperarResultados(pagina, { intentos = 8, ms = 2000 } = {}) {
+  let rel, res;
+  for (let i = 0; i < intentos; i++) {
+    rel = await relevarPagina(pagina);
+    res = resumenResultados(rel);
+    const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
+    const hayMsg = res.mensajes.some((m) => /no se encontraron|sin resultados|no hay|no existen/i.test(m));
+    if (filas > 0 || res.exportacion.length || hayMsg) break;
+    await pagina.waitForTimeout(ms);
+  }
+  return { rel, res };
+}
+
 /** Total de comprobantes informado por ARCA, leído de la paginación ("... de N registros"). */
 export function totalInformado(res) {
   const aNum = (x) => Number(String(x).replace(/\./g, ''));
@@ -350,12 +369,12 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
   }
 
   const pagina = await irAPantalla(sesion, tipo, log);
-
+  try {
   for (const [d, h] of pendientes) {
     log(`Mis Comprobantes ${tipo} ${d} a ${h}`);
     await consultar(pagina, d, h, log);
-    const rel = await relevarPagina(pagina);
-    const res = resumenResultados(rel);
+    // La grilla de resultados carga async: esperamos a que se estabilice antes de leer.
+    const { rel, res } = await esperarResultados(pagina);
     const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
     log(`  resultados: ${res.tablasVisibles.length} tablas, ${filas} filas visibles, paginación ${res.paginacion.length ? JSON.stringify(res.paginacion[0]) : 'no detectada'}`);
     // Diagnóstico saneado de la pantalla de resultados, SIEMPRE: así Emitidos queda capturado
@@ -396,6 +415,10 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     if (ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), ok: true, archivo: path.basename(destino), filas: val.filas, informados, hash, csv: val.csv });
   }
   resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
-  if (pagina !== sesion.page) await pagina.close().catch(() => {});
   return resultado;
+  } finally {
+    // Cerramos la pestaña SIEMPRE, también si algo lanzó (antes el error de Emitidos la dejaba
+    // abierta y contaminaba la captura de los servicios siguientes).
+    if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  }
 }
