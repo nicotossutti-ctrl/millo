@@ -313,12 +313,23 @@ export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, er
 
 const slugImpuesto = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).toLowerCase();
 
+/** ¿La pantalla ya muestra un cartel de "sin resultados"? Para no esperar una grilla que no vendrá. */
+async function hayMensajeSinResultados(pagina) {
+  for (const frame of pagina.frames()) {
+    const loc = frame.locator(':text("No hay resultados"), :text("no se encontraron resultados"), :text("importe en cero"), :text("sin resultados")');
+    if ((await loc.count().catch(() => 0)) && (await loc.first().isVisible().catch(() => false))) return true;
+  }
+  return false;
+}
+
 /** Lee la grilla actual (espera a que aparezca, recorre la paginación y deduplica). Solo lectura. */
 async function leerGrilla(pagina, expected) {
-  // La grilla puede tardar (iframe/SPA/pestaña nueva): esperamos hasta ~9s a que aparezca.
+  // La grilla puede tardar (iframe/SPA/pestaña nueva): esperamos hasta ~9s a que aparezca, pero
+  // cortamos de inmediato si ARCA ya avisó "no hay resultados" (así no colgamos impuesto por impuesto).
   for (let i = 0; i < 6; i++) {
     const t = await scrapearFrames(pagina, expected);
     if (t && (t.rows.length > 0 || (expected.length && (t.coincideCols ?? 0) > 0))) break;
+    if (await hayMensajeSinResultados(pagina)) break;
     await pagina.waitForTimeout(1500);
   }
   let headers = null; const filas = []; const vistas = new Set();
