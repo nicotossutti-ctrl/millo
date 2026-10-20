@@ -200,14 +200,27 @@ export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, er
   return { estado: 'extraido', verificado: false };
 }
 
-export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'out/datos', log = () => {} }) {
+/** Abre el servicio, extrae su grilla y cierra la página. Envuelve a extraerTablaEnPagina. */
+export async function extraerTabla(sesion, servicio, opts = {}) {
+  const pagina = await sesion.abrirServicio(servicio);
+  await pagina.waitForTimeout(2500);
+  try {
+    return await extraerTablaEnPagina(pagina, servicio, opts);
+  } finally {
+    if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  }
+}
+
+/**
+ * Núcleo del extractor sobre una página YA abierta (no la abre ni la cierra: el que llama es
+ * dueño de la página). Lo usa tanto extraerTabla como el drill de hubs, que llega a la grilla
+ * navegando en solo lectura y después extrae acá mismo, sin reabrir el servicio.
+ */
+export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, outDir = 'out/datos', log = () => {} }) {
   const dir = path.join(outDir, servicio.id);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   const resultado = { id: servicio.id, archivos: [], filas: 0, paginas: 0, informados: null, duplicadosEnTabla: 0, conFiltroPeriodo: false, rangoAplicado: null, estado: 'sin-datos', verificado: false };
-
-  const pagina = await sesion.abrirServicio(servicio);
-  await pagina.waitForTimeout(2500);
 
   const filtro = await completarFiltros(pagina, desde, hasta, servicio, log);
   resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
@@ -222,7 +235,6 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
     resultado.verificado = d0.verificado;
     resultado.motivo = filtro.error;
     log(`  ${servicio.id}: parcial · ${filtro.error}`);
-    if (pagina !== sesion.page) await pagina.close().catch(() => {});
     return resultado;
   }
 
@@ -276,6 +288,5 @@ export async function extraerTabla(sesion, servicio, { desde, hasta, outDir = 'o
       : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
   }
   log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}${resultado.motivo ? ` · ${resultado.motivo}` : ''}`);
-  if (pagina !== sesion.page) await pagina.close().catch(() => {});
   return resultado;
 }

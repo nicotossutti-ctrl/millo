@@ -8,7 +8,8 @@ import path from 'node:path';
 import { relevarPagina, resumenRelevamiento } from './relevar.js';
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
-import { extraerTabla } from './extractor.js';
+import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
+import { drillHaciaGrilla } from './navegar.js';
 import { slug } from './servicios.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
@@ -52,18 +53,54 @@ export function clasificarRelevamiento(rel) {
   };
 }
 
-/** Releva un servicio genérico: lo abre, releva la pantalla y clasifica. No descarga. */
-async function correrGenerico(sesion, servicio, dir, log) {
+/**
+ * Servicio genérico / hub: lo abre, lo atraviesa en SOLO LECTURA hasta una grilla o sus filtros
+ * (drill), y si llega a la grilla intenta extraerla acá mismo. Siempre guarda el relevamiento
+ * saneado del nivel alcanzado para escribir el extractor real si todavía no se pudo.
+ */
+async function correrGenerico(sesion, servicio, dir, periodo, log) {
   const pagina = await sesion.abrirServicio(servicio);
   await pagina.waitForTimeout(2500);
+  const expected = (servicio.columnasEsperadas ?? []).map(norm);
+  const drill = servicio.drill === false
+    ? { lista: false, niveles: 0, visitados: [], señales: {} }
+    : await drillHaciaGrilla(pagina, { expected, log });
+
+  // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en la misma página.
+  let extraccion = null;
+  if (drill.lista && periodo) {
+    const outBase = sesion?.cfg?.outDir ?? 'out';
+    extraccion = await extraerTablaEnPagina(pagina, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log })
+      .catch((e) => ({ error: sanitizarTexto(e.message) }));
+    escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
+  }
+
   const rel = await relevarPagina(pagina);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
   escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
   const clas = clasificarRelevamiento(rel);
-  const lineas = [...resumenRelevamiento(rel), '', '== Clasificación', JSON.stringify(clas, null, 2)];
+  const lineas = [...resumenRelevamiento(rel), '',
+    `== Drill (solo lectura): niveles ${drill.niveles}, lista=${drill.lista}, visitados ${JSON.stringify(drill.visitados)}`,
+    '', '== Clasificación', JSON.stringify(clas, null, 2)];
   escribir(path.join(dir, 'resumen.txt'), lineas.join('\n'));
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
-  return { ...clas, url: rel.url };
+
+  const drillInfo = { niveles: drill.niveles, visitados: drill.visitados, lista: drill.lista };
+  // Si se extrajeron filas reales, el estado lo dicta el extractor (descargado sin cotejo).
+  if (extraccion && !extraccion.error && extraccion.filas > 0) {
+    return {
+      estado: 'descargado', archivos: extraccion.archivos, filas: extraccion.filas, motivo: extraccion.motivo, drill: drillInfo,
+      validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: extraccion.filas, informados: extraccion.informados,
+        ok: extraccion.verificado, cantidadVerificada: extraccion.coincideInformado === true, estadoExtractor: extraccion.estado,
+        conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, paginas: extraccion.paginas }],
+    };
+  }
+  // No se extrajo: queda el relevamiento. Explicitamos por qué (acceso ≠ descarga).
+  const motivo = extraccion?.error
+    ? `grilla alcanzada pero la extracción falló: ${extraccion.error}`
+    : drill.lista ? 'grilla/filtros alcanzados pero sin filas: falta confirmar columnas/consulta'
+    : `hub no atravesado en lectura (niveles ${drill.niveles}); estructura capturada para escribir el extractor`;
+  return { ...clas, url: rel.url, drill: drillInfo, motivo };
 }
 
 /** Extractor de tabla (solo lectura): Mis Retenciones, Cuentas Tributarias, Mis Facilidades. */
@@ -117,7 +154,7 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
   const run = runner ?? (async () => {
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
     if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log);
-    return correrGenerico(sesion, servicio, dir, log);
+    return correrGenerico(sesion, servicio, dir, periodo, log);
   });
   try {
     log(`[${servicio.id}] abriendo ${servicio.nombre}`);

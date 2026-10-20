@@ -89,15 +89,38 @@ Terceros como Afip SDK no tienen un cuarto mecanismo: usan el 2 con tu clave en 
 - Modo diagnóstico: entra a cada servicio y guarda captura, HTML saneado (sin scripts, valores,
   tokens, CUIT ni importes), inventario de formularios y rutas de red sin parámetros, todo con
   permisos 0600 y fuera de git, para escribir los selectores exactos sin adivinar.
-- Extractor de Mis Comprobantes emitidos y recibidos (fuentes 1b y 2), con selectores
-  provisorios hasta el diagnóstico.
+- Extractor de Mis Comprobantes emitidos y recibidos (fuentes 1b y 2). Recibidos de 09/2026
+  descargado y validado (62/62) y con reutilización por manifiesto.
+- Extractor de tabla de solo lectura (Mis Retenciones, Cuentas Tributarias dentro de iframe,
+  Mis Facilidades): completa filtros confirmados, elige la grilla por encabezados esperados,
+  recorre la paginación y diferencia estados (validado / extraído / parcial / sin-datos). Para
+  0 filas distingue el **cero confirmado** (grilla presente y vacía) de la **ausencia incierta**
+  (no se encontró la grilla): nunca muestra un cero como certeza sin confirmarlo.
+- Navegación de hubs en solo lectura (`navegar.js`): Portal IVA, Presentación de DDJJ y Pagos,
+  SIFERE, Ganancias y Bienes Personales son pantallas con botones INGRESAR/CONSULTAR. El drill
+  los atraviesa haciendo clic solo en controles de lectura (consultar/ingresar/ver/continuar…,
+  nunca trámite ni pago) hasta llegar a una grilla o sus filtros; si llega, extrae ahí mismo, y
+  si no, guarda la estructura saneada para escribir el extractor exacto. Así una sola corrida
+  integral avanza todas las fuentes sin pedir pruebas pantalla por pantalla.
 
-**Orden de implementación, de mayor a menor valor para la estimación mensual**
+**Estado real por fuente (acceso ≠ descarga ≠ validación)**
 
-1. Diagnóstico de los diez servicios (una corrida en tu máquina, con sesión visible).
-2. Mis Comprobantes recibidos y emitidos: confirmar selectores, validar un mes contra WSFE.
-3. Mis Retenciones y Cuentas Tributarias: pagos a cuenta, deuda, saldos.
-4. Portal IVA: DDJJ mensuales.
-5. SIFERE Web: CM03, CM05 y deducciones.
-6. CCMA, Presentación de DDJJ y Pagos (Ganancias y Bienes Personales históricos), Mis Facilidades.
-7. Web services de padrón, constatación y ventanilla con el certificado.
+- **Descargado y validado**: Facturas recibidas (fuente 2).
+- **Extractor de tabla activo, a validar en corrida**: Mis Retenciones (11), Cuentas
+  Tributarias (12), Mis Facilidades (15).
+- **Hub con drill de lectura, pendiente de confirmar la grilla real**: Portal IVA (3),
+  DDJJ y Pagos (10), Ganancias (8), Bienes Personales (9), SIFERE/CM03/CM05/SIRCREB (5-7),
+  CCMA/Autónomos (13), Ventanilla (16).
+- **Facturas emitidas (1b)**: la pantalla de resultados da 0 tablas; se captura diagnóstico
+  saneado en cada corrida, sin asumir cero ventas.
+- **Sin web service para el dato**: DDJJ, pagos, retenciones sufridas, cuenta tributaria y
+  comprobantes recibidos solo salen por portal (mecanismo 2).
+
+**Orden de implementación, de mayor a menor valor**
+
+1. Una corrida integral en tu máquina (sesión visible): extrae lo que ya tiene extractor y
+   captura la estructura de cada hub que el drill atraviese.
+2. Con esa estructura: confirmar columnas/selectores de Portal IVA (DDJJ), DDJJ y Pagos
+   (presentaciones y VEP pagados), SIFERE (CM03, CM05, SIRCREB) y Ganancias/Bienes Personales.
+3. Emitidos: resolver por qué la grilla da 0 tablas a partir del diagnóstico saneado.
+4. Web services de padrón, constatación y ventanilla con el certificado.
