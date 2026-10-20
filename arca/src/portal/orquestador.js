@@ -8,6 +8,7 @@ import path from 'node:path';
 import { relevarPagina, resumenRelevamiento } from './relevar.js';
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
+import { extraerTabla } from './extractor.js';
 import { slug } from './servicios.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
@@ -89,6 +90,7 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
   const inicio = Date.now();
   const run = runner ?? (async () => {
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
+    if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log);
     return correrGenerico(sesion, servicio, dir, log);
   });
   try {
