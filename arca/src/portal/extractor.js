@@ -45,27 +45,50 @@ export function elegirOpcionImpuesto(opciones = []) {
  *     #selectImpuestos): clic en el combo y elección de una opción real del popup (.e-list-item).
  *  2) <select> nativo: elige la primera opción real. Solo lectura. Devuelve el impuesto elegido.
  */
-async function seleccionarImpuesto(frame, servicio) {
+const esGrupoImpuesto = (t) => /^(impositiv|aduaner|recursos de la seg|seguridad social)/i.test(norm(t));
+/** Abre el combo EJ2 y devuelve [{ i, t }] con las opciones visibles. */
+async function abrirComboImpuesto(frame, selector) {
+  const combo = frame.locator(selector).first();
+  if (!(await combo.count().catch(() => 0)) || !(await combo.isVisible().catch(() => false))) return null;
+  await combo.click().catch(() => {});
+  await frame.page().waitForTimeout(700).catch(() => {});
+  const opciones = frame.locator('.e-list-item, [role="option"], li[role="option"], .e-ddl-item');
+  const n = Math.min(await opciones.count().catch(() => 0), 80);
+  const items = [];
+  for (let i = 0; i < n; i++) {
+    const o = opciones.nth(i);
+    if (!(await o.isVisible().catch(() => false))) continue;
+    const t = ((await o.innerText().catch(() => '')) || '').trim();
+    if (t) items.push({ i, t });
+  }
+  return { opciones, items };
+}
+
+/** Lista los impuestos REALES (código "NNN - ...") del combo, en cualquier frame. Solo lectura. */
+export async function listarImpuestos(pagina, servicio) {
+  if (!servicio?.selectorImpuesto) return [];
+  for (const frame of pagina.frames()) {
+    const abierto = await abrirComboImpuesto(frame, servicio.selectorImpuesto);
+    if (!abierto) continue;
+    const labels = abierto.items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupoImpuesto(x.t)).map((x) => x.t);
+    await frame.page().keyboard.press('Escape').catch(() => {});
+    if (labels.length) return labels;
+  }
+  return [];
+}
+
+async function seleccionarImpuesto(frame, servicio, impuestoLabel = null) {
   if (servicio?.selectorImpuesto) {
-    const combo = frame.locator(servicio.selectorImpuesto).first();
-    if ((await combo.count().catch(() => 0)) && (await combo.isVisible().catch(() => false))) {
-      await combo.click().catch(() => {});
-      await frame.page().waitForTimeout(700).catch(() => {});
-      const opciones = frame.locator('.e-list-item, [role="option"], li[role="option"], .e-ddl-item');
-      const n = Math.min(await opciones.count().catch(() => 0), 60);
-      // Recolectamos los textos visibles y elegimos un IMPUESTO REAL (código "NNN - ..."), no un
-      // encabezado de grupo ("Impositivas", "Aduaneras", "Recursos de la Seguridad Social").
-      const items = [];
-      for (let i = 0; i < n; i++) {
-        const o = opciones.nth(i);
-        if (!(await o.isVisible().catch(() => false))) continue;
-        const t = ((await o.innerText().catch(() => '')) || '').trim();
-        if (t) items.push({ i, t });
-      }
-      const esGrupo = (t) => /^(impositiv|aduaner|recursos de la seg|seguridad social)/i.test(norm(t));
-      const reales = items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupo(x.t));
-      const elegido = reales.find((x) => /\biva\b/i.test(x.t)) || reales.find((x) => /ganancia/i.test(x.t)) || reales[0]
-        || items.find((x) => !OPCION_PLACEHOLDER.test(norm(x.t)) && !esGrupo(x.t));
+    const abierto = await abrirComboImpuesto(frame, servicio.selectorImpuesto);
+    if (abierto) {
+      const { opciones, items } = abierto;
+      // Con un impuesto pedido, elegimos exactamente ese; si no, un impuesto REAL (código "NNN - "),
+      // nunca un encabezado de grupo ("Impositivas", "Aduaneras", "Recursos de la Seguridad Social").
+      const reales = items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupoImpuesto(x.t));
+      const elegido = impuestoLabel
+        ? items.find((x) => norm(x.t) === norm(impuestoLabel)) || items.find((x) => norm(x.t).includes(norm(impuestoLabel)))
+        : (reales.find((x) => /\biva\b/i.test(x.t)) || reales.find((x) => /ganancia/i.test(x.t)) || reales[0]
+          || items.find((x) => !OPCION_PLACEHOLDER.test(norm(x.t)) && !esGrupoImpuesto(x.t)));
       if (elegido) { await opciones.nth(elegido.i).click().catch(() => {}); return elegido.t; }
     }
   }
@@ -165,7 +188,7 @@ async function botonSiguiente(pagina) {
  * si un filtro o el botón Consultar fallan, devuelve { error } para que el extractor no siga
  * con datos potencialmente viejos. Devuelve rangoOk solo si el campo tomó realmente la fecha.
  */
-export async function completarFiltros(pagina, desde, hasta, servicio, log) {
+export async function completarFiltros(pagina, desde, hasta, servicio, log, impuesto = null) {
   const sel = servicio.selectores;
   // Fija una fecha y verifica que el campo la haya tomado. Lanza si falla; false si el
   // selector no está en este frame (para probar el siguiente).
@@ -189,8 +212,8 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log) {
         await fijar(frame, sel.fechaHasta, fechaArca(hasta));
         // Algunos servicios (Mis Retenciones) exigen elegir un impuesto antes de Consultar.
         if (servicio.requiereImpuesto) {
-          const imp = await seleccionarImpuesto(frame, servicio);
-          if (!imp) return { conFiltroPeriodo: true, error: 'requiere elegir un impuesto y no se encontró el desplegable (ni combo EJ2 ni <select>): revisar el diagnóstico de controles' };
+          const imp = await seleccionarImpuesto(frame, servicio, impuesto);
+          if (!imp) return { conFiltroPeriodo: true, error: `requiere elegir un impuesto y no se pudo${impuesto ? ` (buscado "${impuesto}")` : ''}: revisar el combo` };
           log(`  impuesto seleccionado: ${imp}`);
         }
         const btn = frame.locator(sel.consultar ?? 'button:has-text("Consultar"), button:has-text("Buscar")').first();
@@ -272,6 +295,39 @@ export function decidirEstado({ filas, informados, conFiltroPeriodo, rangoOk, er
   return { estado: 'extraido', verificado: false };
 }
 
+const slugImpuesto = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).toLowerCase();
+
+/** Lee la grilla actual (espera a que aparezca, recorre la paginación y deduplica). Solo lectura. */
+async function leerGrilla(pagina, expected) {
+  // La grilla puede tardar (iframe/SPA/pestaña nueva): esperamos hasta ~9s a que aparezca.
+  for (let i = 0; i < 6; i++) {
+    const t = await scrapearFrames(pagina, expected);
+    if (t && (t.rows.length > 0 || (expected.length && (t.coincideCols ?? 0) > 0))) break;
+    await pagina.waitForTimeout(1500);
+  }
+  let headers = null; const filas = []; const vistas = new Set();
+  let gridPresente = false; let paginas = 0; let duplicadosEnTabla = 0;
+  for (let p = 0; p < 100; p++) {
+    const tabla = await scrapearFrames(pagina, expected);
+    if (!tabla) break;
+    if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
+    if (!headers) headers = tabla.headers;
+    let nuevas = 0;
+    for (const r of tabla.rows) {
+      const firma = r.join('|');
+      if (vistas.has(firma)) { duplicadosEnTabla++; continue; }
+      vistas.add(firma); filas.push(r); nuevas++;
+    }
+    paginas = p + 1;
+    if (!nuevas) break; // página repetida: corte verificable
+    const sig = await botonSiguiente(pagina);
+    if (!sig) break;
+    await sig.click().catch(() => {});
+    await pagina.waitForTimeout(1500);
+  }
+  return { headers, filas, gridPresente, paginas, duplicadosEnTabla };
+}
+
 /** Abre el servicio, extrae su grilla y cierra la página. Envuelve a extraerTablaEnPagina. */
 export async function extraerTabla(sesion, servicio, opts = {}) {
   const pagina = await sesion.abrirServicio(servicio);
@@ -297,87 +353,72 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   const resultado = { id: servicio.id, archivos: [], filas: 0, paginas: 0, informados: null, duplicadosEnTabla: 0, conFiltroPeriodo: false, rangoAplicado: null, estado: 'sin-datos', verificado: false };
 
-  const filtro = await completarFiltros(pagina, desde, hasta, servicio, log);
-  resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
-  resultado.rangoAplicado = filtro.rangoAplicado;
-
-  // Si la consulta con selectores falló, no seguimos con datos potencialmente viejos.
-  if (filtro.error) {
-    const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
-    // Guardamos la estructura COMPLETA (inputs, selects con sus opciones, botones): sirve para ver
-    // controles no nativos, como el combo de impuesto de Mis Retenciones.
-    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify({ error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
-    const d0 = decidirEstado({ filas: 0, error: filtro.error });
-    resultado.estado = d0.estado;
-    resultado.verificado = d0.verificado;
-    resultado.motivo = filtro.error;
-    log(`  ${servicio.id}: parcial · ${filtro.error}`);
-    return resultado;
-  }
-
-  // La grilla puede tardar en aparecer (iframe que carga tarde, SPA, pestaña recién abierta).
-  // Esperamos hasta ~9s a que aparezca antes de dar 0 filas: así no regresionamos servicios que
-  // ya funcionaban (p. ej. Cuentas Tributarias dentro de un iframe) por una simple carrera de carga.
-  for (let i = 0; i < 6; i++) {
-    const t = await scrapearFrames(pagina, expected);
-    const hayAlgo = t && (t.rows.length > 0 || (expected.length && (t.coincideCols ?? 0) > 0));
-    if (hayAlgo) break;
-    await pagina.waitForTimeout(1500);
-  }
-
-  let headers = null;
-  const filas = [];
-  const vistas = new Set();
-  let gridPresente = false;
-  for (let p = 0; p < 100; p++) {
-    const tabla = await scrapearFrames(pagina, expected);
-    if (!tabla) break;
-    // En la primera vuelta decidimos si la grilla esperada está realmente presente: con
-    // encabezados esperados exige coincidencia; sin ellos, basta con haber encontrado una grilla.
-    if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
-    if (!headers) headers = tabla.headers;
-    let nuevas = 0;
-    for (const r of tabla.rows) {
-      const firma = r.join('|');
-      if (vistas.has(firma)) { resultado.duplicadosEnTabla++; continue; }
-      vistas.add(firma); filas.push(r); nuevas++;
+  // Impuestos a consultar: Retenciones itera TODOS los impuestos reales del combo y guarda cada
+  // uno por separado; el resto de los servicios hace una sola pasada (impuesto = null).
+  let impuestos = [null];
+  if (servicio.requiereImpuesto && servicio.selectorImpuesto) {
+    impuestos = await listarImpuestos(pagina, servicio);
+    if (!impuestos.length) {
+      const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
+      escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify({ error: 'no se pudo listar el combo de impuesto', estructura: rel0 }, null, 2));
+      resultado.estado = 'parcial';
+      resultado.motivo = `requiere elegir un impuesto y no se pudo abrir/leer el combo (${servicio.selectorImpuesto})`;
+      log(`  ${servicio.id}: parcial · combo de impuesto no disponible`);
+      return resultado;
     }
-    resultado.paginas = p + 1;
-    if (!nuevas) break; // página repetida: corte verificable
-    const sig = await botonSiguiente(pagina);
-    if (!sig) break;
-    await sig.click().catch(() => {});
-    await pagina.waitForTimeout(1500);
+    log(`  ${servicio.id}: ${impuestos.length} impuesto(s) a consultar`);
   }
 
-  const rel = await relevarPagina(pagina);
-  const res = resumenResultados(rel);
-  resultado.informados = totalInformado(res);
-  // Mensajes de la propia pantalla (errores/avisos), útiles cuando no hay filas.
-  const mensajesArca = (res.mensajes ?? []).map((m) => String(m).trim()).filter(Boolean);
+  let gridPresente = false; let rangoOk = null; let errorUlt = null; let headersGuardados = null;
+  let informadosTot = null; const mensajes = new Set(); const porImpuesto = [];
 
-  if (headers && filas.length) {
-    const file = path.join(dir, `${servicio.id}-${desde}-${hasta}.csv`);
-    escribirProtegido(file, toCsv(filas, COLUMNAS_LIBRES(headers)));
-    resultado.archivos.push(path.basename(file));
-    resultado.filas = filas.length;
-    resultado.columnas = headers;
-    resultado.coincideInformado = resultado.informados == null ? null : filas.length === resultado.informados;
-  } else {
-    escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
+  for (const imp of impuestos) {
+    const filtro = await completarFiltros(pagina, desde, hasta, servicio, log, imp);
+    resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
+    if (filtro.rangoAplicado) resultado.rangoAplicado = filtro.rangoAplicado;
+    if (filtro.rangoOk === true) rangoOk = true; else if (rangoOk == null) rangoOk = filtro.rangoOk;
+    if (filtro.error) {
+      errorUlt = filtro.error;
+      const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
+      escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}${imp ? '-' + slugImpuesto(imp) : ''}.json`), JSON.stringify({ impuesto: imp, error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
+      continue;
+    }
+    const g = await leerGrilla(pagina, expected);
+    if (g.gridPresente) gridPresente = true;
+    resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
+    const res = resumenResultados(await relevarPagina(pagina));
+    for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
+    const informados = totalInformado(res);
+    if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
+    if (g.headers && g.filas.length) {
+      if (!headersGuardados) headersGuardados = g.headers;
+      const suf = imp ? `-${slugImpuesto(imp)}` : '';
+      const file = path.join(dir, `${servicio.id}${suf}-${desde}-${hasta}.csv`);
+      escribirProtegido(file, toCsv(g.filas, COLUMNAS_LIBRES(g.headers)));
+      resultado.archivos.push(path.basename(file));
+      resultado.filas += g.filas.length;
+      porImpuesto.push({ impuesto: imp, filas: g.filas.length, informados });
+    } else if (impuestos.length === 1) {
+      escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
+    }
   }
+
+  resultado.informados = informadosTot;
   resultado.gridPresente = gridPresente;
-  const d = decidirEstado({ filas: resultado.filas, informados: resultado.informados, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk: filtro.rangoOk, error: filtro.error, gridPresente });
+  if (porImpuesto.length > 1) resultado.porImpuesto = porImpuesto;
+  if (headersGuardados) resultado.columnas = headersGuardados;
+  resultado.coincideInformado = informadosTot == null ? null : resultado.filas === informadosTot;
+  const d = decidirEstado({ filas: resultado.filas, informados: informadosTot, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk, error: resultado.filas ? null : errorUlt, gridPresente });
   resultado.estado = d.estado;
   resultado.verificado = d.verificado;
   if (d.ceroConfirmado != null) resultado.ceroConfirmado = d.ceroConfirmado;
-  // 0 filas: dejar explícito si es un cero confirmado o una ausencia incierta (no afirmar "no hay").
   if (resultado.filas === 0) {
-    resultado.motivo = d.ceroConfirmado
-      ? 'grilla presente y vacía: 0 filas confirmado para el rango'
-      : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
-    // Si la pantalla mostró un mensaje propio (ej. "Seleccioná un impuesto"), lo exponemos.
-    if (mensajesArca.length) { resultado.mensajes = mensajesArca; resultado.motivo += ` · pantalla: ${mensajesArca.join(' / ')}`; }
+    resultado.motivo = errorUlt
+      ? errorUlt
+      : d.ceroConfirmado
+        ? 'grilla presente y vacía: 0 filas confirmado para el rango'
+        : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
+    if (mensajes.size) { resultado.mensajes = [...mensajes]; resultado.motivo += ` · pantalla: ${[...mensajes].join(' / ')}`; }
   }
   log(`  ${servicio.id}: ${resultado.estado} · ${resultado.filas} filas / informados ${resultado.informados ?? '?'} · ${resultado.paginas} páginas${resultado.conFiltroPeriodo ? '' : ' · sin filtro de período (datos acumulados)'}${resultado.motivo ? ` · ${resultado.motivo}` : ''}`);
   return resultado;

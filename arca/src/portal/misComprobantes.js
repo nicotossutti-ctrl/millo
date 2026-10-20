@@ -260,26 +260,34 @@ export function validarContenidoCsv(texto, desde, hasta) {
   const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
   const idCols = cab.map((c, i) => (/numero|nro|punto de venta|tipo|emisor|cod\.? aut/.test(norm(c)) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
+  const conFecha = iFecha >= 0;
+  const datos = lineas.slice(1);
   let dentro = 0; let fuera = 0;
   const claves = new Map();
   let duplicados = 0;
-  for (const l of lineas.slice(1)) {
+  for (const l of datos) {
     const celdas = l.split(sep);
-    const f = iFecha >= 0 ? aYmd(celdas[iFecha]) : null;
-    if (f) { if (f >= d && f <= h) dentro++; else fuera++; }
+    const f = conFecha ? aYmd(celdas[iFecha]) : null;
+    const enRango = conFecha ? !!(f && f >= d && f <= h) : true;
+    if (conFecha) { if (enRango) dentro++; else fuera++; }
+    // Deduplicamos SOLO lo que cuenta como del período: un export de todo el historial (p. ej.
+    // Emitidos devuelve 7205 filas) no debe generar falsos duplicados entre períodos distintos.
+    if (!enRango) continue;
     const clave = idCols.length ? idCols.map((i) => (celdas[i] ?? '').trim()).join('|') : l.trim();
     if (claves.has(clave)) duplicados++; else claves.set(clave, true);
   }
-  const filas = lineas.length - 1;
+  // Las filas del PERÍODO son las que están en rango (cuando hay columna de fecha). Las fuera de
+  // rango no son un error: son otros períodos del mismo archivo. El original se conserva igual.
+  const filas = conFecha ? dentro : datos.length;
   return {
-    ok: iFecha >= 0 && dentro > 0 && fuera === 0 && duplicados === 0,
-    filas, columnas: cab.length, separador: sep,
-    columnaFecha: iFecha >= 0 ? cab[iFecha] : null,
-    muestraFecha: iFecha >= 0 && lineas[1] ? (lineas[1].split(sep)[iFecha] ?? '').trim() : null,
+    ok: conFecha && dentro > 0 && duplicados === 0,
+    filas, filasTotales: datos.length, columnas: cab.length, separador: sep,
+    columnaFecha: conFecha ? cab[iFecha] : null,
+    muestraFecha: conFecha && lineas[1] ? (lineas[1].split(sep)[iFecha] ?? '').trim() : null,
     dentroDelRango: dentro, fueraDelRango: fuera,
     duplicados, claveDuplicados: idCols.length ? idCols.map((i) => cab[i]) : ['línea completa'],
     encabezados: cab,
-    motivo: iFecha < 0 ? 'no se encontró columna de fecha' : fuera > 0 ? `${fuera} fuera de rango` : duplicados ? `${duplicados} duplicados` : dentro === 0 ? 'ninguna fila con fecha válida' : null,
+    motivo: !conFecha ? 'no se encontró columna de fecha' : dentro === 0 ? 'ninguna fila con fecha válida en el período' : duplicados ? `${duplicados} duplicados en el período (clave tipo+punto de venta+número)` : null,
   };
 }
 

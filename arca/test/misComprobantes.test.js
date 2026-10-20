@@ -70,6 +70,23 @@ test('validarContenidoCsv detecta duplicados por comprobante y fechas fuera de r
   assert.equal(fuera.fueraDelRango, 1);
 });
 
+test('validarContenidoCsv valida solo el período aunque el CSV traiga todo el historial (caso Emitidos)', async () => {
+  const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  const cab = 'Fecha de Emisión;Tipo de Comprobante;Punto de Venta;Número Desde;Imp. Total';
+  // 2 de septiembre (en rango) + 3 de otros meses (historial): debe contar 2 y no marcar duplicados.
+  const texto = `${cab}\n` + [
+    '05/09/2026;1;1;10;100,00', '18/09/2026;1;1;11;200,00',
+    '05/01/2025;1;1;10;100,00', '05/02/2025;1;1;11;200,00', '09/09/2025;1;2;3;50,00',
+  ].join('\n');
+  const v = validarContenidoCsv(texto, '2026-09-01', '2026-09-30');
+  assert.equal(v.ok, true, 'el subconjunto de septiembre es válido');
+  assert.equal(v.filas, 2, 'cuenta solo las filas del período');
+  assert.equal(v.filasTotales, 5, 'informa el total del archivo');
+  assert.equal(v.dentroDelRango, 2);
+  assert.equal(v.fueraDelRango, 3);
+  assert.equal(v.duplicados, 0, 'no hay falsos duplicados entre períodos');
+});
+
 test('validarArchivo procesa un ZIP con CSV adentro y extrae el CSV', async () => {
   const { validarArchivo } = await import('../src/portal/misComprobantes.js');
   const { armarZip } = await import('./zip.test.js');

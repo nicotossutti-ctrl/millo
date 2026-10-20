@@ -39,6 +39,18 @@ export const SERVICIOS = [
     requiereImpuesto: true, selectorImpuesto: '#selectImpuestos', columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
+  // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte): su menú de "Consultas"
+  // tiene enlaces explícitos (vistos en el diagnóstico) a DJ presentadas, Pagos, Cuenta Corriente
+  // y Compensaciones. Pueden dar DDJJ y pagos reales SIN depender de los portales Angular. Cada
+  // uno abre Cuentas Tributarias y navega a esa sección en SOLO LECTURA; la grilla se extrae ahí.
+  { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Declaraciones Juradas (DJ)' }] },
+  { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Pagos' }] },
+  { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Cuenta Corriente' }] },
+  { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
   // DDJJ y Pagos (Syncfusion EJ2): modal de novedades ("Entendido", puede o no estar) y tabs
   // "Presentaciones"/"Pagos". La tab no es un control estándar; la dejamos opcional y confiamos en
   // que la grilla de componente aparezca (la lee el extractor de grillas e-grid/role=grid).
