@@ -70,6 +70,18 @@ test('validarContenidoCsv detecta duplicados por comprobante y fechas fuera de r
   assert.equal(fuera.fueraDelRango, 1);
 });
 
+test('validarContenidoCsv salta una línea de título antes del encabezado (caso Emitidos)', async () => {
+  const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  // Primera línea = título; la segunda es el encabezado real con "Fecha".
+  const texto = 'Comprobantes emitidos (montos expresados en pesos)\n'
+    + 'Fecha de Emisión;Tipo de Comprobante;Punto de Venta;Número Desde;Imp. Total\n'
+    + '05/09/2026;1;1;10;100,00\n18/09/2026;1;1;11;200,00';
+  const v = validarContenidoCsv(texto, '2026-09-01', '2026-09-30');
+  assert.equal(v.ok, true, 'detecta el encabezado real y valida el período');
+  assert.equal(v.filas, 2);
+  assert.equal(v.columnaFecha, 'Fecha de Emisión');
+});
+
 test('validarContenidoCsv valida solo el período aunque el CSV traiga todo el historial (caso Emitidos)', async () => {
   const { validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
   const cab = 'Fecha de Emisión;Tipo de Comprobante;Punto de Venta;Número Desde;Imp. Total';

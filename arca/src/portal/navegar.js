@@ -63,7 +63,12 @@ async function ubicarPaso(pagina, paso) {
       if (await l.count().catch(() => 0)) loc = l.first();
     } else if (paso.texto) {
       const exacto = new RegExp(`^\\s*${escapeRegex(paso.texto)}\\s*$`, 'i');
-      const l = frame.locator('a, button, [role=button], [role=menuitem], [role=tab], [role=option], li').filter({ hasText: exacto });
+      let l = frame.locator('a, button, [role=button], [role=menuitem], [role=tab], [role=option], li').filter({ hasText: exacto });
+      if (!(await l.count().catch(() => 0)) && typeof frame.getByText === 'function') {
+        // Fallback: tarjetas/paneles (divs) con ese texto exacto (DDJJ "Presentaciones",
+        // Ganancias "Declaración Jurada"): no son <button>/<a> pero son clickeables.
+        l = frame.getByText(paso.texto, { exact: true });
+      }
       if (await l.count().catch(() => 0)) loc = l.first();
     }
     if (loc && (await loc.isVisible().catch(() => false))) return loc;
@@ -131,9 +136,14 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
   const relevarPagina = relevar ?? (await import('./relevar.js')).relevarPagina;
   let actual = pagina;
   let señales = await esperarLista(relevarPagina, actual, expected, 1);
-  if (señales.lista) return { lista: true, pasos: 0, señales, pagina: actual };
-  if (!ruta.length) return { lista: false, pasos: 0, señales, pagina: actual, motivo: 'sin ruta de navegación confirmada' };
-
+  // Sin ruta: si ya hay grilla, listo; si no, no adivinamos.
+  if (!ruta.length) {
+    return señales.lista
+      ? { lista: true, pasos: 0, señales, pagina: actual }
+      : { lista: false, pasos: 0, señales, pagina: actual, motivo: 'sin ruta de navegación confirmada' };
+  }
+  // Con ruta: la ejecutamos SIEMPRE. La grilla inicial puede NO ser la buscada (p. ej. la pestaña
+  // Vencimientos de Cuentas Tributarias no es DJ/Pagos/Cuenta Corriente).
   let pasos = 0;
   for (const paso of ruta) {
     const r = await ejecutarPaso(actual, paso, log);

@@ -64,17 +64,33 @@ async function abrirComboImpuesto(frame, selector) {
   return { opciones, items };
 }
 
-/** Lista los impuestos REALES (código "NNN - ...") del combo, en cualquier frame. Solo lectura. */
+/** Lista los impuestos REALES (código "NNN - ...") del combo, en cualquier frame. Solo lectura.
+ * Si el servicio define `impuestosRelevantes` (regex), filtra a esos (IVA, Ganancias, etc.). */
 export async function listarImpuestos(pagina, servicio) {
   if (!servicio?.selectorImpuesto) return [];
   for (const frame of pagina.frames()) {
     const abierto = await abrirComboImpuesto(frame, servicio.selectorImpuesto);
     if (!abierto) continue;
-    const labels = abierto.items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupoImpuesto(x.t)).map((x) => x.t);
+    let labels = abierto.items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupoImpuesto(x.t)).map((x) => x.t);
     await frame.page().keyboard.press('Escape').catch(() => {});
+    if (servicio.impuestosRelevantes) labels = labels.filter((t) => servicio.impuestosRelevantes.test(t));
     if (labels.length) return labels;
   }
   return [];
+}
+
+/** Vuelve del resultado al formulario de consulta (botón "Volver a Consultar" / "Nueva Consulta"). */
+async function volverAlFormulario(pagina) {
+  for (const frame of pagina.frames()) {
+    const b = frame.locator('a, button, [role=button]').filter({ hasText: /volver a consultar|nueva consulta/i }).first();
+    if ((await b.count().catch(() => 0)) && (await b.isVisible().catch(() => false))) {
+      await b.click().catch(() => {});
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(1500);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function seleccionarImpuesto(frame, servicio, impuestoLabel = null) {
@@ -372,7 +388,11 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   let gridPresente = false; let rangoOk = null; let errorUlt = null; let headersGuardados = null;
   let informadosTot = null; const mensajes = new Set(); const porImpuesto = [];
 
-  for (const imp of impuestos) {
+  for (let idx = 0; idx < impuestos.length; idx++) {
+    const imp = impuestos[idx];
+    // Tras consultar, Mis Retenciones salta a /resultados; para la próxima consulta hay que
+    // volver al formulario ("Volver a Consultar"), si no el combo y las fechas ya no están.
+    if (idx > 0) await volverAlFormulario(pagina);
     const filtro = await completarFiltros(pagina, desde, hasta, servicio, log, imp);
     resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
     if (filtro.rangoAplicado) resultado.rangoAplicado = filtro.rangoAplicado;
@@ -384,9 +404,11 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       continue;
     }
     const g = await leerGrilla(pagina, expected);
-    if (g.gridPresente) gridPresente = true;
     resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
     const res = resumenResultados(await relevarPagina(pagina));
+    // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
+    const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
+    if (g.gridPresente || sinResultados) gridPresente = true;
     for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
     const informados = totalInformado(res);
     if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
@@ -398,8 +420,9 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       resultado.archivos.push(path.basename(file));
       resultado.filas += g.filas.length;
       porImpuesto.push({ impuesto: imp, filas: g.filas.length, informados });
-    } else if (impuestos.length === 1) {
-      escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
+    } else {
+      porImpuesto.push({ impuesto: imp, filas: 0, cero: sinResultados });
+      if (impuestos.length === 1 && !sinResultados) escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
     }
   }
 

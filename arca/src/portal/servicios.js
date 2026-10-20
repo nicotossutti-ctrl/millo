@@ -36,7 +36,11 @@ export const SERVICIOS = [
   // (no es <select> nativo) antes de Consultar. La grilla de resultados es de componente.
   { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
     selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
-    requiereImpuesto: true, selectorImpuesto: '#selectImpuestos', columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
+    requiereImpuesto: true, selectorImpuesto: '#selectImpuestos',
+    // Consultamos los impuestos/regímenes relevantes para persona humana RI (IVA, Ganancias,
+    // Bienes Personales, PAÍS, SICORE/SIRE), no los ~40 regímenes del combo.
+    impuestosRelevantes: /sire|sicore|\biva\b|ganancia|gcias|\bgan\b|bienes?\s+personal|pa[ií]s/i,
+    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
   // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte): su menú de "Consultas"
@@ -56,9 +60,10 @@ export const SERVICIOS = [
   // que la grilla de componente aparezca (la lee el extractor de grillas e-grid/role=grid).
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
-  // Ganancias: la portada no expone controles clickeables en el relevamiento (tarjetas con botones
-  // que renderizan tarde). Pendiente de capturar esos botones para la ruta real; no se adivina.
-  { id: 'ganancias-ph', nombre: 'GANANCIAS PERSONAS HUMANAS', terminos: ['GANANCIAS PERSONAS HUMANAS'], fuente: 8, confirmado: false, extractor: 'generico' },
+  // Ganancias (GPH, mismo template que IVA): la portada tiene tarjetas; "Declaración Jurada" lleva
+  // a presentar/consultar, y de ahí el CONSULTAR de declaraciones anteriores (igual que IVA).
+  { id: 'ganancias-ph', nombre: 'GANANCIAS PERSONAS HUMANAS', terminos: ['GANANCIAS PERSONAS HUMANAS'], fuente: 8, confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Declaración Jurada' }, { selector: 'button[aria-label*="declaraciones.anteriores"]', opcional: true }] },
   // Bienes Personales (F.762, mismo template integrado que IVA): CONSULTAR lleva a "Mis
   // declaraciones juradas presentadas"; la grilla aparece async (la espera la cubre).
   { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',

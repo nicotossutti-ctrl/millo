@@ -45,12 +45,25 @@ test('drillHaciaGrilla NO clickea nada si el servicio no tiene ruta (no adivina 
   assert.equal(clicks, 0); // nunca iteró frames para clickear
 });
 
-test('drillHaciaGrilla no navega si ya hay grilla/filtros presentes', async () => {
+test('drillHaciaGrilla sin ruta no navega si ya hay grilla', async () => {
   const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
   const pagina = { frames: () => [], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
-  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Ingresar' }], relevar });
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [], relevar });
   assert.equal(r.lista, true);
   assert.equal(r.pasos, 0);
+});
+
+test('drillHaciaGrilla CON ruta la ejecuta aunque ya haya grilla inicial (no se queda en la primera)', async () => {
+  // La grilla inicial (p. ej. Vencimientos) no es la buscada: con ruta hay que navegar igual.
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
+  const control = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => {} };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Pagos' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
 });
 
 // Locator falso estilo Playwright: soporta .filter() (devuelve sí mismo), .count() y .first().

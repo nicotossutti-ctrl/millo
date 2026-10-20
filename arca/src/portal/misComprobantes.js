@@ -253,15 +253,20 @@ export function validarContenidoCsv(texto, desde, hasta) {
   const limpio = texto.replace(/^﻿/, '');
   const lineas = limpio.split(/\r?\n/).filter((l) => l.trim());
   if (lineas.length < 2) return { ok: false, filas: 0, motivo: 'archivo sin filas de datos' };
-  const sep = (lineas[0].match(/;/g) ?? []).length >= (lineas[0].match(/,/g) ?? []).length ? ';' : ',';
-  const cab = lineas[0].split(sep).map((c) => c.trim());
+  // El CSV puede traer una línea de título antes del encabezado (Emitidos: "...(montos expresados
+  // en pesos)"). Encabezado real = primera línea (entre las primeras 8) que menciona "fecha" con
+  // varios separadores; si no, la primera línea.
+  let iHeader = lineas.slice(0, 8).findIndex((l) => /fecha/i.test(l) && ((l.match(/;/g) ?? []).length + (l.match(/,/g) ?? []).length) >= 2);
+  if (iHeader < 0) iHeader = 0;
+  const sep = (lineas[iHeader].match(/;/g) ?? []).length >= (lineas[iHeader].match(/,/g) ?? []).length ? ';' : ',';
+  const cab = lineas[iHeader].split(sep).map((c) => c.trim());
   // Normaliza para que la detección no dependa del encoding del CSV (acentos).
   const norm = (c) => c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
   const idCols = cab.map((c, i) => (/numero|nro|punto de venta|tipo|emisor|cod\.? aut/.test(norm(c)) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
   const conFecha = iFecha >= 0;
-  const datos = lineas.slice(1);
+  const datos = lineas.slice(iHeader + 1);
   let dentro = 0; let fuera = 0;
   const claves = new Map();
   let duplicados = 0;
@@ -283,7 +288,7 @@ export function validarContenidoCsv(texto, desde, hasta) {
     ok: conFecha && dentro > 0 && duplicados === 0,
     filas, filasTotales: datos.length, columnas: cab.length, separador: sep,
     columnaFecha: conFecha ? cab[iFecha] : null,
-    muestraFecha: conFecha && lineas[1] ? (lineas[1].split(sep)[iFecha] ?? '').trim() : null,
+    muestraFecha: conFecha && datos[0] ? (datos[0].split(sep)[iFecha] ?? '').trim() : null,
     dentroDelRango: dentro, fueraDelRango: fuera,
     duplicados, claveDuplicados: idCols.length ? idCols.map((i) => cab[i]) : ['línea completa'],
     encabezados: cab,
