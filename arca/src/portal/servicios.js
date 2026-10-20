@@ -6,11 +6,15 @@
  *   - fuente: número de fila en COBERTURA.md.
  *   - confirmado: true si los selectores de su pantalla ya se verificaron contra ARCA real.
  *   - extractor: 'mis-comprobantes' usa el extractor dedicado; 'tabla' consulta una grilla con
- *     selectores por servicio o genéricos; 'generico' es un hub: se atraviesa en SOLO LECTURA
- *     (drill) hasta la grilla y, si se llega, se extrae; si no, se releva y se documenta.
+ *     selectores por servicio o genéricos; 'generico' es un hub: se abre, se sigue su `ruta`
+ *     explícita de SOLO LECTURA hasta la grilla y, si se llega, se extrae; si no hay ruta, se
+ *     releva y se guarda la estructura para definir la ruta real (no se adivina por palabras).
  *   - tipo: parámetro extra para el extractor dedicado (emitidos|recibidos).
  *   - terminos: alternativas de nombre para encontrarlo en el buscador del portal.
- *   - drill: false desactiva la navegación automática de hub (por defecto está activa en genéricos).
+ *   - ruta: pasos concretos para llegar a la grilla desde el hub, tomados de la estructura real
+ *     de la pantalla: [{ texto: 'Texto exacto del botón' } | { id: '...' } | { selector: '...' }].
+ *     Pendiente de completar con los diagnósticos de cada hub (Portal IVA, DDJJ/Pagos, SIFERE,
+ *     Ganancias, Bienes Personales). Ningún paso puede ser un control de trámite/pago/emisión.
  *
  * Ningún servicio presenta, modifica, emite ni paga: solo navega, consulta y exporta.
  * COBERTURA.md tiene el detalle de qué datos trae cada fuente y el estado real de cada una.

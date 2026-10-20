@@ -62,9 +62,8 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   const pagina = await sesion.abrirServicio(servicio);
   await pagina.waitForTimeout(2500);
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
-  const drill = servicio.drill === false
-    ? { lista: false, niveles: 0, visitados: [], señales: {} }
-    : await drillHaciaGrilla(pagina, { expected, log });
+  // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).
+  const drill = await drillHaciaGrilla(pagina, { expected, ruta: servicio.ruta ?? [], log });
 
   // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en la misma página.
   let extraccion = null;
@@ -80,12 +79,12 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
   const clas = clasificarRelevamiento(rel);
   const lineas = [...resumenRelevamiento(rel), '',
-    `== Drill (solo lectura): niveles ${drill.niveles}, lista=${drill.lista}, visitados ${JSON.stringify(drill.visitados)}`,
+    `== Drill (solo lectura, ruta explícita): pasos ${drill.pasos}, lista=${drill.lista}${drill.motivo ? `, ${drill.motivo}` : ''}`,
     '', '== Clasificación', JSON.stringify(clas, null, 2)];
   escribir(path.join(dir, 'resumen.txt'), lineas.join('\n'));
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
 
-  const drillInfo = { niveles: drill.niveles, visitados: drill.visitados, lista: drill.lista };
+  const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo };
   // Si se extrajeron filas reales, el estado lo dicta el extractor (descargado sin cotejo).
   if (extraccion && !extraccion.error && extraccion.filas > 0) {
     return {
@@ -99,7 +98,9 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   const motivo = extraccion?.error
     ? `grilla alcanzada pero la extracción falló: ${extraccion.error}`
     : drill.lista ? 'grilla/filtros alcanzados pero sin filas: falta confirmar columnas/consulta'
-    : `hub no atravesado en lectura (niveles ${drill.niveles}); estructura capturada para escribir el extractor`;
+    : (servicio.ruta?.length
+      ? `la ruta de navegación no llegó a la grilla (${drill.motivo ?? 'sin detalle'}); estructura capturada`
+      : 'sin ruta de navegación confirmada: estructura capturada para definir la ruta real');
   return { ...clas, url: rel.url, drill: drillInfo, motivo };
 }
 

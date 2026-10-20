@@ -1,43 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { esAvanceLectura, elegirAvances, grillaLista, drillHaciaGrilla } from '../src/portal/navegar.js';
+import { esPasoSeguro, grillaLista, drillHaciaGrilla } from '../src/portal/navegar.js';
 
-test('esAvanceLectura acepta verbos de lectura y rechaza trámite/navegación-afuera', () => {
-  for (const t of ['Consultar', 'Ingresar', 'Ver detalle', 'Continuar', 'Siguiente', 'Buscar', 'Mostrar', 'Listar']) {
-    assert.equal(esAvanceLectura(t), true, t);
+test('esPasoSeguro bloquea controles de trámite/pago y permite navegación de lectura', () => {
+  for (const t of ['Presentar DDJJ', 'Generar VEP', 'Pagar', 'Confirmar', 'Anular']) {
+    assert.equal(esPasoSeguro(t), false, t);
   }
-  // Trámite / pago / emisión: prohibidos.
-  for (const t of ['Presentar DDJJ', 'Generar VEP', 'Pagar', 'Confirmar', 'Enviar', 'Anular']) {
-    assert.equal(esAvanceLectura(t), false, t);
+  for (const t of ['Ingresar al servicio', 'Consultar', 'Ver declaraciones', 'Continuar']) {
+    assert.equal(esPasoSeguro(t), true, t);
   }
-  // Navegación hacia afuera, o sin verbo de avance.
-  for (const t of ['Volver', 'Salir', 'Cerrar sesión', 'Cancelar', 'Inicio', 'Ayuda', '']) {
-    assert.equal(esAvanceLectura(t), false, t);
-  }
-});
-
-test('elegirAvances ordena por prioridad, saltea vistos y descarta prohibidos', () => {
-  const rel = { frames: [{
-    botones: [
-      { tag: 'button', text: 'Presentar', visible: true },      // prohibido
-      { tag: 'button', text: 'Buscar', visible: true },           // avance, baja prioridad
-      { tag: 'button', text: 'Consultar', id: 'c', visible: true }, // avance, alta prioridad
-      { tag: 'button', text: 'Volver', visible: true },           // afuera
-    ],
-    enlaces: [{ tag: 'a', text: 'Ingresar', visible: true }],
-    conRol: [],
-  }] };
-  const av = elegirAvances(rel, { yaVistas: ['Ingresar'] });
-  assert.deepEqual(av.map((x) => x.texto), ['Consultar', 'Buscar']);
-  assert.equal(av[0].id, 'c');
-});
-
-test('elegirAvances no repite el mismo texto en distintos frames', () => {
-  const rel = { frames: [
-    { botones: [{ tag: 'button', text: 'Consultar', visible: true }] },
-    { botones: [{ tag: 'button', text: 'Consultar', visible: true }] },
-  ] };
-  assert.equal(elegirAvances(rel).length, 1);
 });
 
 test('grillaLista detecta grilla con datos, grilla esperada y filtros de fecha', () => {
@@ -57,26 +28,52 @@ test('grillaLista detecta grilla con datos, grilla esperada y filtros de fecha',
   assert.equal(grillaLista(nada).lista, false);
 });
 
-test('drillHaciaGrilla se detiene al encontrar la grilla, sin exceder maxNiveles', async () => {
-  // Relevar falso: primer nivel es hub (solo botón Consultar), segundo ya trae la grilla.
-  let nivel = 0;
-  const relevar = async () => (nivel === 0
-    ? { frames: [{ botones: [{ tag: 'button', text: 'Consultar', id: 'go', visible: true }], tablas: [], inputs: [] }] }
-    : { frames: [{ botones: [], tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
-  const pagina = {
-    frames: () => [{ locator: () => ({ count: async () => 1, first: () => ({ isVisible: async () => true, innerText: async () => 'Consultar', click: async () => { nivel = 1; } }) }) }],
-    waitForLoadState: async () => {}, waitForTimeout: async () => {},
-  };
-  const r = await drillHaciaGrilla(pagina, { expected: [], relevar, maxNiveles: 3 });
-  assert.equal(r.lista, true);
-  assert.equal(r.niveles, 1);
-  assert.deepEqual(r.visitados, ['Consultar']);
+test('drillHaciaGrilla NO clickea nada si el servicio no tiene ruta (no adivina por palabras)', async () => {
+  // Hub con botones genéricos del portal: sin ruta, el drill no debe tocar nada.
+  const relevar = async () => ({ frames: [{ botones: [{ text: 'Envianos tu consulta', visible: true }, { text: 'CONSULTAR', visible: true }], tablas: [], inputs: [] }] });
+  let clicks = 0;
+  const pagina = { frames: () => { clicks++; return []; }, waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [], relevar });
+  assert.equal(r.lista, false);
+  assert.equal(r.pasos, 0);
+  assert.match(r.motivo, /sin ruta/);
+  assert.equal(clicks, 0); // nunca iteró frames para clickear
 });
 
-test('drillHaciaGrilla se detiene si no hay por dónde avanzar en lectura', async () => {
-  const relevar = async () => ({ frames: [{ botones: [{ tag: 'button', text: 'Presentar', visible: true }], tablas: [], inputs: [] }] });
+test('drillHaciaGrilla no navega si ya hay grilla/filtros presentes', async () => {
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
   const pagina = { frames: () => [], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
-  const r = await drillHaciaGrilla(pagina, { expected: [], relevar, maxNiveles: 3 });
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Ingresar' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 0);
+});
+
+// Locator falso estilo Playwright: soporta .filter() (devuelve sí mismo), .count() y .first().
+function locatorFalso({ present, control }) {
+  const self = { filter: () => self, count: async () => (present ? 1 : 0), first: () => control };
+  return self;
+}
+
+test('drillHaciaGrilla sigue la ruta explícita hasta la grilla', async () => {
+  // Nivel 0: hub sin grilla. Tras el paso "Ingresar", nivel 1: aparece la grilla.
+  let nivel = 0;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 4, encabezados: ['Periodo', 'Importe'] }], inputs: [] }] });
+  const control = { isVisible: async () => true, innerText: async () => 'Ingresar', click: async () => { nivel = 1; } };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['periodo', 'importe'], ruta: [{ texto: 'Ingresar' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
+test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {
+  const relevar = async () => ({ frames: [{ tablas: [], inputs: [] }] });
+  const pagina = { frames: () => [{ locator: () => locatorFalso({ present: false }) }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'No existe' }], relevar });
   assert.equal(r.lista, false);
-  assert.equal(r.niveles, 0);
+  assert.match(r.motivo, /no se encontró el paso/);
 });
