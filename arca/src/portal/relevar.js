@@ -112,6 +112,21 @@ export async function relevarPagina(pagina) {
   return sanear({ url: sanitizarUrl(pagina.url()), title: await pagina.title().catch(() => null), frames });
 }
 
+/**
+ * Releva TODAS las páginas abiertas del contexto (no solo una), saneadas. Sirve para capturar la
+ * grilla cuando un servicio la abre en una pestaña nueva, y para el diagnóstico integral. Marca
+ * cuál es la principal (la página que se pasó).
+ */
+export async function relevarTodasLasPaginas(sesion, principal) {
+  const pages = (typeof sesion?.context?.pages === 'function' ? sesion.context.pages() : null) ?? (principal ? [principal] : []);
+  const out = [];
+  for (const p of pages) {
+    try { out.push({ principal: p === principal, ...(await relevarPagina(p)) }); }
+    catch (e) { out.push({ error: String(e?.message ?? e) }); }
+  }
+  return out;
+}
+
 /** Resumen corto para pegar en el chat: lo necesario para escribir selectores. */
 export function resumenRelevamiento(rel) {
   const l = [];

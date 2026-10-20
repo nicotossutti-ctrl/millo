@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { relevarPagina } from './relevar.js';
+import { relevarPagina, relevarTodasLasPaginas } from './relevar.js';
 import { totalInformado, resumenResultados } from './misComprobantes.js';
 import { toCsv } from '../csv.js';
 
@@ -249,7 +249,10 @@ export async function extraerTabla(sesion, servicio, opts = {}) {
   const pagina = await sesion.abrirServicio(servicio);
   await pagina.waitForTimeout(2500);
   try {
-    return await extraerTablaEnPagina(pagina, servicio, opts);
+    const r = await extraerTablaEnPagina(pagina, servicio, opts);
+    // Diagnóstico integral: DOM real de todas las pestañas abiertas (antes de cerrarlas).
+    try { r.estructura = await relevarTodasLasPaginas(sesion, pagina); } catch { /* best-effort */ }
+    return r;
   } finally {
     if (pagina !== sesion.page) await pagina.close().catch(() => {});
   }

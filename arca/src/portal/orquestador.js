@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { relevarPagina, resumenRelevamiento } from './relevar.js';
+import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento } from './relevar.js';
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
 import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
@@ -76,9 +76,11 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
     escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
   }
 
-  const rel = await relevarPagina(paginaDatos);
-  escribir(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
-  escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await paginaDatos.content()));
+  // Capturamos TODAS las pestañas abiertas (la grilla puede estar en una pestaña nueva).
+  const todas = await relevarTodasLasPaginas(sesion, paginaDatos);
+  const rel = todas.find((t) => t.principal) ?? todas[0] ?? { frames: [] };
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await paginaDatos.content().catch(() => '')));
   const clas = clasificarRelevamiento(rel);
   const lineas = [...resumenRelevamiento(rel), '',
     `== Drill (solo lectura, ruta explícita): pasos ${drill.pasos}, lista=${drill.lista}${drill.motivo ? `, ${drill.motivo}` : ''}`,
@@ -112,7 +114,10 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
 async function correrTabla(sesion, servicio, dir, periodo, log) {
   const outBase = sesion?.cfg?.outDir ?? 'out';
   const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
-  escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
+  // La estructura (DOM de todas las pestañas) va a su propio archivo para el diagnóstico integral.
+  const { estructura, ...rSinEstructura } = r;
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify(rSinEstructura, null, 2));
+  if (estructura) escribir(path.join(dir, 'estructura.json'), JSON.stringify(estructura, null, 2));
   // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe.
   // Solo cuenta como "descargado" si realmente trajo filas; 0 filas (cero confirmado o ausencia
   // incierta) va a "relevado", nunca a "descargado sin validar".
@@ -243,6 +248,14 @@ export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/c
   const cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
   escribir(path.join(baseDir, 'cobertura.json'), JSON.stringify(cobertura.objeto, null, 2));
   escribir(path.join(baseDir, 'cobertura.md'), cobertura.texto);
+  // Diagnóstico INTEGRAL en un solo archivo: el DOM saneado de cada servicio (todas sus pestañas).
+  // Es lo único que hace falta mandar para escribir todos los extractores sin más corridas a ciegas.
+  const integral = {};
+  for (const s of servicios) {
+    const f = path.join(baseDir, slug(s.id), 'estructura.json');
+    if (fs.existsSync(f)) { try { integral[s.id] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* ignore */ } }
+  }
+  escribir(path.join(baseDir, 'diagnostico-integral.json'), JSON.stringify(integral, null, 2));
   // Puntero a la última corrida, para no tener que buscar la carpeta.
   escribir(path.join(outDir, 'ultima.txt'), baseDir);
   return { baseDir, resultados, cobertura };
