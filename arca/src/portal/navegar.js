@@ -176,7 +176,11 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
     pasos++;
     // Tras navegar, damos tiempo generoso a que la grilla aparezca (iframe/SPA Angular/EJ2).
     señales = await esperarLista(relevarPagina, actual, expected, 6);
-    if (señales.lista) return { lista: true, pasos, señales, pagina: actual };
+    // `continuar`: NO cortar acá aunque ya haya grilla. Lo usan los pasos que solo PREPARAN la
+    // navegación (p. ej. abrir la barra lateral de Cuentas Tributarias): la home ya muestra la
+    // grilla de Vencimientos, así que sin esto el drill se detenía ahí y nunca clickeaba el ítem
+    // del menú (DJ/Pagos/…). Con `continuar` sigue hasta el paso que lleva de verdad a la sección.
+    if (señales.lista && !paso.continuar) return { lista: true, pasos, señales, pagina: actual };
   }
   return { lista: señales.lista, pasos, señales, pagina: actual, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };
 }

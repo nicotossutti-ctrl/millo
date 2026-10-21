@@ -132,6 +132,26 @@ test('drillHaciaGrilla con paso oculto clickea el enlace de menú colapsado por 
   assert.equal(viaClick, false);
 });
 
+test('drillHaciaGrilla con paso `continuar` NO se detiene en la grilla inicial y sigue al menú', async () => {
+  // Caso Cuentas Tributarias: la home ya muestra la grilla de Vencimientos. El paso que abre la
+  // barra lateral lleva `continuar`, así el drill no corta ahí y sí clickea el ítem del menú.
+  let abrioBarra = false, clickItem = false;
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 5, encabezados: ['Impuesto', 'Vencimiento'] }], inputs: [] }] });
+  const ctrlBarra = { isVisible: async () => true, innerText: async () => '', click: async () => { abrioBarra = true; } };
+  const ctrlItem = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => { clickItem = true; } };
+  const pagina = {
+    frames: () => [{ locator: (sel) => locatorFalso({ present: true, control: sel === 'a.menu-a' ? ctrlBarra : ctrlItem }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, {
+    expected: [], relevar,
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Pagos' }],
+  });
+  assert.equal(abrioBarra, true, 'abrió la barra lateral');
+  assert.equal(clickItem, true, 'y SIGUIÓ hasta clickear el ítem del menú (no se frenó en Vencimientos)');
+  assert.equal(r.pasos, 2);
+});
+
 test('drillHaciaGrilla ejecuta un paso de hash (SPA Angular como Portal IVA) navegando la ruta interna', async () => {
   // Portal IVA salta a la lista de DDJJ presentadas con #/declaraciones.anteriores.
   let hashSet = null, nivel = 0;

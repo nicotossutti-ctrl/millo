@@ -216,6 +216,24 @@ export function elegirTabla(tablas, expected = []) {
   return mejor;
 }
 
+/**
+ * Como elegirTabla, pero cuando hay VARIAS tablas con los encabezados esperados las UNE en un solo
+ * dataset. Caso real: Portal IVA pinta cada DDJJ presentada en su propia <table> de 1 fila (mismos
+ * encabezados Período/Formulario/Secuencia/Presentación); elegirTabla devolvía una sola → 1 fila.
+ * Sin encabezados esperados, se comporta como elegirTabla (la mejor única). Pura, testeable.
+ */
+export function recolectarTablas(tablas, expected = []) {
+  const exp = expected.map(norm);
+  if (!exp.length) return elegirTabla(tablas, expected);
+  const coincide = (t) => {
+    const hn = (t.headers ?? []).map(norm);
+    return exp.every((e) => hn.some((h) => h.includes(e)));
+  };
+  const match = tablas.filter(coincide);
+  if (!match.length) return null; // ninguna coincide: era navegación/título
+  return { headers: match[0].headers, rows: match.flatMap((t) => t.rows), coincideCols: exp.length };
+}
+
 /** Elige la mejor tabla entre todos los frames. Con encabezados esperados, descarta la que no coincide. */
 async function scrapearFrames(pagina, expected) {
   const todas = [];
@@ -223,7 +241,7 @@ async function scrapearFrames(pagina, expected) {
     const t = await frame.evaluate(extraerTablasEnDocumento).catch(() => []);
     for (const x of t) todas.push(x);
   }
-  return elegirTabla(todas, expected);
+  return recolectarTablas(todas, expected);
 }
 
 /** Botón de paginación "siguiente" habilitado, en cualquier frame; null si no hay o está deshabilitado. */

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto, impuestosDeItems, seleccionarEstablecimiento } from '../src/portal/extractor.js';
+import { COLUMNAS_LIBRES, esProhibido, elegirTabla, recolectarTablas, decidirEstado, completarFiltros, elegirOpcionImpuesto, impuestosDeItems, seleccionarEstablecimiento } from '../src/portal/extractor.js';
 import { toCsv } from '../src/csv.js';
 
 test('impuestosDeItems: solo impuestos reales, sin grupos, sin duplicados, filtrados por relevantes', () => {
@@ -21,6 +21,26 @@ test('impuestosDeItems: solo impuestos reales, sin grupos, sin duplicados, filtr
   assert.deepEqual(impuestosDeItems(items, /\biva\b|ganancia/i), ['216 - SIRE - IVA', '217 - SICORE-GANANCIAS']);
   // Acepta también strings sueltos (no solo {t}).
   assert.deepEqual(impuestosDeItems(['300 - IVA', '300 - IVA']), ['300 - IVA']);
+});
+
+test('recolectarTablas une varias tablas con los mismos encabezados (caso Portal IVA: 1 fila por tabla)', () => {
+  // Portal IVA pinta cada DDJJ presentada en su propia <table> de 1 fila, con el mismo encabezado.
+  const enc = ['Período Fiscal', 'Formulario', 'Secuencia', 'Presentación'];
+  const tablas = [
+    { headers: enc, rows: [['09/2026', '2051', 'DJ Original', '16/10/2026']] },
+    { headers: enc, rows: [['08/2026', '2051', 'DJ Original', '16/09/2026']] },
+    { headers: enc, rows: [['07/2026', '2051', 'DJ Original', '19/08/2026']] },
+    { headers: ['Otra', 'Cosa'], rows: [['x', 'y']] }, // tabla de navegación: no coincide, se descarta
+  ];
+  const r = recolectarTablas(tablas, ['Periodo', 'Formulario', 'Secuencia', 'Presentacion']);
+  assert.equal(r.rows.length, 3, 'une las 3 tablas que coinciden');
+  assert.deepEqual(r.headers, enc);
+  assert.deepEqual(r.rows[2], ['07/2026', '2051', 'DJ Original', '19/08/2026']);
+  // Sin encabezados esperados: se comporta como elegirTabla (la mejor única).
+  const unica = recolectarTablas(tablas);
+  assert.ok(unica && unica.rows.length >= 1);
+  // Si ninguna coincide con lo esperado, devuelve null (era navegación/título).
+  assert.equal(recolectarTablas(tablas, ['Impuesto', 'Vencimiento']), null);
 });
 
 test('seleccionarEstablecimiento elige el valor 0 (DJ de Cuentas Tributarias lo exige)', async () => {
