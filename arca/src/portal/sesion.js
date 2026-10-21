@@ -188,6 +188,18 @@ export class Sesion {
       ? [target]
       : (target.terminos?.length ? target.terminos : [target.nombre]);
 
+    // Servicio con URL DIRECTA (p. ej. SIFERE en COMARB, otro dominio que no está en el listado del
+    // portal ARCA). La sesión de clave fiscal federa; navegamos directo y seguimos en esa página.
+    if (typeof target === 'object' && target.url) {
+      this.log(`Servicio "${nombre}": navegando directo a ${target.url}`);
+      await page.goto(target.url, { waitUntil: 'domcontentloaded' });
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(2000);
+      const desafio = await hayDesafio(page);
+      if (desafio) throw new DesafioDeSeguridad(desafio);
+      return page;
+    }
+
     await page.goto(URL_PORTAL, { waitUntil: 'domcontentloaded' });
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(2000);

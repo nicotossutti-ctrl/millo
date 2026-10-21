@@ -141,6 +141,62 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
 }
 
 /**
+ * SIFERE (Convenio Multilateral, dominio COMARB). Entra por URL directa, selecciona el CUIT y baja
+ * los LISTADOS de SOLO LECTURA (DDJJ mensuales, DDJJ anuales): grillas DataTables reales con la
+ * historia de presentaciones. No toca "Nueva DJ" ni nada de presentación/pago. La sesión de clave
+ * fiscal federa a COMARB; si COMARB pidiera completar el login, el listado no traerá filas y queda
+ * 'relevado' con la estructura capturada (acceso ≠ descarga).
+ */
+async function correrSifere(sesion, servicio, dir, periodo, log) {
+  const pagina = await sesion.abrirServicio(servicio); // InicioSistemaClaveFiscalController.do
+  // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
+  try {
+    const sel = pagina.locator('select').first();
+    if (await sel.count().catch(() => 0)) {
+      const cuit = sesion?.cfg?.cuit ? String(sesion.cfg.cuit).replace(/\D/g, '') : null;
+      if (cuit) await sel.selectOption({ label: new RegExp(cuit) }).catch(() => {});
+    }
+    let btn = pagina.locator('input[value*="eleccionar" i]');
+    if (!(await btn.count().catch(() => 0))) btn = pagina.locator('button, a, [role=button]').filter({ hasText: /^\s*seleccionar\s*$/i });
+    if (await btn.count().catch(() => 0)) {
+      await btn.first().click().catch(() => {});
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2000);
+    }
+  } catch { /* si no aparece la pantalla de CUIT, seguimos a los listados */ }
+
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const sub = [];
+  for (const g of servicio.grillas ?? []) {
+    try {
+      await pagina.goto(g.url, { waitUntil: 'domcontentloaded' });
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2500);
+      const servSub = { id: `${servicio.id}-${g.id}`, columnasEsperadas: g.columnasEsperadas };
+      const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
+      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo });
+      log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas`);
+    } catch (e) {
+      sub.push({ sub: g.id, filas: 0, estado: 'error', error: sanitizarTexto(e?.message ?? String(e)) });
+    }
+  }
+  const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub }, null, 2));
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+
+  const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
+  const archivos = sub.flatMap((s) => s.archivos ?? []);
+  return {
+    estado: filas > 0 ? 'descargado' : 'relevado',
+    archivos, filas,
+    motivo: filas > 0 ? undefined
+      : 'SIFERE: no se obtuvieron filas de los listados (quizás COMARB pidió completar el login de clave fiscal); estructura capturada',
+    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, motivo: s.motivo })),
+  };
+}
+
+/**
  * Mis Comprobantes: descarga real con el extractor dedicado (validado). Los archivos y el
  * manifiesto van a una carpeta PERSISTENTE (out/datos/<id>), compartida entre corridas, para
  * reutilizar descargas históricas. La carpeta de la corrida solo guarda el resumen.
@@ -172,6 +228,7 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
   const run = runner ?? (async () => {
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
     if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log);
+    if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log);
     return correrGenerico(sesion, servicio, dir, periodo, log);
   });
   try {

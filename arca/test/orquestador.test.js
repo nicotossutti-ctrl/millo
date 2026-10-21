@@ -44,6 +44,18 @@ test('orden de servicios: datos fiscales primero, Mis Retenciones al final', () 
   assert.ok(pos('cuentas-tributarias') < pos('portal-iva'), 'cuentas-tributarias antes que portal-iva');
 });
 
+test('SIFERE se configura para entrar por COMARB (URL directa + listados de solo lectura), sin bloqueo', () => {
+  const s = SERVICIOS.find((x) => x.id === 'sifere-consultas');
+  assert.equal(s.extractor, 'sifere');
+  assert.ok(!s.bloqueo, 'SIFERE ya no se trata como sin-acceso: se entra por COMARB');
+  assert.match(s.url, /comarb\.gob\.ar\/sifereweb\//);
+  assert.ok(Array.isArray(s.grillas) && s.grillas.length >= 2, 'baja al menos DDJJ mensuales y anuales');
+  for (const g of s.grillas) {
+    assert.match(g.url, /\.do$/, 'cada listado es un controller .do');
+    assert.ok((g.columnasEsperadas ?? []).length > 0, 'cada listado declara columnas esperadas');
+  }
+});
+
 test('los informes se escriben DESPUÉS DE CADA servicio (si el último se cuelga, no se pierde lo anterior)', async () => {
   const outDir = dirTmp();
   const servicios = [

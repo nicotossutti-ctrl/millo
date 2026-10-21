@@ -74,10 +74,19 @@ export const SERVICIOS = [
   { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
   { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },
-  // SIFERE / Convenio Multilateral NO figura entre los servicios adheridos a esta clave fiscal
-  // (no aparece en mis-servicios). Hay que adherirlo en Administrador de Relaciones (paso manual).
-  { id: 'sifere-consultas', nombre: 'Convenio Multilateral - SIFERE WEB - Consultas', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'generico',
-    bloqueo: 'SIFERE/Convenio Multilateral no aparece en el listado de servicios de ARCA de esta clave fiscal. Esto NO prueba que no haya acceso: SIFERE es de COMARB y puede entrarse (a) adhiriéndolo en Administrador de Relaciones o (b) por el portal de COMARB con la misma clave fiscal. A confirmar con un diagnóstico del listado completo y del portal COMARB antes de descartarlo.' },
+  // SIFERE (Convenio Multilateral) vive en COMARB (otro dominio), no en el listado de ARCA.
+  // CONFIRMADO por capturas: con la misma clave fiscal se entra por la URL de inicio, se elige el
+  // CUIT y se llega al módulo con los LISTADOS de DDJJ. Extractor dedicado 'sifere': entra por URL
+  // directa, selecciona el CUIT y baja los listados de solo lectura (mensuales 83, anuales 5):
+  //   Listado DDJJ Mensuales  -> MostrarListaDDJJController.do (Anticipo/Estado/Fecha/Presentación)
+  //   Listado DDJJ Anuales    -> MostrarListaDDJJAnualController.do (Año/Estado/Fecha/Presentación)
+  // NO toca "Nueva DJ" ni pagos: solo los listados. Resultado de presentación incluido.
+  { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'sifere',
+    url: 'https://sifereweb.comarb.gob.ar/sifereweb/InicioSistemaClaveFiscalController.do',
+    grillas: [
+      { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
+      { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
+    ] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
   // Mis Retenciones VA ÚLTIMO a propósito (ver nota de ORDEN arriba): su consulta itera impuesto
