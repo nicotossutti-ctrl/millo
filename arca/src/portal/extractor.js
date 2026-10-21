@@ -106,6 +106,38 @@ async function volverAlFormulario(pagina) {
   return false;
 }
 
+/**
+ * Elige Establecimiento = "0" en el formulario de DJ de Cuentas Tributarias (requisito confirmado).
+ * Lo busca de forma robusta, sin depender de un id: por label "Establecimiento", por name/id que
+ * contenga "establec", o por un <select> chico cuya única opción real sea "0". Deja Impuesto y
+ * Formulario sin tocar (para traer todo). Devuelve true si pudo seleccionarlo. Solo lectura.
+ */
+export async function seleccionarEstablecimiento(frame) {
+  const ponerCero = async (s) => {
+    if (await s.selectOption('0').then(() => true).catch(() => false)) return true;
+    const opts = await s.locator('option').allTextContents().catch(() => []);
+    const op = elegirOpcionImpuesto(opts); // primera opción real (no placeholder)
+    return op ? await s.selectOption({ index: op.index }).then(() => true).catch(() => false) : false;
+  };
+  // 1) Por label asociado ("Establecimiento *").
+  if (typeof frame.getByLabel === 'function') {
+    const byLabel = frame.getByLabel(/establecimiento/i);
+    if ((await byLabel.count().catch(() => 0)) && await ponerCero(byLabel.first())) return true;
+  }
+  // 2) Por name/id/aria-label, o por forma (select chico con opción "0").
+  const selects = frame.locator('select');
+  const n = Math.min(await selects.count().catch(() => 0), 12);
+  for (let i = 0; i < n; i++) {
+    const s = selects.nth(i);
+    if (!(await s.isVisible().catch(() => false))) continue;
+    const marca = norm(`${await s.getAttribute('name').catch(() => '')} ${await s.getAttribute('id').catch(() => '')} ${await s.getAttribute('aria-label').catch(() => '')}`);
+    const opts = await s.locator('option').allTextContents().catch(() => []);
+    const esEstablecimiento = /establec/.test(marca) || (opts.length <= 3 && opts.some((o) => /^\s*0\s*$/.test(String(o))));
+    if (esEstablecimiento && await ponerCero(s)) return true;
+  }
+  return false;
+}
+
 async function seleccionarImpuesto(frame, servicio, impuestoLabel = null) {
   if (servicio?.selectorImpuesto) {
     const abierto = await abrirComboImpuesto(frame, servicio.selectorImpuesto);
@@ -231,6 +263,22 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
     if (!String(leido).includes(valor)) throw new Error(`el campo ${selector} no tomó "${valor}" (quedó "${leido}")`);
     return true;
   };
+  // Formulario de Declaraciones Juradas (DJ) de Cuentas Tributarias: EXIGE elegir Establecimiento
+  // (valor "0" en esta clave fiscal) antes de SIGUIENTE; Impuesto/Formulario se dejan en "Nada
+  // seleccionado" para traer TODAS las DJ. Solo lectura.
+  if (servicio.requiereEstablecimiento) {
+    for (const frame of pagina.frames()) {
+      if (!(await seleccionarEstablecimiento(frame))) continue;
+      log('  Establecimiento seleccionado (0)');
+      const btn = frame.locator('button, [role=button], input[type=submit]').filter({ hasText: /siguiente|consultar|buscar/i }).first();
+      if (!(await btn.count().catch(() => 0))) return { conFiltroPeriodo: false, error: 'DJ: no se encontró Siguiente/Consultar tras elegir Establecimiento' };
+      await btn.click();
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2500);
+      return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null };
+    }
+    return { conFiltroPeriodo: false, error: 'DJ: no se encontró el control de Establecimiento para elegir "0"' };
+  }
   if (sel?.fechaDesde && sel?.fechaHasta) {
     for (const frame of pagina.frames()) {
       let a;

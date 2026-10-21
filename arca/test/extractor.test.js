@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto, impuestosDeItems } from '../src/portal/extractor.js';
+import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto, impuestosDeItems, seleccionarEstablecimiento } from '../src/portal/extractor.js';
 import { toCsv } from '../src/csv.js';
 
 test('impuestosDeItems: solo impuestos reales, sin grupos, sin duplicados, filtrados por relevantes', () => {
@@ -21,6 +21,31 @@ test('impuestosDeItems: solo impuestos reales, sin grupos, sin duplicados, filtr
   assert.deepEqual(impuestosDeItems(items, /\biva\b|ganancia/i), ['216 - SIRE - IVA', '217 - SICORE-GANANCIAS']);
   // Acepta también strings sueltos (no solo {t}).
   assert.deepEqual(impuestosDeItems(['300 - IVA', '300 - IVA']), ['300 - IVA']);
+});
+
+test('seleccionarEstablecimiento elige el valor 0 (DJ de Cuentas Tributarias lo exige)', async () => {
+  let elegido = null;
+  const optionLoc = { allTextContents: async () => ['Nada seleccionado', '0'] };
+  const selectLoc = {
+    isVisible: async () => true,
+    getAttribute: async (a) => (a === 'name' ? 'idEstablecimiento' : null),
+    locator: () => optionLoc,
+    selectOption: async (v) => { elegido = v; },
+  };
+  const frame = {
+    getByLabel: () => ({ count: async () => 0, first: () => null }),
+    locator: (sel) => (sel === 'select' ? { count: async () => 1, nth: () => selectLoc } : optionLoc),
+  };
+  assert.equal(await seleccionarEstablecimiento(frame), true);
+  assert.equal(elegido, '0', 'se elige exactamente el Establecimiento 0');
+});
+
+test('seleccionarEstablecimiento devuelve false si no hay control de Establecimiento', async () => {
+  const frame = {
+    getByLabel: () => ({ count: async () => 0, first: () => null }),
+    locator: () => ({ count: async () => 0, nth: () => null }),
+  };
+  assert.equal(await seleccionarEstablecimiento(frame), false);
 });
 
 test('COLUMNAS_LIBRES arma el CSV a partir de headers y filas de la tabla scrapeada', () => {

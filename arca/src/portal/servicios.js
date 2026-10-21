@@ -38,7 +38,10 @@ export const SERVICIOS = [
   // / Compensaciones son enlaces VISIBLES; cada uno abre su propio FORMULARIO (Fecha Desde/Hasta +
   // CONSULTAR, o SIGUIENTE para DJ). Por eso: paso 1 abre la barra, paso 2 entra a la sección; el
   // extractor genérico completa las fechas del período y consulta. Solo lectura.
+  // DJ: su formulario EXIGE elegir Establecimiento = "0" (confirmado) antes de SIGUIENTE; con eso
+  // (y dejando Impuesto/Formulario sin tocar) trae todas las DJ. requiereEstablecimiento lo maneja.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
+    requiereEstablecimiento: true,
     ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Declaraciones Juradas (DJ)' }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
     ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Pagos' }] },
