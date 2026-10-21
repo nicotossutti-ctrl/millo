@@ -208,6 +208,34 @@ test('decodificar maneja UTF-16LE, latin1 y utf8', async () => {
   assert.equal(decodificar(lat), 'Número');
   // utf8 normal
   assert.equal(decodificar(Buffer.from(texto, 'utf8')), texto);
+  // UTF-8 VÁLIDO que contiene un carácter de reemplazo � legítimo (bytes EF BF BD): no debe
+  // caer a latin1 (eso rompía "Número"→"NÃºmero"). Caso real del CSV de Emitidos de ARCA.
+  const conReemplazo = 'Fecha de Emisión;Número Desde;Denominación\n2026-09-01;10;ACME � SA';
+  assert.equal(decodificar(Buffer.from(conReemplazo, 'utf8')), conReemplazo);
+});
+
+test('validarContenidoCsv (caso real Emitidos): UTF-8 con \\uFFFD y muchas facturas al mismo cliente → 0 duplicados', async () => {
+  const { decodificar, validarContenidoCsv } = await import('../src/portal/misComprobantes.js');
+  // Header real (recortado) con acentos y las columnas que confundían la clave: Tipo/Nro Doc.
+  // Receptor y Tipo Cambio NO identifican el comprobante; el número sí. Contenido con �.
+  const cab = 'Fecha de Emisión;Tipo de Comprobante;Punto de Venta;Número Desde;Número Hasta;Cód. Autorización;Tipo Doc. Receptor;Nro. Doc. Receptor;Tipo Cambio;Imp. Total';
+  // 4 facturas de septiembre al MISMO receptor (80/30111111) con números distintos: no son duplicados.
+  const filas = [
+    '2026-09-01;1;6;2321;2321;7100�001;80;30111111;1;100,00',
+    '2026-09-01;1;6;2322;2322;7100000002;80;30111111;1;200,00',
+    '2026-09-02;1;6;2323;2323;7100000003;80;30111111;1;300,00',
+    '2026-09-02;1;6;2324;2324;7100000004;80;30111111;1;400,00',
+  ];
+  const buf = Buffer.from(`${cab}\n${filas.join('\n')}`, 'utf8');
+  const v = validarContenidoCsv(decodificar(buf), '2026-09-01', '2026-09-30');
+  assert.equal(v.columnaFecha, 'Fecha de Emisión', 'el encoding no rompe el nombre de la columna de fecha');
+  assert.equal(v.filas, 4);
+  assert.equal(v.duplicados, 0, 'mismo cliente, números distintos: NO son duplicados');
+  assert.equal(v.ok, true);
+  // Un duplicado REAL (mismo tipo+pdv+número+CAE repetido) sí se detecta.
+  const conDup = validarContenidoCsv(`${cab}\n${filas[0]}\n${filas[0]}`, '2026-09-01', '2026-09-30');
+  assert.equal(conDup.duplicados, 1, 'comprobante idéntico repetido = 1 duplicado');
+  assert.equal(conDup.ok, false);
 });
 
 test('validarArchivo sobre un CSV UTF-16LE con fecha ISO valida correctamente', async () => {

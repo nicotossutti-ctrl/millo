@@ -234,8 +234,17 @@ export function decodificar(buf) {
     return sw.toString('utf16le').replace(/^\uFEFF/, '');
   }
   if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.toString('utf8').replace(/^\uFEFF/, '');
-  const utf8 = buf.toString('utf8');
-  return utf8.includes('\uFFFD') ? buf.toString('latin1') : utf8;
+  // UTF-8 salvo que la secuencia de bytes sea realmente inv\u00E1lida. OJO: no alcanza con buscar el
+  // car\u00E1cter de reemplazo \uFFFD en el texto decodificado, porque el CSV de ARCA puede CONTENER
+  // \uFFFD leg\u00EDtimos (bytes EF BF BD, que son UTF-8 v\u00E1lido) dentro de alg\u00FAn nombre. Eso hac\u00EDa caer
+  // TODO el archivo a latin1 y romp\u00EDa los acentos de los encabezados ("N\u00FAmero"\u2192"N\u00C3\u00BAmero"), lo que
+  // descolocaba la detecci\u00F3n de la columna de n\u00FAmero y generaba duplicados falsos. El decoder
+  // estricto (fatal) solo lanza ante bytes inv\u00E1lidos de verdad; ah\u00ED s\u00ED caemos a latin1.
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return buf.toString('latin1');
+  }
 }
 
 /** dd/mm/aaaa, aaaa-mm-dd o dd-mm-aaaa (con hora opcional) -> aaaammdd. */
@@ -263,7 +272,16 @@ export function validarContenidoCsv(texto, desde, hasta) {
   // Normaliza para que la detección no dependa del encoding del CSV (acentos).
   const norm = (c) => c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
-  const idCols = cab.map((c, i) => (/numero|nro|punto de venta|tipo|emisor|cod\.? aut/.test(norm(c)) ? i : -1)).filter((i) => i >= 0);
+  // Clave de identidad del comprobante: Tipo de Comprobante + Punto de Venta + Número (+ CAE).
+  // Excluimos las columnas del RECEPTOR (tipo/nro de documento), el tipo de cambio y los importes:
+  // no identifican el comprobante y, si se colaban en la clave, dejaban fuera el número real y
+  // producían duplicados falsos (un negocio que factura muchas veces al mismo cliente).
+  const esColId = (c) => {
+    const n = norm(c);
+    if (/receptor|doc\.|cambio|denomina|moneda|importe|imp\.|\biva\b|tributo|total|neto|exent|grav/.test(n)) return false;
+    return /tipo de comprobante|punto de venta|numero|nro\.? *comprob|cod\.? *aut/.test(n);
+  };
+  const idCols = cab.map((c, i) => (esColId(c) ? i : -1)).filter((i) => i >= 0);
   const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
   const conFecha = iFecha >= 0;
   const datos = lineas.slice(iHeader + 1);
