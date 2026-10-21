@@ -48,7 +48,7 @@ test('SIFERE se configura para entrar por COMARB (URL directa + listados de solo
   const s = SERVICIOS.find((x) => x.id === 'sifere-consultas');
   assert.equal(s.extractor, 'sifere');
   assert.ok(!s.bloqueo, 'SIFERE ya no se trata como sin-acceso: se entra por COMARB');
-  assert.match(s.url, /comarb\.gob\.ar\/sifereweb\//);
+  assert.match(s.url, /auth\.afip\.gob\.ar.*comarb_sifereweb/, 'entra por el login de clave fiscal que arma la sesión de COMARB');
   assert.ok(Array.isArray(s.grillas) && s.grillas.length >= 2, 'baja al menos DDJJ mensuales y anuales');
   for (const g of s.grillas) {
     assert.match(g.url, /\.do$/, 'cada listado es un controller .do');

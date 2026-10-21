@@ -84,8 +84,12 @@ export const SERVICIOS = [
   //   Listado DDJJ Mensuales  -> MostrarListaDDJJController.do (Anticipo/Estado/Fecha/Presentación)
   //   Listado DDJJ Anuales    -> MostrarListaDDJJAnualController.do (Año/Estado/Fecha/Presentación)
   // NO toca "Nueva DJ" ni pagos: solo los listados. Resultado de presentación incluido.
+  // Entrada por el LOGIN de clave fiscal de AFIP con el parámetro del sistema SIFERE (confirmado por
+  // el usuario): esta URL establece la sesión de COMARB (la URL directa caía en 'Sesión Expirada').
+  // Como el robot ya tiene la sesión de AFIP abierta (login de ARCA), pasa por SSO sin reescribir la
+  // clave; si expiró, se completa en el navegador visible. Luego redirige a Seleccionar CUIT.
   { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'sifere',
-    url: 'https://sifereweb.comarb.gob.ar/sifereweb/InicioSistemaClaveFiscalController.do',
+    url: 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_ddjj',
     grillas: [
       { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
       { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
