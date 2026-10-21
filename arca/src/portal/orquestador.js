@@ -237,15 +237,13 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
   return { objeto: { cuando, cuit, conteo, categorias: porCategoria, servicios: filas }, texto: txt.join('\n') };
 }
 
-/** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
-export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner } = {}) {
-  const cuando = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const baseDir = path.join(outDir, cuando);
-  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
-  const resultados = [];
-  for (const s of servicios) {
-    resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, runner: runner ? () => runner(s) : undefined }));
-  }
+/**
+ * Escribe/actualiza los informes de la corrida (cobertura + diagnóstico integral) con lo que haya
+ * hasta el momento. Se llama DESPUÉS DE CADA servicio (no solo al final), para que si la corrida se
+ * corta en el último servicio (el más frágil, p. ej. Retenciones), igual queden los informes de
+ * todo lo anterior. Es barato (son ~16 servicios) y hace la corrida tolerante a fallos duros.
+ */
+function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando) {
   const cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
   escribir(path.join(baseDir, 'cobertura.json'), JSON.stringify(cobertura.objeto, null, 2));
   escribir(path.join(baseDir, 'cobertura.md'), cobertura.texto);
@@ -257,7 +255,31 @@ export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/c
     if (fs.existsSync(f)) { try { integral[s.id] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* ignore */ } }
   }
   escribir(path.join(baseDir, 'diagnostico-integral.json'), JSON.stringify(integral, null, 2));
-  // Puntero a la última corrida, para no tener que buscar la carpeta.
-  escribir(path.join(outDir, 'ultima.txt'), baseDir);
+  escribir(path.join(outDir, 'ultima.txt'), baseDir); // puntero a la última corrida
+  return cobertura;
+}
+
+/** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
+export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner } = {}) {
+  const cuando = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const baseDir = path.join(outDir, cuando);
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+  const resultados = [];
+  let cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
+  for (const s of servicios) {
+    // Doble red: correrUno ya aísla sus errores, pero por las dudas envolvemos igual para que NADA
+    // (ni un error inesperado al abrir el servicio) corte la corrida antes de escribir los informes.
+    try {
+      resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, runner: runner ? () => runner(s) : undefined }));
+    } catch (e) {
+      const error = sanitizarTexto(e?.message ?? String(e));
+      log(`[${s.id}] error aislado en el orquestador: ${error}`);
+      resultados.push({ id: s.id, nombre: s.nombre, fuente: s.fuente, confirmado: s.confirmado, estado: 'error', error });
+    }
+    // Persistimos los informes tras CADA servicio: si lo que viene después se cuelga, no se pierde
+    // nada de lo ya recorrido. Un fallo al escribir no corta la corrida.
+    try { cobertura = escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando); }
+    catch (e) { log(`[informes] no se pudieron actualizar: ${sanitizarTexto(e?.message ?? String(e))}`); }
+  }
   return { baseDir, resultados, cobertura };
 }

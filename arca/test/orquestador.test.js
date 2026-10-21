@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ejecutarTodo, correrUno, clasificarRelevamiento, generarCobertura } from '../src/portal/orquestador.js';
+import { SERVICIOS } from '../src/portal/servicios.js';
 
 function dirTmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'arca-orq-')); }
 const sesionFalsa = { cfg: { cuit: '20111111112' } };
@@ -28,6 +29,39 @@ test('un servicio que falla no detiene a los demas', async () => {
   assert.ok(fs.existsSync(path.join(baseDir, 'cobertura.json')));
   assert.ok(fs.existsSync(path.join(outDir, 'ultima.txt')));
   assert.match(cobertura.texto, /1 relevado|2 relevado/);
+});
+
+test('orden de servicios: datos fiscales primero, Mis Retenciones al final', () => {
+  const ids = SERVICIOS.map((s) => s.id);
+  const pos = (id) => ids.indexOf(id);
+  // Retenciones (la pantalla más frágil) va última para no bloquear al resto.
+  assert.equal(pos('mis-retenciones'), ids.length - 1, 'mis-retenciones debe ser el último');
+  // Cuentas Tributarias y DDJJ/Pagos (lo que más necesitamos) corren antes que Retenciones.
+  for (const id of ['cuentas-tributarias', 'ct-ddjj', 'ct-pagos', 'ddjj-y-pagos', 'portal-iva']) {
+    assert.ok(pos(id) >= 0 && pos(id) < pos('mis-retenciones'), `${id} debe ir antes que mis-retenciones`);
+  }
+  // Cuentas Tributarias y sus sub-rutas antes que los portales Angular.
+  assert.ok(pos('cuentas-tributarias') < pos('portal-iva'), 'cuentas-tributarias antes que portal-iva');
+});
+
+test('los informes se escriben DESPUÉS DE CADA servicio (si el último se cuelga, no se pierde lo anterior)', async () => {
+  const outDir = dirTmp();
+  const servicios = [
+    { id: 'a', nombre: 'A', fuente: 1, confirmado: true },
+    { id: 'z-ultimo', nombre: 'Z', fuente: 2, confirmado: false },
+  ];
+  let coberturaAlCorrerZ = null;
+  const runner = async (s) => {
+    if (s.id === 'z-ultimo') {
+      // Cuando corre el último servicio, el informe del primero YA debe estar en disco.
+      const ult = fs.readFileSync(path.join(outDir, 'ultima.txt'), 'utf8').trim();
+      coberturaAlCorrerZ = fs.readFileSync(path.join(ult, 'cobertura.md'), 'utf8');
+    }
+    return { estado: 'relevado', filas: 0 };
+  };
+  await ejecutarTodo(sesionFalsa, { servicios, outDir, runner, periodo: { desde: '2026-09-01', hasta: '2026-09-30' } });
+  assert.ok(coberturaAlCorrerZ, 'debía existir cobertura.md mientras corría el último servicio');
+  assert.match(coberturaAlCorrerZ, /\| A \|/, 'la cobertura intermedia ya incluye el servicio A');
 });
 
 test('correrUno marca desafio de seguridad sin propagar el error', async () => {

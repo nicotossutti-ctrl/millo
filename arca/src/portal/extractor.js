@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { relevarPagina, relevarTodasLasPaginas } from './relevar.js';
 import { totalInformado, resumenResultados } from './misComprobantes.js';
+import { sanitizarTexto } from './diagnostico.js';
 import { toCsv } from '../csv.js';
 
 export const PROHIBIDO = /presentar|pagar|generar vep|\bvep\b|enviar|confirmar|eliminar|anular|modificar|dar de baja|adherir|solicitar plan/i;
@@ -413,39 +414,48 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
 
   for (let idx = 0; idx < impuestos.length; idx++) {
     const imp = impuestos[idx];
-    // Tras consultar, Mis Retenciones salta a /resultados; para la próxima consulta hay que
-    // volver al formulario ("Volver a Consultar"), si no el combo y las fechas ya no están.
-    if (idx > 0) await volverAlFormulario(pagina);
-    const filtro = await completarFiltros(pagina, desde, hasta, servicio, log, imp);
-    resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
-    if (filtro.rangoAplicado) resultado.rangoAplicado = filtro.rangoAplicado;
-    if (filtro.rangoOk === true) rangoOk = true; else if (rangoOk == null) rangoOk = filtro.rangoOk;
-    if (filtro.error) {
-      errorUlt = filtro.error;
-      const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
-      escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}${imp ? '-' + slugImpuesto(imp) : ''}.json`), JSON.stringify({ impuesto: imp, error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
-      continue;
-    }
-    const g = await leerGrilla(pagina, expected);
-    resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
-    const res = resumenResultados(await relevarPagina(pagina));
-    // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
-    const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
-    if (g.gridPresente || sinResultados) gridPresente = true;
-    for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
-    const informados = totalInformado(res);
-    if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
-    if (g.headers && g.filas.length) {
-      if (!headersGuardados) headersGuardados = g.headers;
-      const suf = imp ? `-${slugImpuesto(imp)}` : '';
-      const file = path.join(dir, `${servicio.id}${suf}-${desde}-${hasta}.csv`);
-      escribirProtegido(file, toCsv(g.filas, COLUMNAS_LIBRES(g.headers)));
-      resultado.archivos.push(path.basename(file));
-      resultado.filas += g.filas.length;
-      porImpuesto.push({ impuesto: imp, filas: g.filas.length, informados });
-    } else {
-      porImpuesto.push({ impuesto: imp, filas: 0, cero: sinResultados });
-      if (impuestos.length === 1 && !sinResultados) escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
+    // Cada impuesto está AISLADO: si uno se cuelga o tira error (frame que se desprende, timeout,
+    // la pantalla /resultados que cambia), se registra y se sigue con el siguiente. Nunca propaga,
+    // para que un impuesto problemático no tumbe la consulta ni, menos, la corrida entera.
+    try {
+      // Tras consultar, Mis Retenciones salta a /resultados; para la próxima consulta hay que
+      // volver al formulario ("Volver a Consultar"), si no el combo y las fechas ya no están.
+      if (idx > 0) await volverAlFormulario(pagina);
+      const filtro = await completarFiltros(pagina, desde, hasta, servicio, log, imp);
+      resultado.conFiltroPeriodo = filtro.conFiltroPeriodo;
+      if (filtro.rangoAplicado) resultado.rangoAplicado = filtro.rangoAplicado;
+      if (filtro.rangoOk === true) rangoOk = true; else if (rangoOk == null) rangoOk = filtro.rangoOk;
+      if (filtro.error) {
+        errorUlt = filtro.error;
+        const rel0 = await relevarPagina(pagina).catch(() => ({ frames: [] }));
+        escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}${imp ? '-' + slugImpuesto(imp) : ''}.json`), JSON.stringify({ impuesto: imp, error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
+        continue;
+      }
+      const g = await leerGrilla(pagina, expected);
+      resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
+      const res = resumenResultados(await relevarPagina(pagina));
+      // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
+      const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
+      if (g.gridPresente || sinResultados) gridPresente = true;
+      for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
+      const informados = totalInformado(res);
+      if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
+      if (g.headers && g.filas.length) {
+        if (!headersGuardados) headersGuardados = g.headers;
+        const suf = imp ? `-${slugImpuesto(imp)}` : '';
+        const file = path.join(dir, `${servicio.id}${suf}-${desde}-${hasta}.csv`);
+        escribirProtegido(file, toCsv(g.filas, COLUMNAS_LIBRES(g.headers)));
+        resultado.archivos.push(path.basename(file));
+        resultado.filas += g.filas.length;
+        porImpuesto.push({ impuesto: imp, filas: g.filas.length, informados });
+      } else {
+        porImpuesto.push({ impuesto: imp, filas: 0, cero: sinResultados });
+        if (impuestos.length === 1 && !sinResultados) escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}.json`), JSON.stringify(res, null, 2));
+      }
+    } catch (e) {
+      errorUlt = sanitizarTexto(`impuesto ${imp ?? '(único)'}: ${e?.message ?? String(e)}`);
+      porImpuesto.push({ impuesto: imp, filas: 0, error: errorUlt });
+      log(`  ${servicio.id}: impuesto ${imp ?? ''} falló (aislado): ${errorUlt}`);
     }
   }
 

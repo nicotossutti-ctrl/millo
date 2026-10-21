@@ -21,25 +21,14 @@
  */
 // Nombres y rutas tomados del listado real de servicios (portal/app/mis-servicios) y de los
 // diagnósticos de cada hub del 20/10/2026. No se adivina: cada ruta es un paso concreto visto.
+// ORDEN DE EJECUCIÓN deliberado: primero los comprobantes y, enseguida, las fuentes fiscales que
+// más importan (Cuentas Tributarias con sus sub-rutas de DJ/Pagos/CtaCte/Compensaciones y DDJJ y
+// Pagos), después los portales Angular y lo accesorio, y DEJAMOS MIS RETENCIONES PARA EL FINAL: su
+// iteración por impuesto en /resultados es la más frágil y no debe impedir llegar al resto de los
+// datos. Igual, ningún servicio puede abortar la corrida (cada uno está aislado en el orquestador).
 export const SERVICIOS = [
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
-  // Portal IVA: hay DOS botones "CONSULTAR" (diagnóstico 23-51-59): uno de "Libro IVA"
-  // (aria-label ...declaraciones.anteriores.LibroIVA.alt) y el de "Declaraciones juradas
-  // presentadas" (...declaraciones.anteriores.portal.alt). Tomamos el de DJ presentadas (.portal).
-  // Abre la grilla en una pestaña nueva (el drill la sigue).
-  { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
-  // Mis Retenciones exige elegir un impuesto antes de Consultar (error real: "Seleccioná un impuesto").
-  // Mis Retenciones (mirequa-web): exige elegir un impuesto en el combo EJ2 #selectImpuestos
-  // (no es <select> nativo) antes de Consultar. La grilla de resultados es de componente.
-  { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
-    selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
-    requiereImpuesto: true, selectorImpuesto: '#selectImpuestos',
-    // Consultamos los impuestos/regímenes relevantes para persona humana RI (IVA, Ganancias,
-    // Bienes Personales, PAÍS, SICORE/SIRE), no los ~40 regímenes del combo.
-    impuestosRelevantes: /sire|sicore|\biva\b|ganancia|gcias|\bgan\b|bienes?\s+personal|pa[ií]s/i,
-    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
   // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). El menú "Consultas" tiene
@@ -61,6 +50,12 @@ export const SERVICIOS = [
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
+  // Portal IVA: hay DOS botones "CONSULTAR" (diagnóstico 23-51-59): uno de "Libro IVA"
+  // (aria-label ...declaraciones.anteriores.LibroIVA.alt) y el de "Declaraciones juradas
+  // presentadas" (...declaraciones.anteriores.portal.alt). Tomamos el de DJ presentadas (.portal).
+  // Abre la grilla en una pestaña nueva (el drill la sigue).
+  { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
   // Ganancias (GPH): la portada (diagnóstico 23-51-59) solo ofrece CREAR DJ (tarjetas; el CONTINUAR
   // lleva al F711 = presentación, VETADO). No expone consulta de DJ presentadas. No ruteamos a
   // ciegas: queda relevado. Sus DJ presentadas y pagos salen por Cuentas Tributarias (ct-ddjj/pagos).
@@ -80,6 +75,17 @@ export const SERVICIOS = [
     bloqueo: 'SIFERE/Convenio Multilateral no aparece en el listado de servicios de ARCA de esta clave fiscal. Esto NO prueba que no haya acceso: SIFERE es de COMARB y puede entrarse (a) adhiriéndolo en Administrador de Relaciones o (b) por el portal de COMARB con la misma clave fiscal. A confirmar con un diagnóstico del listado completo y del portal COMARB antes de descartarlo.' },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
+  // Mis Retenciones VA ÚLTIMO a propósito (ver nota de ORDEN arriba): su consulta itera impuesto
+  // por impuesto en mirequa-web /resultados (combo EJ2 #selectImpuestos, no <select> nativo; hay
+  // que volver al formulario entre impuestos) y es la pantalla más propensa a colgarse o fallar.
+  // Dejándola al final, un problema acá no impide bajar el resto de los datos fiscales.
+  { id: 'mis-retenciones', nombre: 'MIS RETENCIONES', terminos: ['MIS RETENCIONES'], fuente: 11, confirmado: true, extractor: 'tabla',
+    selectores: { fechaDesde: '#fechaRetencionDesde__input', fechaHasta: '#fechaRetencionHasta__input', consultar: '#btnConsultarRetenciones' },
+    requiereImpuesto: true, selectorImpuesto: '#selectImpuestos',
+    // Consultamos los impuestos/regímenes relevantes para persona humana RI (IVA, Ganancias,
+    // Bienes Personales, PAÍS, SICORE/SIRE), no los ~40 regímenes del combo.
+    impuestosRelevantes: /sire|sicore|\biva\b|ganancia|gcias|\bgan\b|bienes?\s+personal|pa[ií]s/i,
+    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
 ];
 
 export function slug(s) {
