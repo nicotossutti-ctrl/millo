@@ -107,6 +107,31 @@ test('drillHaciaGrilla espera el render tardío de la grilla tras navegar (no da
   assert.equal(r.pasos, 1);
 });
 
+test('drillHaciaGrilla con paso oculto clickea el enlace de menú colapsado por DOM (no exige visible)', async () => {
+  // Menú de Cuentas Tributarias: el <a> "Pagos" existe pero está oculto (visible:false). Con
+  // `oculto` hay que tomarlo igual y disparar su clic real del DOM (el.click()), no loc.click().
+  let nivel = 0;
+  let viaEvaluate = false, viaClick = false;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 6, encabezados: ['Fecha', 'Importe'] }], inputs: [] }] });
+  const control = {
+    isVisible: async () => false,                 // oculto: el menú no está desplegado
+    innerText: async () => '',                    // oculto no rinde texto; se usa paso.texto
+    click: async () => { viaClick = true; },      // NO debe usarse para ocultos
+    evaluate: async () => { viaEvaluate = true; nivel = 1; }, // el.click() del DOM
+  };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['fecha', 'importe'], ruta: [{ texto: 'Pagos', oculto: true }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+  assert.equal(viaEvaluate, true);
+  assert.equal(viaClick, false);
+});
+
 test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {
   const relevar = async () => ({ frames: [{ tablas: [], inputs: [] }] });
   const pagina = { frames: () => [{ locator: () => locatorFalso({ present: false }) }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };

@@ -71,7 +71,12 @@ async function ubicarPaso(pagina, paso) {
       }
       if (await l.count().catch(() => 0)) loc = l.first();
     }
-    if (loc && (await loc.isVisible().catch(() => false))) return loc;
+    if (loc) {
+      // Enlaces de menú colapsado (NavBar de Cuentas Tributarias: <a> reales con href pero
+      // visible:false hasta abrir el menú). Con `oculto` los tomamos igual y los clickeamos por DOM.
+      if (paso.oculto) return loc;
+      if (await loc.isVisible().catch(() => false)) return loc;
+    }
   }
   return null;
 }
@@ -89,17 +94,24 @@ async function ejecutarPaso(pagina, paso, log) {
   const real = (await loc.innerText().catch(() => '')) || paso.texto || '';
   if (!esPasoSeguro(real)) throw new Error(`paso de ruta bloqueado por seguridad (parece trámite): ${JSON.stringify(real)}`);
   log(`  ruta (lectura): ${JSON.stringify(paso.texto ?? paso.id ?? paso.selector)}`);
-  const nueva = await clickSiguiendoPestaña(pagina, loc);
+  const nueva = await clickSiguiendoPestaña(pagina, loc, paso.oculto);
   return { clickeado: true, nueva };
 }
 
-/** Clic que, si abre una pestaña nueva, la espera y la devuelve. Si no, devuelve null. */
-async function clickSiguiendoPestaña(pagina, loc) {
+/**
+ * Clic que, si abre una pestaña nueva, la espera y la devuelve. Si no, devuelve null.
+ * Con `oculto`, el control no está visible (enlace de menú colapsado): se dispara el clic real del
+ * DOM (`el.click()`), que sigue el href del <a> igual que un clic del usuario. Solo lectura.
+ */
+async function clickSiguiendoPestaña(pagina, loc, oculto = false) {
+  const hacerClick = () => (oculto
+    ? loc.evaluate((el) => el.click()).catch(() => {})
+    : loc.click().catch(() => {}));
   const ctx = typeof pagina.context === 'function' ? pagina.context() : null;
   if (ctx && typeof ctx.waitForEvent === 'function') {
     const [nueva] = await Promise.all([
       ctx.waitForEvent('page', { timeout: 12000 }).catch(() => null),
-      loc.click().catch(() => {}),
+      hacerClick(),
     ]);
     if (nueva) {
       await nueva.waitForLoadState('domcontentloaded').catch(() => {});
@@ -108,7 +120,7 @@ async function clickSiguiendoPestaña(pagina, loc) {
       return nueva;
     }
   } else {
-    await loc.click().catch(() => {});
+    await hacerClick();
   }
   await pagina.waitForLoadState?.('networkidle').catch(() => {});
   await pagina.waitForTimeout?.(2000);

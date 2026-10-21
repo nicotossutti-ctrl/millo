@@ -46,6 +46,19 @@ export function elegirOpcionImpuesto(opciones = []) {
  *  2) <select> nativo: elige la primera opción real. Solo lectura. Devuelve el impuesto elegido.
  */
 const esGrupoImpuesto = (t) => /^(impositiv|aduaner|recursos de la seg|seguridad social)/i.test(norm(t));
+
+/**
+ * De una lista de opciones del combo, deja solo los impuestos REALES (código "NNN - ..."),
+ * sin encabezados de grupo, filtrados por `relevantes` (regex opcional) y SIN duplicados.
+ * El combo EJ2 repite ítems (popup + lista oculta), por eso dedup. Pura, testeable.
+ */
+export function impuestosDeItems(items = [], relevantes = null) {
+  let labels = items
+    .map((x) => (typeof x === 'string' ? x : x?.t))
+    .filter((t) => typeof t === 'string' && /^\s*\d+\s*[-–]/.test(t) && !esGrupoImpuesto(t));
+  if (relevantes) labels = labels.filter((t) => relevantes.test(t));
+  return [...new Set(labels)];
+}
 /** Abre el combo EJ2 y devuelve [{ i, t }] con las opciones visibles. */
 async function abrirComboImpuesto(frame, selector) {
   const combo = frame.locator(selector).first();
@@ -71,9 +84,8 @@ export async function listarImpuestos(pagina, servicio) {
   for (const frame of pagina.frames()) {
     const abierto = await abrirComboImpuesto(frame, servicio.selectorImpuesto);
     if (!abierto) continue;
-    let labels = abierto.items.filter((x) => /^\s*\d+\s*[-–]/.test(x.t) && !esGrupoImpuesto(x.t)).map((x) => x.t);
+    const labels = impuestosDeItems(abierto.items, servicio.impuestosRelevantes);
     await frame.page().keyboard.press('Escape').catch(() => {});
-    if (servicio.impuestosRelevantes) labels = labels.filter((t) => servicio.impuestosRelevantes.test(t));
     if (labels.length) return labels;
   }
   return [];

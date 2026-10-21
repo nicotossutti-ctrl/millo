@@ -24,13 +24,12 @@
 export const SERVICIOS = [
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
-  // Portal IVA: dos botones "CONSULTAR" iguales de texto; el de DDJJ presentadas se distingue por
-  // su aria-label (…declaraciones.anteriores.portal…). Abre la grilla en una pestaña nueva.
-  // Portal IVA: el CONSULTAR de "Declaraciones juradas presentadas" (aria-label varía entre
-  // ...declaraciones.anteriores.alt y ...declaraciones.anteriores.portal.alt; matcheamos el común).
+  // Portal IVA: hay DOS botones "CONSULTAR" (diagnóstico 23-51-59): uno de "Libro IVA"
+  // (aria-label ...declaraciones.anteriores.LibroIVA.alt) y el de "Declaraciones juradas
+  // presentadas" (...declaraciones.anteriores.portal.alt). Tomamos el de DJ presentadas (.portal).
   // Abre la grilla en una pestaña nueva (el drill la sigue).
   { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }] },
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
   // Mis Retenciones exige elegir un impuesto antes de Consultar (error real: "Seleccioná un impuesto").
   // Mis Retenciones (mirequa-web): exige elegir un impuesto en el combo EJ2 #selectImpuestos
   // (no es <select> nativo) antes de Consultar. La grilla de resultados es de componente.
@@ -43,31 +42,35 @@ export const SERVICIOS = [
     columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
-  // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte): su menú de "Consultas"
-  // tiene enlaces explícitos (vistos en el diagnóstico) a DJ presentadas, Pagos, Cuenta Corriente
-  // y Compensaciones. Pueden dar DDJJ y pagos reales SIN depender de los portales Angular. Cada
-  // uno abre Cuentas Tributarias y navega a esa sección en SOLO LECTURA; la grilla se extrae ahí.
+  // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). El menú "Consultas" tiene
+  // enlaces REALES <a> (confirmados en el diagnóstico 23-51-59) a DJ presentadas, Pagos, Cuenta
+  // Corriente y Compensaciones, con su href; pero están COLAPSADOS (visible:false) hasta abrir el
+  // menú. Por eso cada paso lleva `oculto: true`: se ubica el enlace por texto exacto aunque esté
+  // oculto y se dispara su clic real del DOM (sigue el href). Solo lectura (son consultas).
+  // Vía posible a DDJJ y pagos reales SIN depender de los portales Angular.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Declaraciones Juradas (DJ)' }] },
+    ruta: [{ texto: 'Declaraciones Juradas (DJ)', oculto: true }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Pagos' }] },
+    ruta: [{ texto: 'Pagos', oculto: true }] },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Cuenta Corriente' }] },
+    ruta: [{ texto: 'Cuenta Corriente', oculto: true }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Consultas', opcional: true }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
-  // DDJJ y Pagos (Syncfusion EJ2): modal de novedades ("Entendido", puede o no estar) y tabs
-  // "Presentaciones"/"Pagos". La tab no es un control estándar; la dejamos opcional y confiamos en
-  // que la grilla de componente aparezca (la lee el extractor de grillas e-grid/role=grid).
+    ruta: [{ texto: 'Consulta Compensaciones y Afectaciones', oculto: true }] },
+  // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
+  // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
+  // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
-  // Ganancias (GPH, mismo template que IVA): la portada tiene tarjetas; "Declaración Jurada" lleva
-  // a presentar/consultar, y de ahí el CONSULTAR de declaraciones anteriores (igual que IVA).
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
+  // Ganancias (GPH): la portada (diagnóstico 23-51-59) solo ofrece CREAR DJ (tarjetas; el CONTINUAR
+  // lleva al F711 = presentación, VETADO). No expone consulta de DJ presentadas. No ruteamos a
+  // ciegas: queda relevado. Sus DJ presentadas y pagos salen por Cuentas Tributarias (ct-ddjj/pagos).
   { id: 'ganancias-ph', nombre: 'GANANCIAS PERSONAS HUMANAS', terminos: ['GANANCIAS PERSONAS HUMANAS'], fuente: 8, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Declaración Jurada' }, { selector: 'button[aria-label*="declaraciones.anteriores"]', opcional: true }] },
-  // Bienes Personales (F.762, mismo template integrado que IVA): CONSULTAR lleva a "Mis
-  // declaraciones juradas presentadas"; la grilla aparece async (la espera la cubre).
+    ruta: [] },
+  // Bienes Personales (F.762): la home muestra "Mis declaraciones juradas presentadas" (texto
+  // confirmado) pero el botón CONSULTAR renderiza tarde y no se capturó. Intentamos abrir esa
+  // sección por su texto (tarjeta/enlace) o por CONSULTAR; ambos opcionales. La grilla es async.
   { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'CONSULTAR' }] },
+    ruta: [{ texto: 'Mis declaraciones juradas presentadas', opcional: true }, { texto: 'CONSULTAR', opcional: true }] },
   { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
   { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },

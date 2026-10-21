@@ -1,7 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto } from '../src/portal/extractor.js';
+import { COLUMNAS_LIBRES, esProhibido, elegirTabla, decidirEstado, completarFiltros, elegirOpcionImpuesto, impuestosDeItems } from '../src/portal/extractor.js';
 import { toCsv } from '../src/csv.js';
+
+test('impuestosDeItems: solo impuestos reales, sin grupos, sin duplicados, filtrados por relevantes', () => {
+  // El combo EJ2 repite ítems y mezcla encabezados de grupo con impuestos reales.
+  const items = [
+    { i: 0, t: 'Impositivas' },                 // encabezado de grupo -> fuera
+    { i: 1, t: '216 - SIRE - IVA' },
+    { i: 2, t: '216 - SIRE - IVA' },            // duplicado -> una sola vez
+    { i: 3, t: '217 - SICORE-GANANCIAS' },
+    { i: 4, t: '767 - Percepción Something' },
+    { i: 5, t: '767 - Percepción Something' },  // duplicado
+    { i: 6, t: 'Recursos de la Seguridad Social' }, // grupo -> fuera
+    { i: 7, t: 'Elegí un impuesto' },           // placeholder sin código -> fuera
+  ];
+  // Sin filtro: impuestos reales únicos, en orden, sin grupos ni placeholders.
+  assert.deepEqual(impuestosDeItems(items), ['216 - SIRE - IVA', '217 - SICORE-GANANCIAS', '767 - Percepción Something']);
+  // Con regex de relevantes (IVA/Ganancias): deja solo esos, aún sin duplicar.
+  assert.deepEqual(impuestosDeItems(items, /\biva\b|ganancia/i), ['216 - SIRE - IVA', '217 - SICORE-GANANCIAS']);
+  // Acepta también strings sueltos (no solo {t}).
+  assert.deepEqual(impuestosDeItems(['300 - IVA', '300 - IVA']), ['300 - IVA']);
+});
 
 test('COLUMNAS_LIBRES arma el CSV a partir de headers y filas de la tabla scrapeada', () => {
   const headers = ['Impuesto', 'Período', 'Fecha Vencimiento'];
