@@ -148,7 +148,18 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
  * 'relevado' con la estructura capturada (acceso ≠ descarga).
  */
 async function correrSifere(sesion, servicio, dir, periodo, log) {
-  const pagina = await sesion.abrirServicio(servicio); // InicioSistemaClaveFiscalController.do
+  const pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
+  // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la
+  // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
+  // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
+  // inicial, no se tipea la clave: la pone la persona. Si no llega, queda 'relevado' honesto.
+  const enModulo = (u) => /sifereweb\.comarb\.gob\.ar/.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip/i.test(u);
+  if (!enModulo(pagina.url())) {
+    log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
+    await pagina.waitForURL((u) => enModulo(u.href), { timeout: 180000 }).catch(() => {});
+    await pagina.waitForLoadState('networkidle').catch(() => {});
+    await pagina.waitForTimeout(2000);
+  }
   // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
   try {
     const sel = pagina.locator('select').first();
