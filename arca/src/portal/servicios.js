@@ -93,6 +93,9 @@ export const SERVICIOS = [
     grillas: [
       { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
       { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
+      // Volantes de Pago de DDJJ: los PAGOS reales de IIBB (Monto Total, Medio de Pago, N° VEP,
+      // Estado, Resultado). URL confirmada por captura. Solo lectura (no se paga nada).
+      { id: 'volantes-pago', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaVolantesPagoController.do', columnasEsperadas: ['Anticipo', 'Monto Total', 'Medio de Pago'] },
     ] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
