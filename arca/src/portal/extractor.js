@@ -273,7 +273,9 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
   }
   if (!fechas) return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null };
   for (const frame of pagina.frames()) {
-    const btn = frame.locator('button, [role=button], input[type=submit]').filter({ hasText: /consultar|buscar/i });
+    // "Siguiente" cubre el formulario de Declaraciones Juradas (DJ) de Cuentas Tributarias, que
+    // avanza con ese botón (consulta de solo lectura; esProhibido igual veta cualquier trámite).
+    const btn = frame.locator('button, [role=button], input[type=submit]').filter({ hasText: /consultar|buscar|siguiente/i });
     const k = Math.min(await btn.count(), 6);
     for (let i = 0; i < k; i++) {
       const b = btn.nth(i);

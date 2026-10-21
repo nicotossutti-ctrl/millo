@@ -31,31 +31,36 @@ export const SERVICIOS = [
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
-  // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). El menú "Consultas" tiene
-  // enlaces REALES <a> (confirmados en el diagnóstico 23-51-59) a DJ presentadas, Pagos, Cuenta
-  // Corriente y Compensaciones, con su href; pero están COLAPSADOS (visible:false) hasta abrir el
-  // menú. Por eso cada paso lleva `oculto: true`: se ubica el enlace por texto exacto aunque esté
-  // oculto y se dispara su clic real del DOM (sigue el href). Solo lectura (son consultas).
-  // Vía posible a DDJJ y pagos reales SIN depender de los portales Angular.
+  // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). CONFIRMADO por capturas:
+  // el menú "Consultas" NO es un dropdown que se expande con un clic al <a> oculto (eso no cambiaba
+  // la pantalla: caía siempre en la grilla Vue de Vencimientos), sino una BARRA LATERAL izquierda
+  // que se abre con el botón hamburguesa (a.menu-a). Una vez abierta, DJ / Pagos / Cuenta Corriente
+  // / Compensaciones son enlaces VISIBLES; cada uno abre su propio FORMULARIO (Fecha Desde/Hasta +
+  // CONSULTAR, o SIGUIENTE para DJ). Por eso: paso 1 abre la barra, paso 2 entra a la sección; el
+  // extractor genérico completa las fechas del período y consulta. Solo lectura.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Declaraciones Juradas (DJ)', oculto: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Declaraciones Juradas (DJ)' }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Pagos', oculto: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Pagos' }] },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Cuenta Corriente', oculto: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Cuenta Corriente' }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Consulta Compensaciones y Afectaciones', oculto: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
-  // Portal IVA: hay DOS botones "CONSULTAR" (diagnóstico 23-51-59): uno de "Libro IVA"
-  // (aria-label ...declaraciones.anteriores.LibroIVA.alt) y el de "Declaraciones juradas
-  // presentadas" (...declaraciones.anteriores.portal.alt). Tomamos el de DJ presentadas (.portal).
-  // Abre la grilla en una pestaña nueva (el drill la sigue).
+  // Portal IVA (Angular, siapweb/iva/#/...). Flujo real confirmado por capturas:
+  //   home (#/init) --CONSULTAR "Declaraciones juradas presentadas"--> #/anteriores
+  //   #/anteriores  --CONSULTAR "Declaración Jurada de IVA"--> #/declaraciones.anteriores (la LISTA)
+  // La lista trae Período Fiscal / Formulario / Secuencia / Presentación de TODAS las DDJJ de IVA
+  // presentadas. Paso 1: el CONSULTAR de la home (aria-label ...declaraciones.anteriores, el nombre
+  // exacto varía entre .alt y .portal.alt, por eso matcheamos el común). Paso 2: saltamos por hash a
+  // la lista (evita depender del 2º CONSULTAR, que comparte texto con el de "Libro IVA").
   { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores.portal"]' }] },
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }, { hash: '#/declaraciones.anteriores' }],
+    columnasEsperadas: ['Periodo', 'Formulario', 'Secuencia', 'Presentacion'] },
   // Ganancias (GPH): la portada (diagnóstico 23-51-59) solo ofrece CREAR DJ (tarjetas; el CONTINUAR
   // lleva al F711 = presentación, VETADO). No expone consulta de DJ presentadas. No ruteamos a
   // ciegas: queda relevado. Sus DJ presentadas y pagos salen por Cuentas Tributarias (ct-ddjj/pagos).

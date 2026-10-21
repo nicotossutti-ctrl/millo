@@ -174,6 +174,30 @@ export function totalInformado(res) {
   return null;
 }
 
+/**
+ * Lee el total informado por ARCA LEYENDO EL DOM CRUDO (antes del saneo). El pie de la grilla
+ * (DataTables) dice "Mostrando registros 1 al 5 de un total de 7205 registros", pero el saneador
+ * de importes enmascara ese número como "[importe]" en el relevamiento, y por eso no se podía
+ * cotejar. Acá leemos SOLO ese entero (una cantidad, no un importe). Devuelve número o null.
+ */
+export async function totalInformadoPagina(pagina) {
+  const parse = (t) => {
+    const m = /de\s+un\s+total\s+de\s+([\d.]+)/i.exec(t)
+      || /([\d.]+)\s*(?:registros|resultados|comprobantes|entries)\b/i.exec(t);
+    return m ? Number(m[1].replace(/\./g, '')) : null;
+  };
+  for (const frame of pagina.frames()) {
+    const loc = frame.locator('.dataTables_info, [id$="_info"], [class*="paginate_info"]');
+    const n = Math.min(await loc.count().catch(() => 0), 4);
+    for (let i = 0; i < n; i++) {
+      const t = (await loc.nth(i).innerText().catch(() => '')) || '';
+      const v = parse(t);
+      if (v != null) return v;
+    }
+  }
+  return null;
+}
+
 /** Qué hay en Resultados después de consultar: tablas, paginación, exportación, mensajes. */
 export function resumenResultados(rel) {
   const frames = rel.frames ?? [];
@@ -432,7 +456,8 @@ export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, out
     const hash = crypto.createHash('sha256').update(fs.readFileSync(destino)).digest('hex');
     const val = validarArchivo(destino, d, h);
     // Control clave: lo descargado debe coincidir con lo que ARCA informó en la tabla paginada.
-    const informados = totalInformado(res);
+    // Si el total vino enmascarado en el relevamiento (saneo de importes), lo leemos crudo del DOM.
+    const informados = totalInformado(res) ?? await totalInformadoPagina(pagina);
     // El cotejo de cantidad solo es completo si ARCA informó el total y coincide con lo descargado.
     const cantidadVerificada = informados != null && val.filas === informados;
     const coincideInformado = informados == null ? null : val.filas === informados;

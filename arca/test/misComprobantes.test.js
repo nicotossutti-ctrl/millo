@@ -197,6 +197,17 @@ test('validarContenidoCsv valida un CSV con fecha ISO (el caso que falló en la 
   assert.equal(v.muestraFecha, '2026-09-01');
 });
 
+test('totalInformadoPagina lee el total del pie de la grilla aunque el relevamiento lo enmascare', async () => {
+  const { totalInformadoPagina } = await import('../src/portal/misComprobantes.js');
+  const paginaCon = (txt) => ({ frames: () => [{ locator: () => ({ count: async () => 1, nth: () => ({ innerText: async () => txt }) }) }] });
+  // Caso real de Emitidos: DataTables dice "de un total de N" (con separador de miles).
+  assert.equal(await totalInformadoPagina(paginaCon('Mostrando registros 1 al 5 de un total de 7.205 registros')), 7205);
+  // Variante "N registros" sin "de un total de".
+  assert.equal(await totalInformadoPagina(paginaCon('1-62 de 62 registros')), 62);
+  // Sin total legible -> null (no inventa).
+  assert.equal(await totalInformadoPagina(paginaCon('Mostrando registros')), null);
+});
+
 test('decodificar maneja UTF-16LE, latin1 y utf8', async () => {
   const { decodificar } = await import('../src/portal/misComprobantes.js');
   const texto = 'Fecha;Número\n2026-09-01;10';

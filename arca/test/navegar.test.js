@@ -132,6 +132,23 @@ test('drillHaciaGrilla con paso oculto clickea el enlace de menú colapsado por 
   assert.equal(viaClick, false);
 });
 
+test('drillHaciaGrilla ejecuta un paso de hash (SPA Angular como Portal IVA) navegando la ruta interna', async () => {
+  // Portal IVA salta a la lista de DDJJ presentadas con #/declaraciones.anteriores.
+  let hashSet = null, nivel = 0;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['Periodo', 'Formulario', 'Secuencia'] }], inputs: [] }] });
+  const pagina = {
+    frames: () => [],
+    evaluate: async (_fn, h) => { hashSet = h; nivel = 1; },
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['periodo', 'formulario'], ruta: [{ hash: '#/declaraciones.anteriores' }], relevar });
+  assert.equal(hashSet, '#/declaraciones.anteriores');
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
 test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {
   const relevar = async () => ({ frames: [{ tablas: [], inputs: [] }] });
   const pagina = { frames: () => [{ locator: () => locatorFalso({ present: false }) }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };

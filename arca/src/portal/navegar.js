@@ -82,6 +82,15 @@ async function ubicarPaso(pagina, paso) {
 }
 
 async function ejecutarPaso(pagina, paso, log) {
+  // Paso de SPA por hash (Portal IVA es Angular con rutas #/...): en vez de buscar un control,
+  // navegamos la ruta interna. Es solo lectura (una vista de consulta) y usa la URL real vista.
+  if (paso.hash) {
+    log(`  ruta (lectura): hash ${JSON.stringify(paso.hash)}`);
+    await pagina.evaluate((h) => { window.location.hash = h; }, paso.hash).catch(() => {});
+    await pagina.waitForLoadState?.('networkidle').catch(() => {});
+    await pagina.waitForTimeout?.(2500);
+    return { clickeado: true, nueva: null };
+  }
   // Reintentamos unas veces: muchos servicios renderizan el control tarde (SPA). Un paso
   // opcional (p. ej. un modal que puede no estar) no espera.
   const intentos = paso.opcional ? 1 : 5;
