@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ejecutarTodo, correrUno, clasificarRelevamiento, generarCobertura } from '../src/portal/orquestador.js';
+import { ejecutarTodo, correrUno, clasificarRelevamiento, generarCobertura, esGrillaRechazada } from '../src/portal/orquestador.js';
 import { SERVICIOS } from '../src/portal/servicios.js';
 
 function dirTmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'arca-orq-')); }
@@ -160,4 +160,20 @@ test('correrUno con extractor tabla está cableado: no es ReferenceError (regres
   // El error debe venir de abrirServicio (boom-abrir), NO de 'correrTabla is not defined'.
   assert.match(r.error, /boom-abrir/);
   assert.doesNotMatch(r.error, /is not defined|no está definid/i);
+});
+
+test('esGrillaRechazada: detecta la grilla de Vencimientos de la home en un ct-*', () => {
+  const rechazar = ['impuesto', 'concepto', 'periodo', 'vencimiento'];
+  assert.equal(esGrillaRechazada(['Impuesto', 'Concepto', 'Subconcepto', 'Período', 'Fecha Vencimiento'], rechazar), true);
+  assert.equal(esGrillaRechazada(['Impuesto', 'Período', 'Fecha de Pago', 'Importe'], rechazar), false);
+  assert.equal(esGrillaRechazada(['Impuesto'], undefined), false);
+  assert.equal(esGrillaRechazada(undefined, rechazar), false);
+});
+
+test('servicios ct-*: rechazan la grilla de la home y Cuenta Corriente va a una hoja real', () => {
+  const ct = SERVICIOS.filter((s) => s.id.startsWith('ct-'));
+  assert.equal(ct.length, 4);
+  for (const s of ct) assert.ok(s.rechazarSiColumnas?.length, s.id);
+  const cc = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  assert.equal(cc.ruta.at(-1).texto, 'Detalle de Deuda Consolidada');
 });

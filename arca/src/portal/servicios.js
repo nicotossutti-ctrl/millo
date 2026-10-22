@@ -26,6 +26,11 @@
 // Pagos), después los portales Angular y lo accesorio, y DEJAMOS MIS RETENCIONES PARA EL FINAL: su
 // iteración por impuesto en /resultados es la más frágil y no debe impedir llegar al resto de los
 // datos. Igual, ningún servicio puede abortar la corrida (cada uno está aislado en el orquestador).
+
+// Encabezados de la grilla de Vencimientos de la home de Cuentas Tributarias (la del servicio
+// cuentas-tributarias). Si un ct-* lee ESA grilla, la ruta no llegó a su sección y no cuenta.
+const RECHAZAR_VENCIMIENTOS = ['impuesto', 'concepto', 'periodo', 'vencimiento'];
+
 export const SERVICIOS = [
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
@@ -41,13 +46,19 @@ export const SERVICIOS = [
   // DJ: su formulario EXIGE elegir Establecimiento = "0" (confirmado) antes de SIGUIENTE; con eso
   // (y dejando Impuesto/Formulario sin tocar) trae todas las DJ. requiereEstablecimiento lo maneja.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
+    rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     requiereEstablecimiento: true,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)' }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
+    rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos' }] },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Cuenta Corriente' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Cuenta Corriente' }, { texto: 'Cuenta Corriente' }] },
+    rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
+    // "Cuenta Corriente" es un ENCABEZADO de sección de la barra (no abre nada): se expande y se
+    // entra a la hoja "Detalle de Deuda Consolidada". Antes los 5 registros eran la grilla de la home.
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada' }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
+    rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)

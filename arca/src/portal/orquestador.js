@@ -27,6 +27,47 @@ function selectorDe(x) {
 }
 
 /**
+ * ¿La grilla leída es una que este servicio NO busca? Pura. true si TODOS los términos de
+ * `rechazar` aparecen en los encabezados (p. ej. la grilla de Vencimientos de la home de Cuentas
+ * Tributarias, que aparece cuando la ruta no llegó a DJ/Pagos/Cuenta Corriente).
+ */
+export function esGrillaRechazada(columnas, rechazar) {
+  if (!rechazar?.length || !columnas?.length) return false;
+  const hn = columnas.map(norm);
+  return rechazar.map(norm).every((r) => hn.some((h) => h.includes(r)));
+}
+
+/**
+ * Corre EN EL NAVEGADOR (frame.evaluate): devuelve los elementos más profundos que contienen el
+ * texto (sin mayúsculas), con etiqueta, clase, tamaño, visibilidad y si parecen clickeables. Solo
+ * lee el DOM. Autocontenida: no puede usar nada de este módulo.
+ */
+export function buscarElementosConTexto(texto) {
+  const t = String(texto).toLowerCase().trim();
+  const out = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!txt || txt.length > 120 || !txt.toLowerCase().includes(t)) continue;
+    // Solo el más profundo: si un hijo también contiene el texto, se saltea el padre.
+    if ([...el.children].some((c) => (c.textContent || '').toLowerCase().includes(t))) continue;
+    const r = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    const p = el.parentElement;
+    out.push({
+      tag: el.tagName.toLowerCase(), id: el.id || null, cls: String(el.className || '').slice(0, 80) || null,
+      text: txt, w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y),
+      display: cs.display, visibility: cs.visibility, cursor: cs.cursor,
+      onclick: el.hasAttribute('onclick') || typeof el.onclick === 'function',
+      href: el.getAttribute('href') ? el.getAttribute('href').slice(0, 120) : null,
+      parent: p ? `${p.tagName.toLowerCase()}${p.id ? `#${p.id}` : ''}${p.className ? `.${String(p.className).split(/\s+/)[0]}` : ''}` : null,
+      html: el.outerHTML.slice(0, 200),
+    });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+/**
  * Clasifica lo que se encontró en un servicio genérico a partir del relevamiento, sin descargar.
  * Devuelve estado y los elementos candidatos para escribir después el extractor confirmado.
  */
@@ -76,9 +117,28 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
       .catch((e) => ({ error: sanitizarTexto(e.message) }));
     escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
   }
+  // Grilla que NO es la buscada (p. ej. Vencimientos de la home de Cuentas Tributarias cuando la
+  // ruta no llegó a la sección): no se cuenta como dato de esta fuente.
+  const grillaAjena = extraccion && !extraccion.error && extraccion.filas > 0 && esGrillaRechazada(extraccion.columnas, servicio.rechazarSiColumnas);
+
+  // Paso de ruta no encontrado: relevamos TODO elemento que contenga los textos de la ruta (etiqueta,
+  // clase, tamaño, si es clickeable) y sacamos captura, para ver cómo dibuja la pantalla ese menú.
+  let diagnosticoPaso = null;
+  if (/no se encontró el paso/.test(drill.motivo ?? '') || grillaAjena) {
+    const textos = [...new Set((servicio.ruta ?? []).flatMap((p) => [p.texto, p.siNoVisible]).filter(Boolean))];
+    diagnosticoPaso = { motivo: drill.motivo ?? 'grilla ajena', textos, frames: [] };
+    for (const frame of paginaDatos.frames()) {
+      const candidatos = {};
+      for (const t of textos) candidatos[t] = (await frame.evaluate(buscarElementosConTexto, t).catch(() => []))
+        .map((c) => ({ ...c, text: sanitizarTexto(c.text), html: sanitizarTexto(c.html), href: c.href && sanitizarTexto(c.href) }));
+      diagnosticoPaso.frames.push({ url: sanitizarTexto(frame.url()), candidatos });
+    }
+    await paginaDatos.screenshot({ path: path.join(dir, 'paso-no-encontrado.png'), fullPage: true }).catch(() => {});
+  }
 
   // Capturamos TODAS las pestañas abiertas (la grilla puede estar en una pestaña nueva).
   const todas = await relevarTodasLasPaginas(sesion, paginaDatos);
+  if (diagnosticoPaso) todas.push({ diagnosticoPaso });
   const rel = todas.find((t) => t.principal) ?? todas[0] ?? { frames: [] };
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
   escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await paginaDatos.content().catch(() => '')));
@@ -92,6 +152,10 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
 
   const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo };
+  if (grillaAjena) {
+    return { ...clas, url: rel.url, drill: drillInfo, estado: 'con-datos',
+      motivo: 'la ruta no llegó a la sección: se leyó la grilla de la home (Vencimientos), no se cuenta como dato de esta fuente; diagnóstico del menú capturado' };
+  }
   // Si se extrajeron filas reales, el estado lo dicta el extractor (descargado sin cotejo).
   if (extraccion && !extraccion.error && extraccion.filas > 0) {
     return {
@@ -154,12 +218,28 @@ async function correrSifere(sesion, servicio, dir, periodo, log) {
   // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
   // inicial, no se tipea la clave: la pone la persona. Si no llega, queda 'relevado' honesto.
   const enModulo = (u) => /sifereweb\.comarb\.gob\.ar/.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip/i.test(u);
-  if (!enModulo(pagina.url())) {
-    log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
-    await pagina.waitForURL((u) => enModulo(u.href), { timeout: 180000 }).catch(() => {});
-    await pagina.waitForLoadState('networkidle').catch(() => {});
-    await pagina.waitForTimeout(2000);
+  // Corrida 2026-10-22T19-49-58: waitForURL se resolvía con una URL de sifereweb de PASO, justo antes
+  // del redirect a SesionExpirada. Ahora exigimos que la URL quede en el módulo de forma ESTABLE (dos
+  // lecturas seguidas) y, si cae en SesionExpirada, reabrimos la entrada de login (hasta 2 veces).
+  if (!enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
+  const limite = Date.now() + 180000;
+  let estables = 0, reintentos = 0;
+  while (Date.now() < limite) {
+    const u = pagina.url();
+    if (enModulo(u)) {
+      if (++estables >= 2) break;
+    } else {
+      estables = 0;
+      if (/SesionExpirada/i.test(u) && reintentos < 2 && servicio.url) {
+        reintentos++;
+        log(`  SIFERE: sesión expirada, reabro la entrada de login (intento ${reintentos}/2).`);
+        await pagina.goto(servicio.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    }
+    await pagina.waitForTimeout(1500);
   }
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  if (!enModulo(pagina.url())) log('  SIFERE: no se llegó al módulo (login no completado o sesión expirada); sigo con lo que haya.');
   // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
   try {
     const sel = pagina.locator('select').first();
