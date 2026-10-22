@@ -91,6 +91,9 @@ function Abrir-Informe {
   $puntero = Join-Path $Raiz 'out\corridas\ultima.txt'
   if (Test-Path $puntero) {
     $dir = (Get-Content $puntero -Raw).Trim()
+    # ultima.txt guarda una ruta relativa a la carpeta de arca; se resuelve desde ahí y no desde
+    # la carpeta donde se llamó al script (si no, decía que no había cobertura.md aunque existiera).
+    if (-not [System.IO.Path]::IsPathRooted($dir)) { $dir = Join-Path $Raiz $dir }
     $md = Join-Path $dir 'cobertura.md'
     if (Test-Path $md) { Write-Host "`nInforme: $md" -ForegroundColor Green; notepad $md }
     else { Write-Host 'La corrida no genero cobertura.md.' -ForegroundColor Yellow }
