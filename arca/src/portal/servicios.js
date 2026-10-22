@@ -36,6 +36,12 @@ export const SERVICIOS = [
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
+  // Pestaña "Deudas N" de la misma home (iframe Vue homeContribuyente, diagnóstico 19-49-58): grilla
+  // Establecimiento/Impuesto/Concepto/Subconcepto/Período/Ant-Cuota/Vencimiento, oculta hasta abrir
+  // la pestaña. "Establecimiento" la distingue de Vencimientos (que no la tiene). Solo lectura.
+  { id: 'ct-deudas', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Deudas', confirmado: false, extractor: 'generico',
+    columnasEsperadas: ['Establecimiento', 'Impuesto', 'Concepto', 'Periodo', 'Vencimiento'],
+    ruta: [{ selector: 'a[role=tab]:has-text("Deudas")' }] },
   // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). CONFIRMADO por capturas:
   // el menú "Consultas" NO es un dropdown que se expande con un clic al <a> oculto (eso no cambiaba
   // la pantalla: caía siempre en la grilla Vue de Vencimientos), sino una BARRA LATERAL izquierda

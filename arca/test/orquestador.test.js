@@ -171,9 +171,18 @@ test('esGrillaRechazada: detecta la grilla de Vencimientos de la home en un ct-*
 });
 
 test('servicios ct-*: rechazan la grilla de la home y Cuenta Corriente va a una hoja real', () => {
-  const ct = SERVICIOS.filter((s) => s.id.startsWith('ct-'));
+  const ct = SERVICIOS.filter((s) => s.id.startsWith('ct-') && s.id !== 'ct-deudas');
   assert.equal(ct.length, 4);
   for (const s of ct) assert.ok(s.rechazarSiColumnas?.length, s.id);
   const cc = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
   assert.equal(cc.ruta.at(-1).texto, 'Detalle de Deuda Consolidada');
+});
+
+test('ct-deudas: abre la pestaña Deudas y exige Establecimiento (no confunde con Vencimientos)', () => {
+  const s = SERVICIOS.find((x) => x.id === 'ct-deudas');
+  assert.ok(s);
+  assert.match(s.ruta[0].selector, /role=tab/);
+  assert.ok(s.columnasEsperadas.includes('Establecimiento'));
+  assert.ok(!s.rechazarSiColumnas, 'la grilla de Deudas comparte términos con Vencimientos: no se rechaza');
+  assert.ok(SERVICIOS.findIndex((x) => x.id === 'ct-deudas') < SERVICIOS.findIndex((x) => x.id === 'mis-retenciones'));
 });
