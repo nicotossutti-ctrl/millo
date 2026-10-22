@@ -42,13 +42,13 @@ export const SERVICIOS = [
   // (y dejando Impuesto/Formulario sin tocar) trae todas las DJ. requiereEstablecimiento lo maneja.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
     requiereEstablecimiento: true,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Consultas', opcional: true, continuar: true }, { texto: 'Declaraciones Juradas (DJ)' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)' }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Consultas', opcional: true, continuar: true }, { texto: 'Pagos' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos' }] },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Consultas', opcional: true, continuar: true }, { texto: 'Cuenta Corriente' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Cuenta Corriente' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Cuenta Corriente' }, { texto: 'Cuenta Corriente' }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Consultas', opcional: true, continuar: true }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).

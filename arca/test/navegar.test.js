@@ -68,7 +68,7 @@ test('drillHaciaGrilla CON ruta la ejecuta aunque ya haya grilla inicial (no se 
 
 // Locator falso estilo Playwright: soporta .filter() (devuelve sí mismo), .count() y .first().
 function locatorFalso({ present, control }) {
-  const self = { filter: () => self, count: async () => (present ? 1 : 0), first: () => control };
+  const self = { filter: () => self, count: async () => (present ? 1 : 0), first: () => control, nth: () => control };
   return self;
 }
 
@@ -167,6 +167,39 @@ test('drillHaciaGrilla ejecuta un paso de hash (SPA Angular como Portal IVA) nav
   assert.equal(hashSet, '#/declaraciones.anteriores');
   assert.equal(r.lista, true);
   assert.equal(r.pasos, 1);
+});
+
+test('drillHaciaGrilla elige el elemento VISIBLE aunque el primero que coincide esté oculto (NavBar dynarch)', async () => {
+  // El NavBar guarda el menú como <a> ocultos y dibuja aparte el ítem visible: hay 2 coincidencias,
+  // la primera oculta (fuente) y la segunda visible (dibujada). Hay que clickear la visible.
+  let nivel = 0, clickOculto = false, clickVisible = false;
+  const oculto = { isVisible: async () => false, innerText: async () => '', click: async () => { clickOculto = true; } };
+  const visible = { isVisible: async () => true, innerText: async () => 'DECLARACIONES JURADAS (DJ)', click: async () => { clickVisible = true; nivel = 1; } };
+  const loc = { filter: () => loc, count: async () => 2, first: () => oculto, nth: (i) => (i === 0 ? oculto : visible) };
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [], inputs: [{ placeholder: 'dd/mm/aaaa' }] }] });
+  const pagina = { frames: () => [{ locator: () => loc }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Declaraciones Juradas (DJ)' }], relevar });
+  assert.equal(clickVisible, true, 'clickeó el ítem visible');
+  assert.equal(clickOculto, false, 'no se quedó con el <a> oculto');
+  assert.equal(r.lista, true);
+});
+
+test('drillHaciaGrilla con siNoVisible omite el paso preparatorio si el ítem ya está a la vista', async () => {
+  // Barra lateral ya abierta: no hay que tocar el hamburguesa (es toggle y la cerraría).
+  let clickBarra = false, clickItem = false;
+  const ctrlBarra = { isVisible: async () => true, innerText: async () => '', click: async () => { clickBarra = true; } };
+  const ctrlItem = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => { clickItem = true; } };
+  const relevar = async () => ({ frames: [{ tablas: [], inputs: [{ placeholder: 'dd/mm/aaaa' }] }] });
+  const pagina = {
+    frames: () => [{ locator: (sel) => locatorFalso({ present: true, control: sel === 'a.menu-a' ? ctrlBarra : ctrlItem }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  await drillHaciaGrilla(pagina, { expected: [], relevar,
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos' }] });
+  assert.equal(clickBarra, false, 'no tocó el hamburguesa porque Pagos ya se veía');
+  assert.equal(clickItem, true, 'clickeó Pagos directo');
 });
 
 test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {

@@ -298,6 +298,17 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
     return { conFiltroPeriodo: false, error: 'DJ: no se encontró el control de Establecimiento para elegir "0"' };
   }
   if (sel?.fechaDesde && sel?.fechaHasta) {
+    // Tras "Volver a Consultar" la SPA tarda en volver a pintar el formulario. Sin esta espera los
+    // campos no aparecían todavía, el impuesto se salteaba con "no se encontraron los filtros" y
+    // pasaba uno sí / uno no (se perdían justo los que traían filas). Esperamos hasta ~10 s.
+    for (let i = 0; i < 20; i++) {
+      let hay = false;
+      for (const frame of pagina.frames()) {
+        if (await frame.locator(sel.fechaDesde).first().count().catch(() => 0)) { hay = true; break; }
+      }
+      if (hay) break;
+      await pagina.waitForTimeout?.(500);
+    }
     for (const frame of pagina.frames()) {
       let a;
       try { a = await fijar(frame, sel.fechaDesde, fechaArca(desde)); }

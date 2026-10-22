@@ -52,33 +52,46 @@ export function grillaLista(rel, expected = []) {
  * Muchos servicios de ARCA abren la grilla en una PESTAÑA NUEVA; por eso, si el clic abre una
  * página nueva, la devolvemos en `nueva` para seguir ahí. Devuelve { clickeado, nueva }.
  */
+// Primer elemento VISIBLE entre los que coinciden. No alcanza con `.first()`: el NavBar de Cuentas
+// Tributarias (dynarch) guarda el menú como <a> OCULTOS (la fuente) y dibuja aparte los ítems
+// visibles; `.first()` agarraba el <a> oculto y el paso se daba por no encontrado.
+async function primeroVisible(l, max = 12) {
+  const n = Math.min(await l.count().catch(() => 0), max);
+  for (let i = 0; i < n; i++) {
+    const it = typeof l.nth === 'function' ? l.nth(i) : l.first();
+    if (await it.isVisible().catch(() => false)) return it;
+  }
+  return null;
+}
+
 async function ubicarPaso(pagina, paso) {
   for (const frame of pagina.frames()) {
-    let loc = null;
+    const candidatos = [];
     if (paso.id) {
-      const l = frame.locator(`#${cssEscape(paso.id)}`);
-      if (await l.count().catch(() => 0)) loc = l.first();
+      candidatos.push(frame.locator(`#${cssEscape(paso.id)}`));
     } else if (paso.selector) {
-      const l = frame.locator(paso.selector);
-      if (await l.count().catch(() => 0)) loc = l.first();
+      candidatos.push(frame.locator(paso.selector));
     } else if (paso.texto) {
+      // Exacto pero sin distinguir mayúsculas (la barra lateral muestra "DECLARACIONES JURADAS (DJ)").
       const exacto = new RegExp(`^\\s*${escapeRegex(paso.texto)}\\s*$`, 'i');
-      let l = frame.locator('a, button, [role=button], [role=menuitem], [role=tab], [role=option], li').filter({ hasText: exacto });
-      if (!(await l.count().catch(() => 0)) && typeof frame.getByText === 'function') {
-        // Fallback: tarjetas/paneles (divs) con ese texto exacto (DDJJ "Presentaciones",
-        // Ganancias "Declaración Jurada"): no son <button>/<a> pero son clickeables.
-        l = frame.getByText(paso.texto, { exact: true });
-      }
-      if (await l.count().catch(() => 0)) loc = l.first();
+      candidatos.push(frame.locator('a, button, [role=button], [role=menuitem], [role=tab], [role=option], li').filter({ hasText: exacto }));
+      // También tarjetas/paneles/celdas con ese texto (DDJJ "Presentaciones", Ganancias
+      // "Declaración Jurada", ítems dibujados por el NavBar): no son <button>/<a> pero se clickean.
+      if (typeof frame.getByText === 'function') candidatos.push(frame.getByText(exacto));
     }
-    if (loc) {
-      // Enlaces de menú colapsado (NavBar de Cuentas Tributarias: <a> reales con href pero
-      // visible:false hasta abrir el menú). Con `oculto` los tomamos igual y los clickeamos por DOM.
-      if (paso.oculto) return loc;
-      if (await loc.isVisible().catch(() => false)) return loc;
+    for (const l of candidatos) {
+      // Con `oculto` se toma el primero aunque no esté visible y se clickea por DOM.
+      if (paso.oculto) { if (await l.count().catch(() => 0)) return l.first(); continue; }
+      const vis = await primeroVisible(l);
+      if (vis) return vis;
     }
   }
   return null;
+}
+
+/** ¿Hay un control visible con ese texto exacto (sin mayúsculas) en algún frame? */
+async function textoVisible(pagina, texto) {
+  return (await ubicarPaso(pagina, { texto })) !== null;
 }
 
 async function ejecutarPaso(pagina, paso, log) {
@@ -167,6 +180,13 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
   // Vencimientos de Cuentas Tributarias no es DJ/Pagos/Cuenta Corriente).
   let pasos = 0;
   for (const paso of ruta) {
+    // `siNoVisible`: el paso solo PREPARA (abrir la barra lateral, expandir "Consultas") y se
+    // saltea si el ítem buscado ya está a la vista. Si no, un hamburguesa que es TOGGLE cerraba
+    // una barra que ya venía abierta.
+    if (paso.siNoVisible && await textoVisible(actual, paso.siNoVisible)) {
+      log(`  ruta: ${JSON.stringify(paso.siNoVisible)} ya visible, se omite ${JSON.stringify(paso.texto ?? paso.selector ?? paso.id)}`);
+      continue;
+    }
     const r = await ejecutarPaso(actual, paso, log);
     if (!r.clickeado) {
       if (paso.opcional) continue; // p. ej. un modal de novedades que puede no aparecer
