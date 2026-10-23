@@ -1,0 +1,480 @@
+/**
+ * Mis Comprobantes (fes.afip.gob.ar/mcmp). Navegación verificada en el diagnóstico real:
+ *   abrirServicio('Mis Comprobantes') -> setearContribuyente.do
+ *   enlace  comprobantesEmitidos.do   -> pantalla Emitidos
+ *   enlace  comprobantesRecibidos.do  -> pantalla Recibidos
+ *
+ * Selectores confirmados en la pantalla real (diagnóstico del 19/10/2026):
+ *   #fechaEmision        rango de fechas "dd/mm/aaaa - dd/mm/aaaa"
+ *   #buscarComprobantes  botón de consulta
+ *   #cuitConsultada      CUIT del receptor (no se toca)
+ *   #tabResultados       pestaña de resultados
+ *   #comprobanteDesde / #comprobanteHasta son números de comprobante, no fechas (no se tocan)
+ * La exportación NO está en la pantalla inicial: se busca recién después de consultar, en
+ * Resultados, y no se asume que exista hasta verla. Solo consulta: nunca presenta,
+ * modifica ni paga.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { relevarPagina, resumenRelevamiento } from './relevar.js';
+import { sanitizarHtml } from './diagnostico.js';
+import { leerZipDesdeArchivo } from './zip.js';
+
+const ENLACE = { emitidos: 'comprobantesEmitidos.do', recibidos: 'comprobantesRecibidos.do' };
+export const SEL = { fecha: '#fechaEmision', buscar: '#buscarComprobantes', tabResultados: '#tabResultados' };
+const fechaArca = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+
+export function rangos(desde, hasta, maxDias = 365) {
+  const out = [];
+  let d = new Date(`${desde}T00:00:00Z`);
+  const h = new Date(`${hasta}T00:00:00Z`);
+  while (d <= h) {
+    const fin = new Date(Math.min(h.getTime(), d.getTime() + (maxDias - 1) * 86400000));
+    out.push([d.toISOString().slice(0, 10), fin.toISOString().slice(0, 10)]);
+    d = new Date(fin.getTime() + 86400000);
+  }
+  return out;
+}
+
+function escribirProtegido(file, contenido) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, contenido, { mode: 0o600 });
+}
+
+/** Abre Mis Comprobantes y entra a Emitidos o Recibidos por el enlace real. */
+export async function irAPantalla(sesion, tipo, log = () => {}) {
+  if (!ENLACE[tipo]) throw new Error('tipo debe ser emitidos o recibidos');
+  const pagina = await sesion.abrirServicio('Mis Comprobantes');
+  // Si pide elegir a quién representar, elegimos el propio CUIT.
+  const propio = pagina.locator(`a:has-text("${sesion.cfg.cuit}"), button:has-text("${sesion.cfg.cuit}"), option:has-text("${sesion.cfg.cuit}")`).first();
+  if (await propio.count() && await propio.isVisible().catch(() => false)) {
+    log('Mis Comprobantes: seleccionando el propio CUIT como contribuyente.');
+    await propio.click();
+    await pagina.waitForLoadState('networkidle').catch(() => {});
+  }
+  const enlace = pagina.locator(`a[href*="${ENLACE[tipo]}"]`).first();
+  await enlace.waitFor({ state: 'visible', timeout: 20000 });
+  log(`Mis Comprobantes: entrando a ${tipo} por ${ENLACE[tipo]}.`);
+  await enlace.click();
+  await pagina.waitForLoadState('domcontentloaded');
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  await pagina.waitForTimeout(1500);
+  return pagina;
+}
+
+/** Candidatos a filtro de fecha, botón de consulta y exportación, a partir del relevamiento. */
+export function candidatos(rel) {
+  // Aplana todos los frames: servicios como Cuentas Tributarias viven dentro de un iframe.
+  const frames = rel.frames ?? [];
+  const todo = (k) => frames.flatMap((fr) => fr[k] ?? []);
+  const txt = (x) => `${x.id ?? ''} ${x.name ?? ''} ${x.placeholder ?? ''} ${x.ariaLabel ?? ''} ${x.title ?? ''} ${x.text ?? ''}`.toLowerCase();
+  const vis = (arr) => arr.filter((x) => x.visible);
+  return {
+    fecha: vis(todo('inputs')).filter((x) => /fecha|emisi|desde|hasta|period/.test(txt(x)) && x.type !== 'hidden'),
+    buscar: vis(todo('botones')).filter((x) => /buscar|consultar/.test(txt(x))),
+    exportar: [...vis(todo('botones')), ...vis(todo('enlaces'))].filter((x) => /\bcsv\b|excel|exportar|xls/.test(txt(x))),
+    tabla: todo('conRol').filter((x) => /grid|table/.test(x.role ?? '')).length,
+  };
+}
+
+function selectorDe(x) {
+  if (x.id) return `#${x.id.replace(/([^\w-])/g, '\\$1')}`;
+  if (x.name) return `${x.tag}[name="${x.name}"]`;
+  return null;
+}
+
+/** Diagnóstico de la pantalla Emitidos o Recibidos: relevamiento + candidatos. Sin tocar filtros. */
+export async function diagnosticoMisComprobantes(sesion, { tipo, outDir = 'out/diagnostico', sinCapturas = true, log = () => {} }) {
+  const dir = path.join(outDir, `mis-comprobantes-${tipo}`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const pagina = await irAPantalla(sesion, tipo, log);
+  const rel = await relevarPagina(pagina);
+  const cand = candidatos(rel);
+  escribirProtegido(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
+  escribirProtegido(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
+  if (!sinCapturas) { await pagina.screenshot({ path: path.join(dir, 'pantalla.png'), fullPage: true }); fs.chmodSync(path.join(dir, 'pantalla.png'), 0o600); }
+  const lineas = [
+    ...resumenRelevamiento(rel),
+    '',
+    '== Candidatos que usaría el extractor',
+    `fecha:    ${cand.fecha.length} -> ${cand.fecha.map((x) => selectorDe(x) ?? x.placeholder ?? x.tag).join(' | ') || 'NINGUNO'}`,
+    `buscar:   ${cand.buscar.length} -> ${cand.buscar.map((x) => `${JSON.stringify(x.text)} ${selectorDe(x) ?? ''}`).join(' | ') || 'NINGUNO'}`,
+    `exportar: ${cand.exportar.length} -> ${cand.exportar.map((x) => `${JSON.stringify(x.text)} ${selectorDe(x) ?? x.href ?? ''}`).join(' | ') || 'NINGUNO (puede aparecer recién después de buscar)'}`,
+    `tablas con rol grid/table: ${cand.tabla}`,
+  ];
+  escribirProtegido(path.join(dir, 'resumen.txt'), lineas.join('\n'));
+  for (const l of lineas) log(l);
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  return { rel, candidatos: cand, dir };
+}
+
+// ---------- consulta ----------
+
+/** Carga el rango en #fechaEmision y consulta con #buscarComprobantes. */
+export async function consultar(pagina, d, h, log = () => {}) {
+  const valor = `${fechaArca(d)} - ${fechaArca(h)}`;
+  const campo = pagina.locator(SEL.fecha);
+  await campo.waitFor({ state: 'visible', timeout: 20000 });
+  await campo.click();
+  await campo.fill(valor);
+  // El selector de rango puede abrir un panel: Enter lo aplica; si queda abierto, Escape lo cierra.
+  await pagina.keyboard.press('Enter');
+  await pagina.waitForTimeout(400);
+  const aplicar = pagina.locator('.applyBtn, button:has-text("Aplicar")').first();
+  if (await aplicar.count() && await aplicar.isVisible().catch(() => false)) await aplicar.click();
+  else await pagina.keyboard.press('Escape');
+  const leido = await campo.inputValue();
+  if (leido.replace(/\s/g, '') !== valor.replace(/\s/g, '')) {
+    // Último recurso: asignar el valor y avisar al formulario, sin tocar nada más.
+    await campo.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, valor);
+  }
+  log(`  rango cargado en ${SEL.fecha}: "${await campo.inputValue()}"`);
+  await pagina.locator(SEL.buscar).click();
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  await pagina.waitForTimeout(2500);
+  const tab = pagina.locator(SEL.tabResultados);
+  if (await tab.count() && await tab.isVisible().catch(() => false)) {
+    await tab.click().catch(() => {});
+    await pagina.waitForTimeout(800);
+  }
+}
+
+/**
+ * Espera a que los resultados de la consulta se estabilicen: la grilla de Mis Comprobantes
+ * (sobre todo Emitidos) carga async, así que leer enseguida daba "0 tablas" cuando en realidad
+ * había datos. Poll hasta ~16s: corta al ver filas, botón de exportación o un mensaje de "sin
+ * resultados". Devuelve el último relevamiento y su resumen.
+ */
+export async function esperarResultados(pagina, { intentos = 8, ms = 2000 } = {}) {
+  let rel, res;
+  for (let i = 0; i < intentos; i++) {
+    rel = await relevarPagina(pagina);
+    res = resumenResultados(rel);
+    const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
+    const hayMsg = res.mensajes.some((m) => /no se encontraron|sin resultados|no hay|no existen/i.test(m));
+    if (filas > 0 || res.exportacion.length || hayMsg) break;
+    await pagina.waitForTimeout(ms);
+  }
+  return { rel, res };
+}
+
+/** Total de comprobantes informado por ARCA, leído de la paginación ("... de N registros"). */
+export function totalInformado(res) {
+  const aNum = (x) => Number(String(x).replace(/\./g, ''));
+  for (const txt of res.paginacion ?? []) {
+    // Preferimos el número inmediatamente anterior a la palabra "registros/resultados/...".
+    const pref = /([\d.]+)\s*(?:registros|resultados|comprobantes|entries)/i.exec(txt);
+    if (pref) return aNum(pref[1]);
+    const alt = /(?:\bde\b|\bof\b)\s+([\d.]+)\b/i.exec(txt);
+    if (alt) return aNum(alt[1]);
+  }
+  // Sin paginación: si hay una sola tabla visible, sus filas son el total.
+  if (res.tablasVisibles.length === 1) return res.tablasVisibles[0].filas;
+  return null;
+}
+
+/**
+ * Lee el total informado por ARCA LEYENDO EL DOM CRUDO (antes del saneo). El pie de la grilla
+ * (DataTables) dice "Mostrando registros 1 al 5 de un total de 7205 registros", pero el saneador
+ * de importes enmascara ese número como "[importe]" en el relevamiento, y por eso no se podía
+ * cotejar. Acá leemos SOLO ese entero (una cantidad, no un importe). Devuelve número o null.
+ */
+export async function totalInformadoPagina(pagina) {
+  const parse = (t) => {
+    const m = /de\s+un\s+total\s+de\s+([\d.]+)/i.exec(t)
+      || /([\d.]+)\s*(?:registros|resultados|comprobantes|entries)\b/i.exec(t);
+    return m ? Number(m[1].replace(/\./g, '')) : null;
+  };
+  for (const frame of pagina.frames()) {
+    const loc = frame.locator('.dataTables_info, [id$="_info"], [class*="paginate_info"]');
+    const n = Math.min(await loc.count().catch(() => 0), 4);
+    for (let i = 0; i < n; i++) {
+      const t = (await loc.nth(i).innerText().catch(() => '')) || '';
+      const v = parse(t);
+      if (v != null) return v;
+    }
+  }
+  return null;
+}
+
+/** Qué hay en Resultados después de consultar: tablas, paginación, exportación, mensajes. */
+export function resumenResultados(rel) {
+  const frames = rel.frames ?? [];
+  const cand = candidatos(rel);
+  const tablas = frames.flatMap((f) => f.tablas ?? []).filter((t) => t.visible);
+  return {
+    tablasVisibles: tablas.map((t) => ({ id: t.id, filas: t.filas, columnas: t.encabezados })),
+    paginacion: frames.flatMap((f) => f.paginacion ?? []).map((p) => p.text).filter(Boolean),
+    exportacion: cand.exportar.map((x) => ({ texto: x.text, id: x.id, cls: x.cls, href: x.href })),
+    mensajes: frames.flatMap((f) => f.mensajes ?? []),
+  };
+}
+
+/** Prueba real de consulta de un período corto: consulta, releva Resultados, no descarga nada. */
+export async function pruebaConsulta(sesion, { tipo, desde, hasta, outDir = 'out/diagnostico', sinCapturas = true, log = () => {} }) {
+  const dir = path.join(outDir, `mis-comprobantes-${tipo}-resultados`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const pagina = await irAPantalla(sesion, tipo, log);
+  log(`Consulta ${tipo} ${desde} a ${hasta}`);
+  await consultar(pagina, desde, hasta, log);
+  const rel = await relevarPagina(pagina);
+  const res = resumenResultados(rel);
+  escribirProtegido(path.join(dir, 'estructura.json'), JSON.stringify(rel, null, 2));
+  escribirProtegido(path.join(dir, 'pagina.html'), sanitizarHtml(await pagina.content()));
+  if (!sinCapturas) { await pagina.screenshot({ path: path.join(dir, 'pantalla.png'), fullPage: true }); fs.chmodSync(path.join(dir, 'pantalla.png'), 0o600); }
+  const lineas = [
+    ...resumenRelevamiento(rel),
+    '',
+    '== Resultados de la consulta',
+    `tablas visibles: ${res.tablasVisibles.length}` + res.tablasVisibles.map((t) => `\n  ${t.id ?? '(sin id)'}: ${t.filas} filas · ${t.columnas.join(' | ')}`).join(''),
+    `paginación: ${res.paginacion.length ? res.paginacion.join(' || ') : 'no se detectó'}`,
+    `exportación: ${res.exportacion.length ? res.exportacion.map((e) => `${JSON.stringify(e.texto)} ${e.id ? `#${e.id}` : ''} ${e.cls ?? ''} ${e.href ?? ''}`.trim()).join(' | ') : 'NO HAY botón de exportación visible'}`,
+    `mensajes: ${res.mensajes.length ? res.mensajes.join(' || ') : 'ninguno'}`,
+  ];
+  escribirProtegido(path.join(dir, 'resumen.txt'), lineas.join('\n'));
+  for (const l of lineas) log(l);
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  return { rel, resultados: res, dir };
+}
+
+// ---------- descarga ----------
+
+async function elegir(pagina, lista, que) {
+  if (lista.length === 0) throw new Error(`No encontré ${que} en la pantalla. Corré portal:mc-consulta y pasame el resumen.`);
+  const x = lista[0];
+  const sel = selectorDe(x);
+  const loc = sel ? pagina.locator(sel).first() : pagina.getByText(x.text ?? '', { exact: false }).first();
+  if (!(await loc.count())) throw new Error(`Encontré ${que} en el relevamiento pero no pude ubicarlo para operar: ${JSON.stringify(x)}`);
+  return loc;
+}
+
+/** Decodifica el CSV según su BOM/encoding: UTF-16, UTF-8 o, si hay bytes inválidos, latin1. */
+export function decodificar(buf) {
+  if (!Buffer.isBuffer(buf)) return String(buf);
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.toString('utf16le').replace(/^\uFEFF/, '');
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    const sw = Buffer.from(buf); for (let i = 0; i + 1 < sw.length; i += 2) { const t = sw[i]; sw[i] = sw[i + 1]; sw[i + 1] = t; }
+    return sw.toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.toString('utf8').replace(/^\uFEFF/, '');
+  // UTF-8 salvo que la secuencia de bytes sea realmente inv\u00E1lida. OJO: no alcanza con buscar el
+  // car\u00E1cter de reemplazo \uFFFD en el texto decodificado, porque el CSV de ARCA puede CONTENER
+  // \uFFFD leg\u00EDtimos (bytes EF BF BD, que son UTF-8 v\u00E1lido) dentro de alg\u00FAn nombre. Eso hac\u00EDa caer
+  // TODO el archivo a latin1 y romp\u00EDa los acentos de los encabezados ("N\u00FAmero"\u2192"N\u00C3\u00BAmero"), lo que
+  // descolocaba la detecci\u00F3n de la columna de n\u00FAmero y generaba duplicados falsos. El decoder
+  // estricto (fatal) solo lanza ante bytes inv\u00E1lidos de verdad; ah\u00ED s\u00ED caemos a latin1.
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return buf.toString('latin1');
+  }
+}
+
+/** dd/mm/aaaa, aaaa-mm-dd o dd-mm-aaaa (con hora opcional) -> aaaammdd. */
+export function aYmd(x) {
+  const t = (x ?? '').trim().replace(/^"|"$/g, '');
+  let m = /^(\d{4})[-/](\d{2})[-/](\d{2})/.exec(t);
+  if (m) return `${m[1]}${m[2]}${m[3]}`;
+  m = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(t);
+  if (m) return `${m[3]}${m[2]}${m[1]}`;
+  return null;
+}
+
+/** Valida el TEXTO de un CSV: filas dentro del rango, columnas, separador y duplicados. */
+export function validarContenidoCsv(texto, desde, hasta) {
+  const limpio = texto.replace(/^﻿/, '');
+  const lineas = limpio.split(/\r?\n/).filter((l) => l.trim());
+  if (lineas.length < 2) return { ok: false, filas: 0, motivo: 'archivo sin filas de datos' };
+  // El CSV puede traer una línea de título antes del encabezado (Emitidos: "...(montos expresados
+  // en pesos)"). Encabezado real = primera línea (entre las primeras 8) que menciona "fecha" con
+  // varios separadores; si no, la primera línea.
+  let iHeader = lineas.slice(0, 8).findIndex((l) => /fecha/i.test(l) && ((l.match(/;/g) ?? []).length + (l.match(/,/g) ?? []).length) >= 2);
+  if (iHeader < 0) iHeader = 0;
+  const sep = (lineas[iHeader].match(/;/g) ?? []).length >= (lineas[iHeader].match(/,/g) ?? []).length ? ';' : ',';
+  const cab = lineas[iHeader].split(sep).map((c) => c.trim());
+  // Normaliza para que la detección no dependa del encoding del CSV (acentos).
+  const norm = (c) => c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const iFecha = cab.findIndex((c) => /fecha/.test(norm(c)));
+  // Clave de identidad del comprobante: Tipo de Comprobante + Punto de Venta + Número (+ CAE).
+  // Excluimos las columnas del RECEPTOR (tipo/nro de documento), el tipo de cambio y los importes:
+  // no identifican el comprobante y, si se colaban en la clave, dejaban fuera el número real y
+  // producían duplicados falsos (un negocio que factura muchas veces al mismo cliente).
+  const esColId = (c) => {
+    const n = norm(c);
+    if (/receptor|doc\.|cambio|denomina|moneda|importe|imp\.|\biva\b|tributo|total|neto|exent|grav/.test(n)) return false;
+    return /tipo de comprobante|punto de venta|numero|nro\.? *comprob|cod\.? *aut/.test(n);
+  };
+  const idCols = cab.map((c, i) => (esColId(c) ? i : -1)).filter((i) => i >= 0);
+  const d = desde.replace(/-/g, ''); const h = hasta.replace(/-/g, '');
+  const conFecha = iFecha >= 0;
+  const datos = lineas.slice(iHeader + 1);
+  let dentro = 0; let fuera = 0;
+  const claves = new Map();
+  let duplicados = 0;
+  for (const l of datos) {
+    const celdas = l.split(sep);
+    const f = conFecha ? aYmd(celdas[iFecha]) : null;
+    const enRango = conFecha ? !!(f && f >= d && f <= h) : true;
+    if (conFecha) { if (enRango) dentro++; else fuera++; }
+    // Deduplicamos SOLO lo que cuenta como del período: un export de todo el historial (p. ej.
+    // Emitidos devuelve 7205 filas) no debe generar falsos duplicados entre períodos distintos.
+    if (!enRango) continue;
+    const clave = idCols.length ? idCols.map((i) => (celdas[i] ?? '').trim()).join('|') : l.trim();
+    if (claves.has(clave)) duplicados++; else claves.set(clave, true);
+  }
+  // Las filas del PERÍODO son las que están en rango (cuando hay columna de fecha). Las fuera de
+  // rango no son un error: son otros períodos del mismo archivo. El original se conserva igual.
+  const filas = conFecha ? dentro : datos.length;
+  return {
+    ok: conFecha && dentro > 0 && duplicados === 0,
+    filas, filasTotales: datos.length, columnas: cab.length, separador: sep,
+    columnaFecha: conFecha ? cab[iFecha] : null,
+    muestraFecha: conFecha && datos[0] ? (datos[0].split(sep)[iFecha] ?? '').trim() : null,
+    dentroDelRango: dentro, fueraDelRango: fuera,
+    duplicados, claveDuplicados: idCols.length ? idCols.map((i) => cab[i]) : ['línea completa'],
+    encabezados: cab,
+    motivo: !conFecha ? 'no se encontró columna de fecha' : dentro === 0 ? 'ninguna fila con fecha válida en el período' : duplicados ? `${duplicados} duplicados en el período (clave tipo+punto de venta+número)` : null,
+  };
+}
+
+/** Valida un archivo descargado: si es ZIP, extrae y valida cada CSV; si es CSV, directo. */
+export function validarArchivo(file, desde, hasta) {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.csv') {
+    return { ...validarContenidoCsv(decodificar(fs.readFileSync(file)), desde, hasta), csv: [path.basename(file)] };
+  }
+  if (ext === '.zip') {
+    let entradas;
+    try { entradas = leerZipDesdeArchivo(file); } catch (e) { return { ok: false, motivo: `ZIP ilegible: ${e.message}` }; }
+    const csvs = entradas.filter((e) => /\.csv$/i.test(e.name));
+    if (!csvs.length) return { ok: false, motivo: `el ZIP no contiene CSV (${entradas.map((e) => e.name).join(', ')})` };
+    const dir = path.join(path.dirname(file), path.basename(file, '.zip') + '-csv');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const partes = csvs.map((e) => {
+      fs.writeFileSync(path.join(dir, path.basename(e.name)), e.data, { mode: 0o600 });
+      return { csv: path.basename(e.name), ...validarContenidoCsv(decodificar(e.data), desde, hasta) };
+    });
+    return {
+      ok: partes.every((p) => p.ok),
+      filas: partes.reduce((n, p) => n + (p.filas ?? 0), 0),
+      duplicados: partes.reduce((n, p) => n + (p.duplicados ?? 0), 0),
+      dentroDelRango: partes.reduce((n, p) => n + (p.dentroDelRango ?? 0), 0),
+      fueraDelRango: partes.reduce((n, p) => n + (p.fueraDelRango ?? 0), 0),
+      csv: partes.map((p) => p.csv), partes,
+      motivo: partes.every((p) => p.ok) ? null : partes.filter((p) => !p.ok).map((p) => `${p.csv}: ${p.motivo}`).join('; '),
+    };
+  }
+  return { ok: false, motivo: `formato ${ext || 'desconocido'}: validar a mano` };
+}
+
+// ---------- registro de períodos ya verificados (trazabilidad) ----------
+
+function rutaManifiesto(outDir) { return path.join(outDir, 'manifiesto.json'); }
+export function leerManifiesto(outDir) {
+  const f = rutaManifiesto(outDir);
+  if (!fs.existsSync(f)) return {};
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return {}; }
+}
+export function claveManifiesto(tipo, d, h) { return `${tipo}:${d}:${h}`; }
+export function registrarManifiesto(outDir, clave, registro) {
+  fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  const m = leerManifiesto(outDir);
+  m[clave] = registro;
+  fs.writeFileSync(rutaManifiesto(outDir), JSON.stringify(m, null, 2), { mode: 0o600 });
+}
+
+/**
+ * Reparte los tramos del período en pendientes (hay que descargar) y reutilizados (ya
+ * verificados en el manifiesto persistente de outDir). Pura: no toca la red.
+ */
+export function periodosPendientes(outDir, tipo, desde, hasta, rehacer = false) {
+  const manifiesto = leerManifiesto(outDir);
+  const pendientes = []; const reutilizados = [];
+  for (const [d, h] of rangos(desde, hasta)) {
+    const prev = manifiesto[claveManifiesto(tipo, d, h)];
+    if (prev?.ok && !rehacer) reutilizados.push({ desde: d, hasta: h, ...prev });
+    else pendientes.push([d, h]);
+  }
+  return { pendientes, reutilizados };
+}
+
+export async function descargarMisComprobantes(sesion, { tipo, desde, hasta, outDir = 'out/portal', rehacer = false, log = () => {} }) {
+  fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  const resultado = { tipo, desde, hasta, archivos: [], validaciones: [], verificado: false };
+  // Trazabilidad: períodos ya verificados no se vuelven a descargar salvo --rehacer.
+  const { pendientes, reutilizados } = periodosPendientes(outDir, tipo, desde, hasta, rehacer);
+  for (const r of reutilizados) {
+    // Solo reutilizamos si el archivo sigue existiendo; si falta, se vuelve a descargar.
+    const abs = r.archivo ? path.join(outDir, r.archivo) : null;
+    if (!abs || !fs.existsSync(abs)) {
+      log(`Mis Comprobantes ${tipo} ${r.desde} a ${r.hasta}: estaba en el manifiesto pero falta el archivo; se vuelve a descargar.`);
+      pendientes.push([r.desde, r.hasta]);
+      continue;
+    }
+    log(`Mis Comprobantes ${tipo} ${r.desde} a ${r.hasta}: ya verificado el ${r.fecha} (${r.filas} filas), se reutiliza.`);
+    resultado.validaciones.push({ desde: r.desde, hasta: r.hasta, ok: true, filas: r.filas, informados: r.informados, archivo: r.archivo, reutilizado: true, hash: r.hash });
+    resultado.archivos.push(abs);
+  }
+  pendientes.sort((a, b) => a[0].localeCompare(b[0]));
+  if (!pendientes.length) {
+    resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
+    log('Todo el período ya estaba verificado; no se descargó nada.');
+    return resultado;
+  }
+
+  const pagina = await irAPantalla(sesion, tipo, log);
+  try {
+  for (const [d, h] of pendientes) {
+    log(`Mis Comprobantes ${tipo} ${d} a ${h}`);
+    await consultar(pagina, d, h, log);
+    // La grilla de resultados carga async: esperamos a que se estabilice antes de leer.
+    const { rel, res } = await esperarResultados(pagina);
+    const filas = res.tablasVisibles.reduce((n, t) => n + t.filas, 0);
+    log(`  resultados: ${res.tablasVisibles.length} tablas, ${filas} filas visibles, paginación ${res.paginacion.length ? JSON.stringify(res.paginacion[0]) : 'no detectada'}`);
+    // Diagnóstico saneado de la pantalla de resultados, SIEMPRE: así Emitidos queda capturado
+    // en la próxima corrida aunque dé 0 tablas, sin pedir una prueba individual.
+    fs.writeFileSync(path.join(outDir, `diagnostico-${tipo}-${d}-${h}.json`), JSON.stringify({ desde: d, hasta: h, resultados: res }, null, 2), { mode: 0o600 });
+    if (res.mensajes.some((m) => /no se encontraron|sin resultados|no hay|no existen/i.test(m)) || (res.tablasVisibles.length && filas === 0)) {
+      log('  sin comprobantes en el rango');
+      resultado.validaciones.push({ desde: d, hasta: h, ok: true, filas: 0, motivo: 'sin comprobantes' });
+      continue;
+    }
+    if (!res.exportacion.length) {
+      throw new Error(`La consulta de ${tipo} ${d} a ${h} no mostró botón de exportación (tablas ${res.tablasVisibles.length}, filas visibles ${filas}, mensajes ${JSON.stringify(res.mensajes)}). Diagnóstico en diagnostico-${tipo}-${d}-${h}.json. Revisar la pantalla; no asumir cero.`);
+    }
+    const cand = candidatos(rel);
+    const csvPrimero = [...cand.exportar].sort((a, b) => (/csv/i.test(`${b.text}${b.cls}`) ? 1 : 0) - (/csv/i.test(`${a.text}${a.cls}`) ? 1 : 0));
+    const exportar = await elegir(pagina, csvPrimero, 'el botón de exportación');
+    log(`  exportando con ${JSON.stringify(csvPrimero[0].text)}`);
+    const [descarga] = await Promise.all([pagina.waitForEvent('download', { timeout: 120000 }), exportar.click()]);
+    const ext = path.extname(descarga.suggestedFilename()) || '.csv';
+    const destino = path.join(outDir, `mis-comprobantes-${tipo}-${d}-${h}${ext}`);
+    await descarga.saveAs(destino);
+    fs.chmodSync(destino, 0o600);
+    resultado.archivos.push(destino);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(destino)).digest('hex');
+    const val = validarArchivo(destino, d, h);
+    // Control clave: lo descargado debe coincidir con lo que ARCA informó en la tabla paginada.
+    // Si el total vino enmascarado en el relevamiento (saneo de importes), lo leemos crudo del DOM.
+    const informados = totalInformado(res) ?? await totalInformadoPagina(pagina);
+    // El cotejo de cantidad solo es completo si ARCA informó el total y coincide con lo descargado.
+    const cantidadVerificada = informados != null && val.filas === informados;
+    const coincideInformado = informados == null ? null : val.filas === informados;
+    const ok = val.ok && cantidadVerificada;
+    const motivo = !val.ok ? val.motivo
+      : informados == null ? 'cantidad no verificada: ARCA no informó el total'
+      : coincideInformado === false ? `descargados ${val.filas} ≠ informados ${informados}`
+      : null;
+    resultado.validaciones.push({ desde: d, hasta: h, archivo: path.basename(destino), hash, ...val, ok, informados, coincideInformado, cantidadVerificada, motivo });
+    log(`  -> ${path.basename(destino)} · ${val.filas ?? '?'} filas / informados ${informados ?? '?'} · dup ${val.duplicados ?? 0} · ${ok ? 'VALIDADO' : `NO validado: ${motivo}`}`);
+    if (ok) registrarManifiesto(outDir, claveManifiesto(tipo, d, h), { fecha: new Date().toISOString().slice(0, 10), ok: true, archivo: path.basename(destino), filas: val.filas, informados, hash, csv: val.csv });
+  }
+  resultado.verificado = resultado.validaciones.length > 0 && resultado.validaciones.every((v) => v.ok);
+  return resultado;
+  } finally {
+    // Cerramos la pestaña SIEMPRE, también si algo lanzó (antes el error de Emitidos la dejaba
+    // abierta y contaminaba la captura de los servicios siguientes).
+    if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  }
+}

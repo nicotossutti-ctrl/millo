@@ -1,0 +1,44 @@
+{
+  "_fuente": "Tablas oficiales de ARCA, régimen de retención, liquidación anual. Escala art. 94 y deducciones art. 30. Las URL están en el README.",
+  "2025": {
+    "escala": [
+      { "desde": 0.00,          "hasta": 1749901.45,  "fijo": 0.00,        "alicuota": 0.05 },
+      { "desde": 1749901.45,    "hasta": 3499802.89,  "fijo": 87495.07,    "alicuota": 0.09 },
+      { "desde": 3499802.89,    "hasta": 5249704.34,  "fijo": 244986.20,   "alicuota": 0.12 },
+      { "desde": 5249704.34,    "hasta": 7874556.52,  "fijo": 454974.38,   "alicuota": 0.15 },
+      { "desde": 7874556.52,    "hasta": 15749113.04, "fijo": 848702.20,   "alicuota": 0.19 },
+      { "desde": 15749113.04,   "hasta": 23623669.56, "fijo": 2344867.94,  "alicuota": 0.23 },
+      { "desde": 23623669.56,   "hasta": 35435504.34, "fijo": 4156015.94,  "alicuota": 0.27 },
+      { "desde": 35435504.34,   "hasta": 53153256.52, "fijo": 7345211.33,  "alicuota": 0.31 },
+      { "desde": 53153256.52,   "hasta": null,        "fijo": 12837714.51, "alicuota": 0.35 }
+    ],
+    "deducciones": {
+      "gananciaNoImponible": 4507505.52,
+      "deduccionEspecialAp1": 15776269.32,
+      "deduccionEspecialAp1NuevosProfesionales": 18030022.08,
+      "conyuge": 4245166.13,
+      "hijo": 2140852.77
+    }
+  },
+  "2026": {
+    "escala": [
+      { "desde": 0.00,          "hasta": 2336953.69,  "fijo": 0.00,        "alicuota": 0.05 },
+      { "desde": 2336953.69,    "hasta": 4673907.36,  "fijo": 116847.68,   "alicuota": 0.09 },
+      { "desde": 4673907.36,    "hasta": 7010861.05,  "fijo": 327173.52,   "alicuota": 0.12 },
+      { "desde": 7010861.05,    "hasta": 10516291.59, "fijo": 607607.96,   "alicuota": 0.15 },
+      { "desde": 10516291.59,   "hasta": 21032583.18, "fijo": 1133422.54,  "alicuota": 0.19 },
+      { "desde": 21032583.18,   "hasta": 31548874.77, "fijo": 3131517.94,  "alicuota": 0.23 },
+      { "desde": 31548874.77,   "hasta": 47323312.16, "fijo": 5550265.01,  "alicuota": 0.27 },
+      { "desde": 47323312.16,   "hasta": 70984968.25, "fijo": 9809363.10,  "alicuota": 0.31 },
+      { "desde": 70984968.25,   "hasta": null,        "fijo": 17144476.49, "alicuota": 0.35 }
+    ],
+    "deducciones": {
+      "gananciaNoImponible": 6019671.36,
+      "deduccionEspecialAp1": 21068849.78,
+      "deduccionEspecialAp1NuevosProfesionales": 24078685.46,
+      "conyuge": 5669323.06,
+      "hijo": 2859060.31
+    }
+  },
+  "alicuotaDividendos": 0.07
+}
