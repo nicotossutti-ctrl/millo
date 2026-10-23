@@ -19,6 +19,7 @@ import { relevarPagina, relevarTodasLasPaginas } from './relevar.js';
 import { totalInformado, resumenResultados } from './misComprobantes.js';
 import { sanitizarTexto } from './diagnostico.js';
 import { toCsv } from '../csv.js';
+import { verificarFechas, resumenEstados } from './calidad.js';
 
 export const PROHIBIDO = /presentar|pagar|generar vep|\bvep\b|enviar|confirmar|eliminar|anular|modificar|dar de baja|adherir|solicitar plan/i;
 /** true si un control no debe tocarse por ser de trámite, pago, emisión o modificación. */
@@ -209,7 +210,10 @@ export function elegirTabla(tablas, expected = []) {
     const cols = (t.headers ?? []).filter(Boolean).length;
     const hn = (t.headers ?? []).map(norm);
     const coincideCols = expected.filter((e) => hn.some((h) => h.includes(e))).length;
-    const score = t.rows.length * Math.max(1, cols) + coincideCols * 100000;
+    // Bonus a las tablas con encabezados reales (≥2): sin columnas esperadas, una tabla de maquetación
+    // sin encabezados (p. ej. las secciones del menú lateral de Cuentas Tributarias, 10 filas) no debe
+    // ganarle a una grilla de datos chica.
+    const score = t.rows.length * Math.max(1, cols) + (cols >= 2 ? 50000 : 0) + coincideCols * 100000;
     if (!mejor || score > mejor.score) mejor = { ...t, score, coincideCols };
   }
   if (mejor && expected.length && mejor.coincideCols === 0) return null;
@@ -335,20 +339,28 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
     }
     return { conFiltroPeriodo: true, error: 'no se encontraron los filtros de fecha confirmados' };
   }
-  // Genérico: inputs con placeholder dd/mm/aaaa o id/name con "fecha".
-  let fechas = 0;
+  // Genérico: inputs con placeholder dd/mm/aaaa o id/name con "fecha". Después de completarlos se
+  // RELEEN: si los dos campos tomaron el período pedido, el rango queda confirmado (rangoOk); si no,
+  // queda sin confirmar y la extracción no se valida por período.
+  let fechas = 0; const llenados = [];
   for (const frame of pagina.frames()) {
     const inputs = frame.locator('input[placeholder="dd/mm/aaaa" i], input[id*="fecha" i], input[name*="fecha" i]');
     const n = Math.min(await inputs.count(), 8);
     for (let i = 0; i < n && fechas < 2; i++) {
       const inp = inputs.nth(i);
       if (!(await inp.isVisible().catch(() => false))) continue;
-      await inp.fill(fechas === 0 ? fechaArca(desde) : fechaArca(hasta)).catch(() => {});
+      const valor = fechas === 0 ? fechaArca(desde) : fechaArca(hasta);
+      await inp.fill(valor).catch(() => {});
+      llenados.push({ inp, valor });
       fechas++;
     }
     if (fechas) break;
   }
   if (!fechas) return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null };
+  const leidos = [];
+  for (const { inp } of llenados) leidos.push(await inp.inputValue().catch(() => ''));
+  const rangoAplicado = leidos.join(' - ');
+  const rangoOk = llenados.length === 2 && llenados.every(({ valor }, i) => String(leidos[i]).includes(valor));
   for (const frame of pagina.frames()) {
     // "Siguiente" cubre el formulario de Declaraciones Juradas (DJ) de Cuentas Tributarias, que
     // avanza con ese botón (consulta de solo lectura; esProhibido igual veta cualquier trámite).
@@ -358,14 +370,16 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
       const b = btn.nth(i);
       if (!(await b.isVisible().catch(() => false))) continue;
       if (esProhibido((await b.innerText().catch(() => '')) || '')) continue;
-      log('  consultando con el período');
-      await b.click().catch(() => {});
+      log(`  consultando con el período (campos: ${rangoAplicado}${rangoOk ? '' : ', NO tomaron el rango pedido'})`);
+      await b.click();
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
-      return { conFiltroPeriodo: true, rangoAplicado: null, rangoOk: null };
+      return { conFiltroPeriodo: true, rangoAplicado, rangoOk };
     }
   }
-  return { conFiltroPeriodo: true, rangoAplicado: null, rangoOk: null };
+  // Se completaron fechas pero no hubo botón de consulta: se lee lo que haya, pero el período NO queda
+  // confirmado (la grilla puede no estar filtrada).
+  return { conFiltroPeriodo: true, rangoAplicado, rangoOk: false, sinConsulta: true };
 }
 
 function escribirProtegido(file, contenido) {
@@ -426,9 +440,12 @@ async function leerGrilla(pagina, expected) {
   }
   let headers = null; const filas = []; const vistas = new Set();
   let gridPresente = false; let paginas = 0; let duplicadosEnTabla = 0;
-  for (let p = 0; p < 100; p++) {
+  // Cómo terminó la paginación: 'sin-siguiente' (no hay más páginas: fin verificable), 'pagina-repetida'
+  // (el "siguiente" no avanzó), 'tope' (se cortó por seguridad: PUEDE FALTAR el final), 'sin-grilla'.
+  let finPaginacion = 'tope';
+  for (let p = 0; p < TOPE_PAGINAS; p++) {
     const tabla = await scrapearFrames(pagina, expected);
-    if (!tabla) break;
+    if (!tabla) { finPaginacion = p === 0 ? 'sin-grilla' : 'sin-siguiente'; break; }
     if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
     if (!headers) headers = tabla.headers;
     let nuevas = 0;
@@ -438,14 +455,16 @@ async function leerGrilla(pagina, expected) {
       vistas.add(firma); filas.push(r); nuevas++;
     }
     paginas = p + 1;
-    if (!nuevas) break; // página repetida: corte verificable
+    if (!nuevas) { finPaginacion = p === 0 ? 'sin-siguiente' : 'pagina-repetida'; break; } // corte verificable
     const sig = await botonSiguiente(pagina);
-    if (!sig) break;
+    if (!sig) { finPaginacion = 'sin-siguiente'; break; }
     await sig.click().catch(() => {});
     await pagina.waitForTimeout(1500);
   }
-  return { headers, filas, gridPresente, paginas, duplicadosEnTabla };
+  return { headers, filas, gridPresente, paginas, duplicadosEnTabla, finPaginacion };
 }
+
+export const TOPE_PAGINAS = 100;
 
 /** Abre el servicio, extrae su grilla y cierra la página. Envuelve a extraerTablaEnPagina. */
 export async function extraerTabla(sesion, servicio, opts = {}) {
@@ -466,8 +485,10 @@ export async function extraerTabla(sesion, servicio, opts = {}) {
  * dueño de la página). Lo usa tanto extraerTabla como el drill de hubs, que llega a la grilla
  * navegando en solo lectura y después extrae acá mismo, sin reabrir el servicio.
  */
-export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, outDir = 'out/datos', log = () => {} }) {
-  const dir = path.join(outDir, servicio.id);
+export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, outDir = 'out/datos', dirSalida = null, log = () => {} }) {
+  // dirSalida: carpeta del INTENTO (out/datos/<fuente>/intentos/<corrida>). Así un intento malo no
+  // pisa los archivos buenos: la conservación decide después si se promueve a vigente.
+  const dir = dirSalida ?? path.join(outDir, servicio.id);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   const resultado = { id: servicio.id, archivos: [], filas: 0, paginas: 0, informados: null, duplicadosEnTabla: 0, conFiltroPeriodo: false, rangoAplicado: null, estado: 'sin-datos', verificado: false };
@@ -490,6 +511,8 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
 
   let gridPresente = false; let rangoOk = null; let errorUlt = null; let headersGuardados = null;
   let informadosTot = null; const mensajes = new Set(); const porImpuesto = [];
+  const todasLasFilas = []; let finPaginacion = null;
+  const PEOR_FIN = { tope: 3, 'pagina-repetida': 1, 'sin-siguiente': 0, 'sin-grilla': 0 };
 
   for (let idx = 0; idx < impuestos.length; idx++) {
     const imp = impuestos[idx];
@@ -512,6 +535,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       }
       const g = await leerGrilla(pagina, expected);
       resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
+      if (g.filas.length && (finPaginacion == null || PEOR_FIN[g.finPaginacion] > PEOR_FIN[finPaginacion])) finPaginacion = g.finPaginacion;
       const res = resumenResultados(await relevarPagina(pagina));
       // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
       const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
@@ -526,6 +550,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
         escribirProtegido(file, toCsv(g.filas, COLUMNAS_LIBRES(g.headers)));
         resultado.archivos.push(path.basename(file));
         resultado.filas += g.filas.length;
+        for (const f of g.filas) todasLasFilas.push(f);
         porImpuesto.push({ impuesto: imp, filas: g.filas.length, informados });
       } else {
         porImpuesto.push({ impuesto: imp, filas: 0, cero: sinResultados });
@@ -542,6 +567,14 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   resultado.gridPresente = gridPresente;
   if (porImpuesto.length > 1) resultado.porImpuesto = porImpuesto;
   if (headersGuardados) resultado.columnas = headersGuardados;
+  resultado.finPaginacion = finPaginacion;
+  resultado.rangoOk = rangoOk;
+  // Controles sobre las filas (sin guardarlas en el resultado: solo conteos).
+  if (resultado.filas) {
+    if (resultado.conFiltroPeriodo) resultado.fechas = verificarFechas(headersGuardados, todasLasFilas, desde, hasta, servicio.columnaFecha);
+    const est = resumenEstados(headersGuardados, todasLasFilas);
+    if (Object.keys(est).length) resultado.resumenEstados = est;
+  }
   resultado.coincideInformado = informadosTot == null ? null : resultado.filas === informadosTot;
   const d = decidirEstado({ filas: resultado.filas, informados: informadosTot, conFiltroPeriodo: resultado.conFiltroPeriodo, rangoOk, error: resultado.filas ? null : errorUlt, gridPresente });
   resultado.estado = d.estado;

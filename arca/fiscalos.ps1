@@ -96,6 +96,8 @@ function Abrir-Informe {
     if (-not [System.IO.Path]::IsPathRooted($dir)) { $dir = Join-Path $Raiz $dir }
     $md = Join-Path $dir 'cobertura.md'
     if (Test-Path $md) { Write-Host "`nInforme: $md" -ForegroundColor Green; notepad $md }
+    $hist = Join-Path $dir 'cobertura-historica.md'
+    if (Test-Path $hist) { Write-Host "Cobertura historica: $hist" -ForegroundColor Green }
     else { Write-Host 'La corrida no genero cobertura.md.' -ForegroundColor Yellow }
   } else { Write-Host 'Todavia no hay corridas.' -ForegroundColor Yellow }
 }

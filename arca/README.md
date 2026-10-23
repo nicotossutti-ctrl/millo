@@ -153,6 +153,24 @@ Los archivos y el registro viven en una carpeta **persistente y compartida entre
 no se vuelve a descargar salvo `--rehacer`, y el informe lo marca como reutilizado. Así el
 histórico no se vuelve a bajar en cada ejecución.
 
+**Validación.** Llegar a una pantalla no cuenta como éxito. Una sección solo se da por descargada
+si la grilla tiene **sus columnas propias** (declaradas en `servicios.js`), la paginación terminó de
+forma verificable (no por el tope de seguridad), el total coincide con el que informa ARCA (si lo
+informa), el período filtrado quedó confirmado en pantalla y, si la sección declara su columna de
+fecha, todas las filas caen en el rango. Si falta algo, queda *Solo relevado* con el motivo, y los
+encabezados reales quedan en el informe para confirmarlos.
+
+**Conservación.** Cada intento se guarda aparte en `out/datos/<fuente>/intentos/<corrida>/`
+(archivos + `intento.json` con el error, si lo hubo) y en `intentos.jsonl`. Solo se **promueve** a
+`out/datos/<fuente>/vigente/` (registro en `vigente.json`) si es al menos tan bueno como lo que ya
+había: una corrida fallida o parcial nunca reemplaza el último resultado validado.
+
+**Cobertura histórica.** `out/datos/cobertura-historica.md` (copia en cada corrida) muestra, con
+lo conservado de todas las corridas, qué meses están validados, cuáles se obtuvieron sin verificar,
+cuáles faltan y qué fuentes son acumuladas (una foto de lo que ARCA lista ese día: no prueba el
+histórico completo). Con `FISCALOS_HISTORICO_DESDE=aaaa-mm` en `.env` los faltantes se cuentan
+desde esa fecha; si no, desde el primer mes validado.
+
 Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 
 ### Windows: un solo script, sin Git

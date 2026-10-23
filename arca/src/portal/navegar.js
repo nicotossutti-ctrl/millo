@@ -89,6 +89,48 @@ async function ubicarPaso(pagina, paso) {
   return null;
 }
 
+/**
+ * ¿Este enlace es una navegación de CONSULTA válida para usar como respaldo? Pura. Exige:
+ *   - texto exacto igual al del paso (sin mayúsculas ni espacios de más);
+ *   - URL http(s) del MISMO host que la pantalla donde está (no saltar a otro sistema);
+ *   - ni el texto ni el título del enlace parecen trámite/pago/emisión (esPasoSeguro).
+ */
+export function enlaceDeConsultaValido({ texto, title, href, hostFrame }, buscado) {
+  if (!href || !buscado) return false;
+  const limpio = (x) => String(x ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (limpio(texto) !== limpio(buscado)) return false;
+  let u;
+  try { u = new URL(href); } catch { return false; }
+  if (!/^https?:$/.test(u.protocol) || (hostFrame && u.host !== hostFrame)) return false;
+  return esPasoSeguro(texto) && esPasoSeguro(title ?? '');
+}
+
+/**
+ * Respaldo de un paso por texto: si el ítem VISIBLE no aparece (menús que dibujan los ítems aparte,
+ * como el NavBar de Cuentas Tributarias, cuyos <a> reales están ocultos), se busca el <a> con ese
+ * texto EXACTO y se navega a su href, que es la misma URL que abre el menú. Solo si es una
+ * navegación de consulta válida (enlaceDeConsultaValido). Devuelve la URL usada o null.
+ */
+async function navegarPorEnlace(pagina, texto, log) {
+  for (const frame of pagina.frames()) {
+    const cands = await frame.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => ({
+      texto: (a.textContent || '').replace(/\s+/g, ' ').trim(), title: a.getAttribute('title') || '', href: a.href,
+    }))).catch(() => []);
+    let hostFrame = null;
+    try { hostFrame = new URL(frame.url()).host; } catch { /* frame sin URL */ }
+    const c = cands.find((x) => enlaceDeConsultaValido({ ...x, hostFrame }, texto));
+    if (!c) continue;
+    log(`  ruta (lectura, respaldo por enlace): ${JSON.stringify(texto)}`);
+    const principal = typeof pagina.mainFrame === 'function' ? pagina.mainFrame() : null;
+    if (!principal || frame === principal) await pagina.goto(c.href, { waitUntil: 'domcontentloaded' });
+    else await frame.evaluate((h) => { window.location.href = h; }, c.href);
+    await pagina.waitForLoadState?.('networkidle').catch(() => {});
+    await pagina.waitForTimeout?.(2500);
+    return c.href;
+  }
+  return null;
+}
+
 /** ¿Hay un control visible con ese texto exacto (sin mayúsculas) en algún frame? */
 async function textoVisible(pagina, texto) {
   return (await ubicarPaso(pagina, { texto })) !== null;
@@ -179,19 +221,31 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
   // Con ruta: la ejecutamos SIEMPRE. La grilla inicial puede NO ser la buscada (p. ej. la pestaña
   // Vencimientos de Cuentas Tributarias no es DJ/Pagos/Cuenta Corriente).
   let pasos = 0;
+  // Recorrido: cómo se resolvió cada paso (visible, respaldo por enlace, omitido, no encontrado).
+  // Va al informe para saber, sin otra corrida, qué camino funcionó y cuál no.
+  const recorrido = [];
+  const etiqueta = (p) => p.texto ?? p.id ?? p.selector ?? p.hash;
   for (const paso of ruta) {
     // `siNoVisible`: el paso solo PREPARA (abrir la barra lateral, expandir "Consultas") y se
     // saltea si el ítem buscado ya está a la vista. Si no, un hamburguesa que es TOGGLE cerraba
     // una barra que ya venía abierta.
     if (paso.siNoVisible && await textoVisible(actual, paso.siNoVisible)) {
       log(`  ruta: ${JSON.stringify(paso.siNoVisible)} ya visible, se omite ${JSON.stringify(paso.texto ?? paso.selector ?? paso.id)}`);
+      recorrido.push({ paso: etiqueta(paso), via: 'omitido (ya visible)' });
       continue;
     }
-    const r = await ejecutarPaso(actual, paso, log);
-    if (!r.clickeado) {
-      if (paso.opcional) continue; // p. ej. un modal de novedades que puede no aparecer
-      return { lista: false, pasos, señales, pagina: actual, motivo: `no se encontró el paso ${JSON.stringify(paso)}` };
+    let r = await ejecutarPaso(actual, paso, log);
+    let via = 'visible';
+    if (!r.clickeado && paso.respaldoEnlace && paso.texto) {
+      const href = await navegarPorEnlace(actual, paso.texto, log);
+      if (href) { r = { clickeado: true, nueva: null }; via = 'enlace'; }
     }
+    if (!r.clickeado) {
+      recorrido.push({ paso: etiqueta(paso), via: paso.opcional ? 'opcional, no estaba' : 'no encontrado' });
+      if (paso.opcional) continue; // p. ej. un modal de novedades que puede no aparecer
+      return { lista: false, pasos, señales, pagina: actual, recorrido, motivo: `no se encontró el paso ${JSON.stringify(paso)}${paso.respaldoEnlace ? ' (ni visible ni por enlace exacto)' : ''}` };
+    }
+    recorrido.push({ paso: etiqueta(paso), via });
     if (r.nueva) actual = r.nueva;
     pasos++;
     // Tras navegar, damos tiempo generoso a que la grilla aparezca (iframe/SPA Angular/EJ2).
@@ -200,7 +254,7 @@ export async function drillHaciaGrilla(pagina, { expected = [], ruta = [], log =
     // navegación (p. ej. abrir la barra lateral de Cuentas Tributarias): la home ya muestra la
     // grilla de Vencimientos, así que sin esto el drill se detenía ahí y nunca clickeaba el ítem
     // del menú (DJ/Pagos/…). Con `continuar` sigue hasta el paso que lleva de verdad a la sección.
-    if (señales.lista && !paso.continuar) return { lista: true, pasos, señales, pagina: actual };
+    if (señales.lista && !paso.continuar) return { lista: true, pasos, señales, pagina: actual, recorrido };
   }
-  return { lista: señales.lista, pasos, señales, pagina: actual, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };
+  return { lista: señales.lista, pasos, señales, pagina: actual, recorrido, motivo: señales.lista ? undefined : 'la ruta terminó sin llegar a una grilla' };
 }

@@ -11,6 +11,9 @@ import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, 
 import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
 import { drillHaciaGrilla } from './navegar.js';
 import { slug } from './servicios.js';
+import { evaluarCalidad } from './calidad.js';
+import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
+import { generarMatrizCobertura } from './coberturaHistorica.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
 
@@ -99,7 +102,7 @@ export function clasificarRelevamiento(rel) {
  * (drill), y si llega a la grilla intenta extraerla acá mismo. Siempre guarda el relevamiento
  * saneado del nivel alcanzado para escribir el extractor real si todavía no se pudo.
  */
-async function correrGenerico(sesion, servicio, dir, periodo, log) {
+async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
   const pagina = await sesion.abrirServicio(servicio);
   // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
   await pagina.waitForTimeout(3500);
@@ -111,15 +114,20 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
 
   // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en esa página.
   let extraccion = null;
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
   if (drill.lista && periodo) {
     const outBase = sesion?.cfg?.outDir ?? 'out';
-    extraccion = await extraerTablaEnPagina(paginaDatos, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log })
-      .catch((e) => ({ error: sanitizarTexto(e.message) }));
-    escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
+    extraccion = await extraerTablaEnPagina(paginaDatos, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log })
+      .catch((e) => ({ error: sanitizarTexto(e.message), filas: 0 }));
   }
   // Grilla que NO es la buscada (p. ej. Vencimientos de la home de Cuentas Tributarias cuando la
   // ruta no llegó a la sección): no se cuenta como dato de esta fuente.
   const grillaAjena = extraccion && !extraccion.error && extraccion.filas > 0 && esGrillaRechazada(extraccion.columnas, servicio.rechazarSiColumnas);
+  // Llegar a una pantalla no es éxito: la extracción se juzga contra lo que la sección declara.
+  if (extraccion) {
+    extraccion.calidad = evaluarCalidad(servicio, extraccion, { desde: periodo?.desde, hasta: periodo?.hasta, rechazada: !!grillaAjena });
+    escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
+  }
 
   // Paso de ruta no encontrado: relevamos TODO elemento que contenga los textos de la ruta (etiqueta,
   // clase, tamaño, si es clickeable) y sacamos captura, para ver cómo dibuja la pantalla ese menú.
@@ -151,19 +159,31 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
   if (paginaDatos !== sesion.page && paginaDatos !== pagina) await paginaDatos.close().catch(() => {});
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
 
-  const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo };
+  const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo, recorrido: drill.recorrido };
+  // Todo intento se registra (también los que no llegaron a extraer): la conservación decide si
+  // reemplaza al vigente; uno malo nunca pisa uno bueno.
+  const intentos = [{ id: servicio.id, dirIntento, clave: extraccion ? claveDe(extraccion, periodo) : null,
+    resultado: extraccion ?? { estado: 'sin-extraccion', filas: 0, error: sanitizarTexto(drill.motivo ?? 'no se llegó a una grilla') } }];
   if (grillaAjena) {
-    return { ...clas, url: rel.url, drill: drillInfo, estado: 'con-datos',
+    return { ...clas, url: rel.url, drill: drillInfo, estado: 'con-datos', calidad: extraccion.calidad, intentos,
       motivo: 'la ruta no llegó a la sección: se leyó la grilla de la home (Vencimientos), no se cuenta como dato de esta fuente; diagnóstico del menú capturado' };
   }
-  // Si se extrajeron filas reales, el estado lo dicta el extractor (descargado sin cotejo).
   if (extraccion && !extraccion.error && extraccion.filas > 0) {
-    return {
-      estado: 'descargado', archivos: extraccion.archivos, filas: extraccion.filas, motivo: extraccion.motivo, drill: drillInfo,
-      validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: extraccion.filas, informados: extraccion.informados,
-        ok: extraccion.verificado, cantidadVerificada: extraccion.coincideInformado === true, estadoExtractor: extraccion.estado,
-        conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, paginas: extraccion.paginas }],
-    };
+    const c = extraccion.calidad;
+    const validacion = { desde: periodo.desde, hasta: periodo.hasta, filas: extraccion.filas, informados: extraccion.informados,
+      ok: extraccion.verificado && c.exito, cantidadVerificada: extraccion.coincideInformado === true, estadoExtractor: extraccion.estado,
+      conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, paginas: extraccion.paginas,
+      finPaginacion: extraccion.finPaginacion, calidad: c, resumenEstados: extraccion.resumenEstados };
+    // Con columnas propias confirmadas y los chequeos en verde, cuenta como dato de la fuente.
+    if (c.exito) {
+      return { estado: extraccion.estado === 'validado' ? 'validado' : 'descargado', archivos: extraccion.archivos, filas: extraccion.filas,
+        motivo: extraccion.motivo, drill: drillInfo, calidad: c, intentos, validaciones: [validacion] };
+    }
+    // Hay filas pero la validación no pasó: se conservan como intento, sin contarlas como dato.
+    return { ...clas, url: rel.url, estado: 'con-datos', archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos,
+      validaciones: [validacion],
+      // Los encabezados reales van al informe: con ellos se confirman las columnas propias de la sección.
+      motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}${extraccion.columnas?.length ? ` · encabezados leídos: ${extraccion.columnas.join(' / ')}` : ''}`) };
   }
   // No se extrajo: queda el relevamiento. Explicitamos por qué (acceso ≠ descarga).
   const motivo = extraccion?.error
@@ -172,13 +192,15 @@ async function correrGenerico(sesion, servicio, dir, periodo, log) {
     : (servicio.ruta?.length
       ? `la ruta de navegación no llegó a la grilla (${drill.motivo ?? 'sin detalle'}); estructura capturada`
       : 'sin ruta de navegación confirmada: estructura capturada para definir la ruta real');
-  return { ...clas, url: rel.url, drill: drillInfo, motivo };
+  return { ...clas, url: rel.url, drill: drillInfo, motivo, intentos };
 }
 
 /** Extractor de tabla (solo lectura): Mis Retenciones, Cuentas Tributarias, Mis Facilidades. */
-async function correrTabla(sesion, servicio, dir, periodo, log) {
+async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
   const outBase = sesion?.cfg?.outDir ?? 'out';
-  const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
+  const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
+  r.calidad = evaluarCalidad(servicio, r, { desde: periodo.desde, hasta: periodo.hasta });
   // La estructura (DOM de todas las pestañas) va a su propio archivo para el diagnóstico integral.
   const { estructura, ...rSinEstructura } = r;
   escribir(path.join(dir, 'resultado.json'), JSON.stringify(rSinEstructura, null, 2));
@@ -186,20 +208,25 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
   // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe.
   // Solo cuenta como "descargado" si realmente trajo filas; 0 filas (cero confirmado o ausencia
   // incierta) va a "relevado", nunca a "descargado sin validar".
-  const estado = r.estado === 'validado' ? 'validado'
-    : (r.filas > 0 && (r.estado === 'extraido' || r.estado === 'parcial')) ? 'descargado'
+  // 'validado' exige además que pasen los chequeos de calidad (columnas, paginación, fechas).
+  const estado = (r.estado === 'validado' && r.calidad.exito) ? 'validado'
+    : (r.filas > 0 && ['validado', 'extraido', 'parcial'].includes(r.estado)) ? 'descargado'
     : 'relevado';
+  const motivo = r.motivo ?? (r.calidad.motivos.length ? r.calidad.motivos.join('; ') : undefined);
   return {
     estado,
     archivos: r.archivos,
     filas: r.filas,
-    motivo: r.motivo,
+    motivo,
     ceroConfirmado: r.ceroConfirmado,
+    calidad: r.calidad,
+    intentos: [{ id: servicio.id, dirIntento, clave: claveDe(r, periodo), resultado: rSinEstructura }],
     validaciones: [{
       desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados,
-      ok: r.verificado, cantidadVerificada: r.coincideInformado === true,
+      ok: r.verificado && r.calidad.exito, cantidadVerificada: r.coincideInformado === true,
       estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado,
-      paginas: r.paginas, motivo: r.motivo, ceroConfirmado: r.ceroConfirmado,
+      paginas: r.paginas, finPaginacion: r.finPaginacion, motivo, ceroConfirmado: r.ceroConfirmado,
+      calidad: r.calidad, resumenEstados: r.resumenEstados,
     }],
   };
 }
@@ -211,7 +238,7 @@ async function correrTabla(sesion, servicio, dir, periodo, log) {
  * fiscal federa a COMARB; si COMARB pidiera completar el login, el listado no traerá filas y queda
  * 'relevado' con la estructura capturada (acceso ≠ descarga).
  */
-async function correrSifere(sesion, servicio, dir, periodo, log) {
+async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   const pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
   // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la
   // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
@@ -257,18 +284,27 @@ async function correrSifere(sesion, servicio, dir, periodo, log) {
   } catch { /* si no aparece la pantalla de CUIT, seguimos a los listados */ }
 
   const outBase = sesion?.cfg?.outDir ?? 'out';
-  const sub = [];
+  const sub = []; const intentos = [];
+  const enSesion = enModulo(pagina.url());
   for (const g of servicio.grillas ?? []) {
+    const idSub = `${servicio.id}-${g.id}`;
+    const dirIntento = ctx.dirIntento?.(idSub) ?? null;
     try {
       await pagina.goto(g.url, { waitUntil: 'domcontentloaded' });
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
-      const servSub = { id: `${servicio.id}-${g.id}`, columnasEsperadas: g.columnasEsperadas };
-      const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), log });
-      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo });
-      log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas`);
+      // Si COMARB nos manda a "Sesión Expirada", el listado NO se lee (y no pisa lo conservado).
+      if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al abrir el listado (no se completó el login)');
+      const servSub = { id: idSub, columnasEsperadas: g.columnasEsperadas };
+      const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
+      r.calidad = evaluarCalidad(servSub, r, { desde: periodo.desde, hasta: periodo.hasta });
+      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion });
+      intentos.push({ id: idSub, dirIntento, clave: claveDe(r, periodo), resultado: r });
+      log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas${r.resumenEstados ? ` · ${JSON.stringify(r.resumenEstados)}` : ''}`);
     } catch (e) {
-      sub.push({ sub: g.id, filas: 0, estado: 'error', error: sanitizarTexto(e?.message ?? String(e)) });
+      const error = sanitizarTexto(e?.message ?? String(e));
+      sub.push({ sub: g.id, filas: 0, estado: 'error', error });
+      intentos.push({ id: idSub, dirIntento, clave: null, resultado: { estado: 'error', filas: 0, error } });
     }
   }
   const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
@@ -280,10 +316,11 @@ async function correrSifere(sesion, servicio, dir, periodo, log) {
   const archivos = sub.flatMap((s) => s.archivos ?? []);
   return {
     estado: filas > 0 ? 'descargado' : 'relevado',
-    archivos, filas,
+    archivos, filas, intentos,
     motivo: filas > 0 ? undefined
-      : 'SIFERE: no se obtuvieron filas de los listados (quizás COMARB pidió completar el login de clave fiscal); estructura capturada',
-    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, motivo: s.motivo })),
+      : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
+    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, motivo: s.motivo ?? s.error, calidad: s.calidad,
+      finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
   };
 }
 
@@ -305,10 +342,29 @@ async function correrMisComprobantes(sesion, servicio, dir, periodo, log) {
  * Corre un servicio aislado: cualquier error se captura y se devuelve como estado 'error' o
  * 'desafio', sin propagarse. `correrServicio` se puede inyectar para los tests.
  */
-export async function correrUno(sesion, servicio, { baseDir, periodo, log = () => {}, runner } = {}) {
+export async function correrUno(sesion, servicio, { baseDir, periodo, log = () => {}, runner, datosDir = null } = {}) {
   const dir = path.join(baseDir, slug(servicio.id));
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const inicio = Date.now();
+  // Conservación: los archivos de cada intento van a out/datos/<fuente>/intentos/<corrida>/ y solo
+  // se promueven a vigente si son al menos tan buenos como lo conservado. En los tests con runner
+  // inyectado no se toca disco fuera de baseDir salvo que se pase datosDir.
+  const cuando = path.basename(baseDir);
+  const datos = datosDir ?? (runner ? null : path.join(sesion?.cfg?.outDir ?? 'out', 'datos'));
+  const ctx = { dirIntento: datos ? (id) => path.join(datos, id, 'intentos', cuando) : () => null };
+  const conservar = (r) => {
+    if (!datos) return r;
+    const { intentos, ...resto } = r;
+    try {
+      if (intentos?.length) {
+        resto.conservacion = intentos.map((it) => ({ id: it.id, ...conservarIntento({ datosDir: datos, id: it.id, cuando, clave: it.clave,
+          resultado: it.resultado, dirIntento: it.dirIntento, desde: periodo?.desde, hasta: periodo?.hasta }) }));
+      } else {
+        registrarIntento({ datosDir: datos, id: servicio.id, cuando, resultado: resto });
+      }
+    } catch (e) { log(`[${servicio.id}] no se pudo registrar el intento: ${sanitizarTexto(e?.message ?? String(e))}`); }
+    return resto;
+  };
   // Servicio con bloqueo conocido (p. ej. no adherido a la clave fiscal): se reporta, no se abre.
   if (servicio.bloqueo && !runner) {
     const msg = sanitizarTexto(servicio.bloqueo);
@@ -318,14 +374,14 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
   }
   const run = runner ?? (async () => {
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
-    if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log);
-    if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log);
-    return correrGenerico(sesion, servicio, dir, periodo, log);
+    if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log, ctx);
+    return correrGenerico(sesion, servicio, dir, periodo, log, ctx);
   });
   try {
     log(`[${servicio.id}] abriendo ${servicio.nombre}`);
-    const r = await run();
-    log(`[${servicio.id}] ${r.estado}`);
+    const r = conservar(await run());
+    log(`[${servicio.id}] ${r.estado}${(r.conservacion ?? []).map((c) => ` · ${c.id}: ${c.motivo}`).join('')}`);
     return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, ...r };
   } catch (e) {
     const estado = e?.name === 'DesafioDeSeguridad' ? 'desafio' : (/no encontré|no pude abrir|timeout/i.test(e.message) ? 'sin-acceso' : 'error');
@@ -333,6 +389,11 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
     const msg = sanitizarTexto(e.message);
     log(`[${servicio.id}] ${estado}: ${msg}`);
     escribir(path.join(dir, 'error.txt'), sanitizarTexto(`${e.name}: ${e.message}\n${e.stack ?? ''}`));
+    // El intento fallido también queda registrado (y no toca lo conservado).
+    if (datos) {
+      const subs = servicio.extractor === 'sifere' ? (servicio.grillas ?? []).map((g) => `${servicio.id}-${g.id}`) : [servicio.id];
+      for (const id of subs) { try { conservarIntento({ datosDir: datos, id, cuando, clave: null, resultado: { estado, filas: 0, error: msg } }); } catch { /* best-effort */ } }
+    }
     return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado, error: msg };
   }
 }
@@ -360,7 +421,15 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
     if (r.error) return r.error.slice(0, 120);
     return '';
   };
-  const fila = (r) => `| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${detalleDe(r)} |`;
+  // Evidencia extra por fila: por qué no se validó, cómo se navegó y qué se conservó.
+  const extras = (r) => {
+    const x = [];
+    if (r.estado === 'descargado' && r.calidad?.motivos?.length) x.push(`sin validar: ${r.calidad.motivos.join('; ')}`);
+    if (r.drill?.recorrido?.length) x.push(`ruta: ${r.drill.recorrido.map((p) => `${p.paso}=${p.via}`).join(', ')}`);
+    for (const c of r.conservacion ?? []) if (!c.promovido && c.vigente) x.push(`${c.id}: ${c.motivo}`);
+    return x.length ? ` · ${x.join(' · ')}` : '';
+  };
+  const fila = (r) => `| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${String(detalleDe(r) + extras(r)).replace(/\|/g, '/')} |`;
   // Las cuatro categorías que pide la issue #1.
   const secciones = [
     ['Descargado y validado', (r) => r.estado === 'validado'],
@@ -374,6 +443,7 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
   txt.push(`# Cobertura FiscalOS${cuitMask ? ` · CUIT ${cuitMask}` : ''}${cuando ? ` · ${cuando}` : ''}`);
   txt.push('');
   txt.push('Resumen: ' + ESTADOS.filter((e) => conteo[e]).map((e) => `${conteo[e]} ${e}`).join(', '));
+  txt.push('', 'Esta tabla es solo ESTA corrida. Qué períodos están cubiertos (con lo conservado de corridas anteriores) está en `cobertura-historica.md`.');
   for (const [titulo, filtro] of secciones) {
     const grupo = filas.filter(filtro);
     txt.push('', `## ${titulo}`);
@@ -391,8 +461,22 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
  * corta en el último servicio (el más frágil, p. ej. Retenciones), igual queden los informes de
  * todo lo anterior. Es barato (son ~16 servicios) y hace la corrida tolerante a fallos duros.
  */
-function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando) {
+/** Fuentes de la matriz histórica: cada servicio, y los listados de SIFERE como fuentes propias. */
+export function fuentesDe(servicios) {
+  return servicios.flatMap((s) => (s.extractor === 'sifere' && s.grillas?.length
+    ? s.grillas.map((g) => ({ id: `${s.id}-${g.id}`, nombre: `SIFERE · ${g.id}` }))
+    : [{ id: s.id, nombre: s.nombre }]));
+}
+
+function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando, { datosDir = null, historicoDesde = null } = {}) {
   const cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
+  // Cobertura HISTÓRICA (lo conservado entre corridas, no solo esta): en out/datos y en la corrida.
+  if (datosDir) {
+    const matriz = generarMatrizCobertura(datosDir, fuentesDe(servicios), { historicoDesde });
+    escribir(path.join(datosDir, 'cobertura-historica.json'), JSON.stringify(matriz.objeto, null, 2));
+    escribir(path.join(datosDir, 'cobertura-historica.md'), matriz.texto);
+    escribir(path.join(baseDir, 'cobertura-historica.md'), matriz.texto);
+  }
   escribir(path.join(baseDir, 'cobertura.json'), JSON.stringify(cobertura.objeto, null, 2));
   escribir(path.join(baseDir, 'cobertura.md'), cobertura.texto);
   // Diagnóstico INTEGRAL en un solo archivo: el DOM saneado de cada servicio (todas sus pestañas).
@@ -408,17 +492,20 @@ function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando
 }
 
 /** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
-export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner } = {}) {
+export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner, datosDir = null,
+  historicoDesde = process.env.FISCALOS_HISTORICO_DESDE || null } = {}) {
   const cuando = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const baseDir = path.join(outDir, cuando);
   fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+  // Datos conservados entre corridas. Con runner inyectado (tests) solo si se pasa datosDir explícito.
+  const datos = datosDir ?? (runner ? null : path.join(sesion?.cfg?.outDir ?? path.dirname(outDir), 'datos'));
   const resultados = [];
   let cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
   for (const s of servicios) {
     // Doble red: correrUno ya aísla sus errores, pero por las dudas envolvemos igual para que NADA
     // (ni un error inesperado al abrir el servicio) corte la corrida antes de escribir los informes.
     try {
-      resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, runner: runner ? () => runner(s) : undefined }));
+      resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, datosDir: datos, runner: runner ? () => runner(s) : undefined }));
     } catch (e) {
       const error = sanitizarTexto(e?.message ?? String(e));
       log(`[${s.id}] error aislado en el orquestador: ${error}`);
@@ -426,7 +513,7 @@ export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/c
     }
     // Persistimos los informes tras CADA servicio: si lo que viene después se cuelga, no se pierde
     // nada de lo ya recorrido. Un fallo al escribir no corta la corrida.
-    try { cobertura = escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando); }
+    try { cobertura = escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando, { datosDir: datos, historicoDesde }); }
     catch (e) { log(`[informes] no se pudieron actualizar: ${sanitizarTexto(e?.message ?? String(e))}`); }
   }
   return { baseDir, resultados, cobertura };

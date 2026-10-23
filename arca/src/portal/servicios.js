@@ -49,23 +49,30 @@ export const SERVICIOS = [
   // / Compensaciones son enlaces VISIBLES; cada uno abre su propio FORMULARIO (Fecha Desde/Hasta +
   // CONSULTAR, o SIGUIENTE para DJ). Por eso: paso 1 abre la barra, paso 2 entra a la sección; el
   // extractor genérico completa las fechas del período y consulta. Solo lectura.
+  // Respaldo (respaldoEnlace): el NavBar dibuja los ítems visibles aparte y en varias corridas el ítem
+  // no apareció. Los <a> REALES del menú (ocultos) tienen el texto exacto y el href de la sección
+  // (diagnóstico 19-49-58: .../externo?service=partial/1/Home/Home/panelMenu.$PartialLink&sp=...&sp=SPagos).
+  // Si el ítem visible no aparece, se navega a ese href: es la misma URL de consulta que abre el
+  // menú, del mismo host, y se veta si el texto o el título parecen trámite (enlaceDeConsultaValido).
+  // Sin columnas propias confirmadas todavía, lo que se lea queda 'con-datos' (no validado) y con
+  // sus encabezados reales en el informe, para confirmarlas.
   // DJ: su formulario EXIGE elegir Establecimiento = "0" (confirmado) antes de SIGUIENTE; con eso
   // (y dejando Impuesto/Formulario sin tocar) trae todas las DJ. requiereEstablecimiento lo maneja.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     requiereEstablecimiento: true,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)', respaldoEnlace: true }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos', respaldoEnlace: true }] },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     // "Cuenta Corriente" es un ENCABEZADO de sección de la barra (no abre nada): se expande y se
     // entra a la hoja "Detalle de Deuda Consolidada". Antes los 5 registros eran la grilla de la home.
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada', respaldoEnlace: true }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones' }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones', respaldoEnlace: true }] },
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
@@ -115,7 +122,9 @@ export const SERVICIOS = [
       { id: 'volantes-pago', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaVolantesPagoController.do', columnasEsperadas: ['Anticipo', 'Monto Total', 'Medio de Pago'] },
     ] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
-  { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico' },
+  // Columnas reales (diagnóstico 19-49-58): Notificado / Asunto / Organismo / Representado / Clasificación / Recibido.
+  { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico',
+    columnasEsperadas: ['Asunto', 'Organismo', 'Recibido'] },
   // Mis Retenciones VA ÚLTIMO a propósito (ver nota de ORDEN arriba): su consulta itera impuesto
   // por impuesto en mirequa-web /resultados (combo EJ2 #selectImpuestos, no <select> nativo; hay
   // que volver al formulario entre impuestos) y es la pantalla más propensa a colgarse o fallar.
@@ -126,7 +135,9 @@ export const SERVICIOS = [
     // Consultamos los impuestos/regímenes relevantes para persona humana RI (IVA, Ganancias,
     // Bienes Personales, PAÍS, SICORE/SIRE), no los ~40 regímenes del combo.
     impuestosRelevantes: /sire|sicore|\biva\b|ganancia|gcias|\bgan\b|bienes?\s+personal|pa[ií]s/i,
-    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'] },
+    columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'],
+    // La consulta filtra por fecha de retención: cada fila debe caer en el período pedido.
+    columnaFecha: 'Fecha' },
 ];
 
 export function slug(s) {
