@@ -3,18 +3,30 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fechaIso, verificarFechas, resumenEstados, evaluarCalidad } from '../src/portal/calidad.js';
-import { rangoResultado, debeReemplazar, conservarIntento, leerVigente, leerIntentos, claveDe } from '../src/portal/conservacion.js';
+import { fechaIso, verificarFechas, resumenEstados, evaluarCalidad, columnasFaltantes, estadoInforme } from '../src/portal/calidad.js';
+import { rangoResultado, debeReemplazar, conservarIntento, verificarArchivos, leerVigente, leerIntentos, claveDe } from '../src/portal/conservacion.js';
 import { mesesCompletos, compactarMeses, generarMatrizCobertura } from '../src/portal/coberturaHistorica.js';
 import { enlaceDeConsultaValido, drillHaciaGrilla } from '../src/portal/navegar.js';
 import { ejecutarTodo, fuentesDe } from '../src/portal/orquestador.js';
-import { completarFiltros } from '../src/portal/extractor.js';
+import { completarFiltros, extraerTablaEnPagina } from '../src/portal/extractor.js';
 import { SERVICIOS } from '../src/portal/servicios.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'arca-cons-'));
 const P = { desde: '2026-09-01', hasta: '2026-09-30' };
+const csv = (headers, filas) => '﻿' + [headers.join(';'), ...filas.map((f) => f.join(';'))].join('\r\n') + '\r\n';
 
-// ---------------- 2. Validación ----------------
+// Encabezados reales de la grilla de Vencimientos de la home de Cuentas Tributarias (diagnóstico 19-49-58).
+const VENCIMIENTOS = ['Impuesto', 'Concepto', 'Subconcepto', 'Período', 'Ant/Cuota', 'Fecha Vencimiento', 'Detalle'];
+
+// Extracción base que pasa TODOS los controles, para variar de a un control por prueba.
+const SERV = { id: 'svc', columnasEsperadas: ['Impuesto', 'Fecha', 'Importe'], columnaFecha: 'Fecha' };
+const buena = (extra = {}) => ({
+  id: 'svc', filas: 2, columnas: ['Impuesto', 'Fecha Retención', 'Importe'], finPaginacion: 'sin-siguiente',
+  informados: 2, totalFuente: 'paginador', conFiltroPeriodo: true, rangoOk: true,
+  fechas: { verificado: true, columna: 'Fecha Retención', enRango: 2, fueraDeRango: 0, sinFecha: 0 }, ...extra,
+});
+
+// ---------------- fechas y estados ----------------
 
 test('fechaIso reconoce los formatos de ARCA y rechaza lo que no es fecha', () => {
   assert.equal(fechaIso('05/09/2026'), '2026-09-05');
@@ -24,14 +36,12 @@ test('fechaIso reconoce los formatos de ARCA y rechaza lo que no es fecha', () =
   assert.equal(fechaIso(''), null);
 });
 
-test('verificarFechas cuenta filas fuera del rango solo con columna de fecha declarada', () => {
+test('verificarFechas cuenta filas en rango, fuera de rango y sin fecha interpretable', () => {
   const h = ['Impuesto', 'Fecha Retención', 'Importe'];
-  const filas = [['IVA', '02/09/2026', '1'], ['IVA', '30/09/2026', '2'], ['IVA', '01/10/2026', '3'], ['IVA', '', '4']];
+  const filas = [['IVA', '02/09/2026', '1'], ['IVA', '30/09/2026', '2'], ['IVA', '01/10/2026', '3'], ['IVA', 'pendiente', '4']];
   const v = verificarFechas(h, filas, P.desde, P.hasta, 'Fecha');
-  assert.equal(v.verificado, true);
-  assert.deepEqual([v.enRango, v.fueraDeRango, v.sinFecha], [2, 1, 1]);
-  // Sin columna declarada no se adivina cuál fecha corresponde al filtro.
-  assert.equal(verificarFechas(h, filas, P.desde, P.hasta, null).verificado, false);
+  assert.deepEqual([v.verificado, v.enRango, v.fueraDeRango, v.sinFecha], [true, 2, 1, 1]);
+  assert.equal(verificarFechas(h, filas, P.desde, P.hasta, null).verificado, false, 'sin columna declarada no se adivina');
   assert.equal(verificarFechas(h, filas, P.desde, P.hasta, 'Vencimiento').verificado, false);
 });
 
@@ -41,29 +51,92 @@ test('resumenEstados cuenta valores de Estado/Resultado (p. ej. VEP generado vs 
   assert.deepEqual(r.Resultado, { '(vacío)': 1, Acreditado: 2 });
 });
 
-test('evaluarCalidad: llegar a una pantalla con filas NO es éxito sin columnas propias', () => {
-  const ext = { filas: 5, conFiltroPeriodo: false, finPaginacion: 'sin-siguiente', informados: null };
-  const sinCols = evaluarCalidad({}, ext, P);
-  assert.equal(sinCols.exito, false);
-  assert.equal(sinCols.columnas, 'sin-confirmar');
-  const conCols = evaluarCalidad({ columnasEsperadas: ['Impuesto'] }, ext, P);
-  assert.equal(conCols.exito, true);
-  assert.equal(conCols.periodo, 'acumulado');
-  // Grilla de otra pantalla (Vencimientos de la home): rechazada aunque tenga filas.
-  assert.equal(evaluarCalidad({ columnasEsperadas: ['Impuesto'] }, ext, { ...P, rechazada: true }).columnas, 'rechazadas');
+// ---------------- validación: los niveles ----------------
+
+test('evaluarCalidad: la extracción base es APTA (validada y cotejada con el paginador)', () => {
+  const c = evaluarCalidad(SERV, buena(), P);
+  assert.equal(c.nivel, 'apto');
+  assert.equal(c.validado, true);
+  assert.deepEqual(c.motivos, []);
+  // Sin total de paginador (total inferido de la única tabla): validada pero NO apta para cálculos.
+  const sinTot = evaluarCalidad(SERV, buena({ totalFuente: 'tabla-unica' }), P);
+  assert.equal(sinTot.nivel, 'validado');
+  assert.equal(sinTot.total, 'no-independiente');
+  assert.equal(evaluarCalidad(SERV, buena({ informados: null, totalFuente: null }), P).nivel, 'validado');
+  // El total del paginador que NO coincide invalida.
+  assert.equal(evaluarCalidad(SERV, buena({ informados: 3 }), P).validado, false);
+  // El total "de la única tabla visible" no es independiente: no valida ni invalida (tras paginar ve
+  // solo la última página; p. ej. Mis Facilidades 14 filas en 2 páginas -> 4).
+  const ultimaPagina = evaluarCalidad(SERV, buena({ filas: 14, informados: 4, totalFuente: 'tabla-unica' }), P);
+  assert.equal(ultimaPagina.total, 'no-independiente');
+  assert.equal(ultimaPagina.nivel, 'validado');
 });
 
-test('evaluarCalidad: tope de paginación, total distinto, rango sin confirmar y fechas fuera invalidan', () => {
-  const s = { columnasEsperadas: ['Impuesto'] };
-  const base = { filas: 10, finPaginacion: 'sin-siguiente', conFiltroPeriodo: true, rangoOk: true, informados: 10 };
-  assert.equal(evaluarCalidad(s, base, P).exito, true);
-  assert.equal(evaluarCalidad(s, { ...base, finPaginacion: 'tope', paginas: 100 }, P).paginacion, 'incompleta');
-  assert.equal(evaluarCalidad(s, { ...base, finPaginacion: 'tope' }, P).exito, false);
-  assert.equal(evaluarCalidad(s, { ...base, informados: 12 }, P).exito, false);
-  assert.equal(evaluarCalidad(s, { ...base, rangoOk: null }, P).exito, false);
-  const fuera = evaluarCalidad(s, { ...base, fechas: { verificado: true, enRango: 9, fueraDeRango: 1, sinFecha: 0 } }, P);
-  assert.equal(fuera.exito, false);
-  assert.match(fuera.motivos.join(' '), /fuera del rango/);
+// Caso 1 de la revisión: paginación.
+test('caso 1: solo un fin NATURAL de paginación valida; página repetida, grilla desaparecida o tope quedan como obtenido', () => {
+  for (const fin of ['pagina-repetida', 'grilla-desaparecio', 'tope', 'sin-grilla', null]) {
+    const c = evaluarCalidad(SERV, buena({ finPaginacion: fin, paginas: 3 }), P);
+    assert.equal(c.validado, false, `fin ${fin}`);
+    assert.equal(c.nivel, 'obtenido', `fin ${fin}`);
+    assert.equal(c.paginacion, 'incompleta', `fin ${fin}`);
+  }
+  assert.match(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida' }), P).motivos.join(' '), /falla de navegación/);
+});
+
+// Caso 2 de la revisión: fechas.
+test('caso 2: con período obligatorio, una sola fila sin fecha interpretable o fuera de rango impide validar', () => {
+  const sinFecha = evaluarCalidad(SERV, buena({ fechas: { verificado: true, columna: 'Fecha Retención', enRango: 1, fueraDeRango: 0, sinFecha: 1 } }), P);
+  assert.equal(sinFecha.validado, false);
+  assert.equal(sinFecha.temporal, 'fallida');
+  assert.match(sinFecha.motivos.join(' '), /sin fecha interpretable/);
+  const fuera = evaluarCalidad(SERV, buena({ fechas: { verificado: true, columna: 'Fecha Retención', enRango: 1, fueraDeRango: 1, sinFecha: 0 } }), P);
+  assert.equal(fuera.validado, false);
+  // Falta la columna de fecha requerida (no declarada o no encontrada): no se declara validación temporal.
+  for (const fechas of [undefined, { verificado: false, motivo: 'no se encontró la columna de fecha "Fecha"' }]) {
+    const c = evaluarCalidad({ ...SERV, columnaFecha: undefined }, buena({ fechas }), P);
+    assert.equal(c.validado, false);
+    assert.equal(c.temporal, 'no-verificada');
+  }
+  // Rango aplicado sin confirmar: tampoco.
+  assert.equal(evaluarCalidad(SERV, buena({ rangoOk: null }), P).validado, false);
+  // Fuente acumulada (sin filtro de período): la validación temporal no aplica.
+  const acum = evaluarCalidad(SERV, buena({ conFiltroPeriodo: false, fechas: undefined }), P);
+  assert.equal(acum.temporal, 'no-aplica');
+  assert.equal(acum.validado, true);
+});
+
+// Caso 4 de la revisión: columnas.
+test('caso 4: se contrastan los encabezados REALES con las columnas obligatorias, no solo la configuración', () => {
+  assert.deepEqual(columnasFaltantes(['Impuesto', 'Período Fiscal'], ['Impuesto', 'Periodo', 'Importe']), ['Importe']);
+  // La fuente declara columnas, pero la grilla leída no las tiene.
+  const otra = evaluarCalidad(SERV, buena({ columnas: ['Notificado', 'Asunto', 'Organismo'] }), P);
+  assert.equal(otra.columnas, 'no-coinciden');
+  assert.equal(otra.validado, false);
+  assert.match(otra.motivos.join(' '), /faltan columnas obligatorias: Impuesto, Fecha, Importe/);
+  // Sin encabezados (tabla de maquetación): no se puede probar la identidad.
+  assert.equal(evaluarCalidad(SERV, buena({ columnas: [] }), P).columnas, 'sin-encabezados');
+  // Fuente sin columnas obligatorias declaradas: nunca se valida.
+  assert.equal(evaluarCalidad({ id: 'svc' }, buena(), P).columnas, 'sin-confirmar');
+  // Identidad: la extracción es de otra fuente.
+  assert.equal(evaluarCalidad(SERV, buena({ id: 'ct-pagos' }), P).columnas, 'otra-fuente');
+  // Grilla rechazada por configuración, aunque el que llama no lo haya detectado.
+  const cc = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  assert.equal(evaluarCalidad(cc, { id: cc.id, filas: 5, columnas: VENCIMIENTOS, finPaginacion: 'sin-siguiente' }, P).columnas, 'rechazadas');
+});
+
+test('un cero solo se valida con la grilla propia presente y vacía', () => {
+  const cero = { id: 'svc', filas: 0, ceroConfirmado: true, encabezadosGrilla: ['Impuesto', 'Fecha', 'Importe'], conFiltroPeriodo: true, rangoOk: true };
+  assert.equal(evaluarCalidad(SERV, cero, P).nivel, 'apto');
+  // Cero confirmado solo por un cartel, sin grilla: no se puede probar la identidad.
+  assert.equal(evaluarCalidad(SERV, { ...cero, encabezadosGrilla: undefined }, P).validado, false);
+  assert.equal(evaluarCalidad(SERV, { ...cero, ceroConfirmado: false }, P).nivel, 'sin-datos');
+});
+
+test('estadoInforme: validado / descargado (columnas propias, otro control falló) / con-datos (no es de la sección)', () => {
+  assert.equal(estadoInforme(evaluarCalidad(SERV, buena(), P), 2), 'validado');
+  assert.equal(estadoInforme(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida' }), P), 2), 'descargado');
+  assert.equal(estadoInforme(evaluarCalidad(SERV, buena({ columnas: ['Otra'] }), P), 2), 'con-datos');
+  assert.equal(estadoInforme(evaluarCalidad(SERV, { filas: 0 }, P), 0), null);
 });
 
 test('completarFiltros genérico relee los campos: rango confirmado solo si tomaron las fechas', async () => {
@@ -86,57 +159,74 @@ test('completarFiltros genérico relee los campos: rango confirmado solo si toma
   assert.equal(mal.rangoOk, false, 'si los campos no tomaron las fechas, el período no queda confirmado');
 });
 
-// ---------------- 3. Conservación ----------------
+// ---------------- conservación ----------------
 
-test('rangoResultado / debeReemplazar: un fallo o parcial nunca reemplaza a uno validado', () => {
-  const validado = { estado: 'validado', filas: 83, calidad: { exito: true } };
-  const parcial = { estado: 'parcial', filas: 40 };
-  const error = { estado: 'error', filas: 0, error: 'sesión expirada' };
-  assert.equal(rangoResultado(validado), 3);
-  assert.equal(rangoResultado(parcial), 1);
-  assert.equal(rangoResultado(error), 0);
-  const vig = { rango: 3 };
-  assert.equal(debeReemplazar(parcial, vig), false);
-  assert.equal(debeReemplazar(error, vig), false);
-  assert.equal(debeReemplazar(validado, vig), true, 'otro validado más reciente sí reemplaza');
-  assert.equal(debeReemplazar(parcial, null), true, 'sin vigente, algo con filas se conserva');
-  assert.equal(debeReemplazar(error, null), false);
-  // Validado pero con chequeos de calidad en rojo: no vale como validado.
-  assert.equal(rangoResultado({ estado: 'validado', filas: 5, calidad: { exito: false } }), 1);
+test('caso 3: rangoResultado da 0 a todo lo no validado; debeReemplazar nunca promueve evidencia, ni como primer resultado', () => {
+  const apto = { filas: 83, calidad: { nivel: 'apto' } };
+  const validado = { filas: 83, calidad: { nivel: 'validado' } };
+  const obtenido = { filas: 5, calidad: { nivel: 'obtenido', columnas: 'rechazadas' } };
+  const sinCalidad = { estado: 'validado', filas: 10 }; // sin validación final evaluada: no vale
+  assert.deepEqual([apto, validado, obtenido, sinCalidad].map(rangoResultado), [3, 2, 0, 0]);
+  assert.equal(debeReemplazar(obtenido, null), false, 'una grilla ajena no es el primer vigente');
+  assert.equal(debeReemplazar(sinCalidad, null), false);
+  assert.equal(debeReemplazar(validado, null), true);
+  assert.equal(debeReemplazar(validado, { rango: 3 }), false, 'validado sin total no reemplaza a uno apto');
+  assert.equal(debeReemplazar(apto, { rango: 3 }), true, 'otro apto más reciente sí');
   assert.equal(claveDe({ conFiltroPeriodo: true }, P), '2026-09-01_2026-09-30');
   assert.equal(claveDe({ conFiltroPeriodo: false }, P), 'acumulado');
+});
+
+test('verificarArchivos: existencia, lectura y suma exacta de filas', () => {
+  const d = tmp();
+  fs.writeFileSync(path.join(d, 'a.csv'), csv(['X', 'Y'], [['1', '2'], ['3', '4']]));
+  fs.writeFileSync(path.join(d, 'b.csv'), csv(['X', 'Y'], [['5', '6']]));
+  fs.writeFileSync(path.join(d, 'vacio.csv'), '');
+  assert.deepEqual(verificarArchivos(d, ['a.csv', 'b.csv'], 3), { ok: true, filas: 3 });
+  assert.match(verificarArchivos(d, ['a.csv'], 3).motivo, /tienen 2 filas y la extracción informa 3/);
+  assert.match(verificarArchivos(d, ['falta.csv'], 0).motivo, /no se puede leer/);
+  assert.match(verificarArchivos(d, ['vacio.csv'], 0).motivo, /vacío/);
+  assert.equal(verificarArchivos(d, [], 0).ok, true, 'un cero validado no tiene archivos');
 });
 
 test('conservarIntento: guarda cada intento aparte y la corrida mala no pisa la buena', () => {
   const datosDir = tmp();
   const id = 'sifere-consultas-ddjj-mensuales';
-  // Corrida 1: buena (83 filas, columnas confirmadas).
+  const H = ['Anticipo', 'Estado', 'Presentación'];
+  // Corrida 1: apta (83 filas).
   const d1 = path.join(datosDir, id, 'intentos', 'c1');
   fs.mkdirSync(d1, { recursive: true });
-  fs.writeFileSync(path.join(d1, 'lista.csv'), 'a;b\n1;2\n');
+  fs.writeFileSync(path.join(d1, 'lista.csv'), csv(H, Array.from({ length: 83 }, (_, i) => [String(i), 'Presentada', '01/01/2026'])));
   const r1 = conservarIntento({ datosDir, id, cuando: 'c1', clave: 'acumulado', dirIntento: d1, ...P,
-    resultado: { estado: 'extraido', filas: 83, archivos: ['lista.csv'], calidad: { exito: true } } });
+    resultado: { filas: 83, archivos: ['lista.csv'], calidad: { nivel: 'apto' } } });
   assert.equal(r1.promovido, true);
-  assert.ok(fs.existsSync(path.join(datosDir, id, 'vigente', 'acumulado', 'lista.csv')));
-  // Corrida 2: parcial con menos filas (sesión que se cortó): NO reemplaza.
+  assert.equal(leerVigente(datosDir, id).acumulado.nivel, 'apto');
+  // Corrida 2: evidencia (paginación incompleta, 3 filas): NO reemplaza.
   const d2 = path.join(datosDir, id, 'intentos', 'c2');
   fs.mkdirSync(d2, { recursive: true });
-  fs.writeFileSync(path.join(d2, 'lista.csv'), 'a;b\n');
+  fs.writeFileSync(path.join(d2, 'lista.csv'), csv(H, [['1', 'x', 'y'], ['2', 'x', 'y'], ['3', 'x', 'y']]));
   const r2 = conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', dirIntento: d2, ...P,
-    resultado: { estado: 'parcial', filas: 3, archivos: ['lista.csv'], error: 'impuesto X: timeout' } });
+    resultado: { filas: 3, archivos: ['lista.csv'], calidad: { nivel: 'obtenido' } } });
   assert.equal(r2.promovido, false);
-  assert.match(r2.motivo, /se conserva el vigente del c1/);
+  assert.match(r2.motivo, /se conserva el vigente del c1.*solo como evidencia/);
   assert.equal(leerVigente(datosDir, id).acumulado.filas, 83);
-  assert.equal(fs.readFileSync(path.join(datosDir, id, 'vigente', 'acumulado', 'lista.csv'), 'utf8'), 'a;b\n1;2\n');
-  // Corrida 3: falla antes de extraer (sin clave): se registra el error, el vigente sigue.
+  assert.equal(fs.readFileSync(path.join(datosDir, id, 'vigente', 'acumulado', 'lista.csv'), 'utf8').split('\r\n').filter(Boolean).length, 84);
+  // Corrida 3: falla antes de extraer.
   const r3 = conservarIntento({ datosDir, id, cuando: 'c3', clave: null, resultado: { estado: 'error', filas: 0, error: 'COMARB: sesión expirada' } });
-  assert.equal(r3.promovido, false);
   assert.match(r3.motivo, /se conserva lo obtenido el c1/);
-  // Los tres intentos quedan trazados, con su error, y cada uno con su intento.json.
+  // Corrida 4: validada pero el archivo no tiene las filas que dice: NO se promueve.
+  const d4 = path.join(datosDir, id, 'intentos', 'c4');
+  fs.mkdirSync(d4, { recursive: true });
+  fs.writeFileSync(path.join(d4, 'lista.csv'), csv(H, [['1', 'x', 'y']]));
+  const r4 = conservarIntento({ datosDir, id, cuando: 'c4', clave: 'acumulado', dirIntento: d4, ...P,
+    resultado: { filas: 90, archivos: ['lista.csv'], calidad: { nivel: 'apto' } } });
+  assert.equal(r4.promovido, false);
+  assert.match(r4.motivo, /NO se promueve: los archivos tienen 1 filas y la extracción informa 90/);
+  assert.equal(leerVigente(datosDir, id).acumulado.cuando, 'c1');
+  // Los cuatro intentos quedan trazados con su nivel y error.
   const ints = leerIntentos(datosDir, id);
-  assert.deepEqual(ints.map((i) => [i.cuando, i.promovido]), [['c1', true], ['c2', false], ['c3', false]]);
+  assert.deepEqual(ints.map((i) => [i.cuando, i.promovido]), [['c1', true], ['c2', false], ['c3', false], ['c4', false]]);
   assert.equal(ints[2].error, 'COMARB: sesión expirada');
-  for (const c of ['c1', 'c2', 'c3']) assert.ok(fs.existsSync(path.join(datosDir, id, 'intentos', c, 'intento.json')), c);
+  for (const c of ['c1', 'c2', 'c3', 'c4']) assert.ok(fs.existsSync(path.join(datosDir, id, 'intentos', c, 'intento.json')), c);
 });
 
 test('conservarIntento sanea el resumen guardado (CUIT e importes)', () => {
@@ -146,7 +236,43 @@ test('conservarIntento sanea el resumen guardado (CUIT e importes)', () => {
   assert.doesNotMatch(txt, /20353544773|871\.446/);
 });
 
-// ---------------- 4. Cobertura histórica ----------------
+// Caso pedido en la revisión: Cuenta Corriente que lee por accidente los 5 vencimientos de la home.
+test('Cuenta Corriente que lee los 5 vencimientos de la home: queda como evidencia, nunca como dato vigente', async () => {
+  const servicio = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  const filasHome = Array.from({ length: 5 }, (_, i) => ['30 - IVA', '19 - DDJJ', '19 - DDJJ', `2026-0${i + 4}`, '0', `1${i}/10/2026`, '']);
+  // Página falsa: el iframe Vue de la home muestra SOLO la grilla de Vencimientos (la ruta no llegó a la sección).
+  const nada = { count: async () => 0, isVisible: async () => false };
+  nada.filter = () => nada; nada.first = () => nada; nada.nth = () => nada;
+  const frame = {
+    name: () => '', url: () => 'https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/homeContribuyente/index.html',
+    evaluate: async (fn) => (fn.name === 'extraerTablasEnDocumento' ? [{ headers: VENCIMIENTOS, rows: filasHome }] : { tablas: [], inputs: [], paginacion: [], mensajes: [] }),
+    locator: () => nada,
+  };
+  const pagina = { frames: () => [frame], mainFrame: () => frame, url: () => frame.url(), title: async () => 'SCT',
+    waitForTimeout: async () => {}, waitForLoadState: async () => {} };
+  const datosDir = tmp();
+  const dirIntento = path.join(datosDir, servicio.id, 'intentos', 'c1');
+  const ext = await extraerTablaEnPagina(pagina, servicio, { ...P, dirSalida: dirIntento });
+  assert.equal(ext.filas, 5, 'el extractor sí leyó 5 filas (la grilla de la home)');
+  // El control final detecta la grilla ajena por sí mismo, sin depender del aviso del drill.
+  ext.calidad = evaluarCalidad(servicio, ext, P);
+  assert.equal(ext.calidad.columnas, 'rechazadas');
+  assert.equal(ext.calidad.nivel, 'obtenido');
+  assert.equal(estadoInforme(ext.calidad, ext.filas), 'con-datos', 'no se informa como dato de Cuenta Corriente');
+  const r = conservarIntento({ datosDir, id: servicio.id, cuando: 'c1', clave: claveDe(ext, P), dirIntento, ...P, resultado: ext });
+  assert.equal(r.promovido, false);
+  assert.deepEqual(leerVigente(datosDir, servicio.id), {}, 'no hay datos vigentes de Cuenta Corriente');
+  assert.ok(!fs.existsSync(path.join(datosDir, servicio.id, 'vigente')), 'nada copiado a vigente');
+  // La evidencia queda guardada en el intento, para diagnóstico.
+  assert.ok(fs.readdirSync(dirIntento).some((f) => f.endsWith('.csv')));
+  assert.equal(leerIntentos(datosDir, servicio.id)[0].nivel, 'obtenido');
+  // Y la cobertura histórica lo muestra como evidencia, no como cubierto.
+  const m = generarMatrizCobertura(datosDir, [{ id: servicio.id, nombre: 'CC' }], { hoy: '2026-10-24' }).objeto.fuentes[0];
+  assert.equal(m.acumulado, null);
+  assert.match(m.nota, /solo evidencia.*No hay datos utilizables/);
+});
+
+// ---------------- cobertura histórica ----------------
 
 test('mesesCompletos y compactarMeses', () => {
   assert.deepEqual(mesesCompletos('2026-01-01', '2026-03-31'), ['2026-01', '2026-02', '2026-03']);
@@ -155,33 +281,32 @@ test('mesesCompletos y compactarMeses', () => {
   assert.equal(compactarMeses(['2026-03', '2026-01', '2026-02', '2026-05']), '2026-01 a 2026-03, 2026-05');
 });
 
-test('matriz de cobertura: meses validados, faltantes, acumulados no verificables y fuentes sin datos', () => {
+test('matriz de cobertura: aptos, validados, evidencia, faltantes, acumulados y fuentes sin datos', () => {
   const datosDir = tmp();
-  const escribirVig = (id, v) => { fs.mkdirSync(path.join(datosDir, id), { recursive: true }); fs.writeFileSync(path.join(datosDir, id, 'vigente.json'), JSON.stringify(v)); };
-  // Retenciones: julio validado, septiembre extraído sin verificar.
-  escribirVig('mis-retenciones', {
-    '2026-07-01_2026-07-31': { cuando: 'c1', rango: 3, estado: 'validado', filas: 4, desde: '2026-07-01', hasta: '2026-07-31' },
-    '2026-09-01_2026-09-30': { cuando: 'c2', rango: 2, estado: 'extraido', filas: 11, desde: '2026-09-01', hasta: '2026-09-30' },
-  });
-  // Mis Facilidades: acumulado que coincide con el total de la pantalla.
-  escribirVig('mis-facilidades', { acumulado: { cuando: 'c2', rango: 2, estado: 'extraido', filas: 14, informados: 14, acumulado: true } });
-  // Mis Comprobantes: manifiesto propio con tramos validados.
-  fs.mkdirSync(path.join(datosDir, 'comprobantes-recibidos'), { recursive: true });
-  fs.writeFileSync(path.join(datosDir, 'comprobantes-recibidos', 'manifiesto.json'), JSON.stringify({ 'recibidos:2026-09-01:2026-09-30': { ok: true, fecha: '2026-10-20', filas: 62 } }));
-  // ct-pagos: nunca dio datos; último intento con error.
-  fs.mkdirSync(path.join(datosDir, 'ct-pagos'), { recursive: true });
-  fs.writeFileSync(path.join(datosDir, 'ct-pagos', 'intentos.jsonl'), JSON.stringify({ cuando: 'c2', estado: 'sin-extraccion', error: 'no se encontró el paso Pagos', promovido: false }) + '\n');
+  const dir = (id) => { fs.mkdirSync(path.join(datosDir, id), { recursive: true }); return path.join(datosDir, id); };
+  // Retenciones: julio apto, agosto validado sin total; septiembre leído pero no validado (evidencia).
+  fs.writeFileSync(path.join(dir('mis-retenciones'), 'vigente.json'), JSON.stringify({
+    '2026-07-01_2026-07-31': { cuando: 'c1', rango: 3, nivel: 'apto', filas: 4, desde: '2026-07-01', hasta: '2026-07-31' },
+    '2026-08-01_2026-08-31': { cuando: 'c1', rango: 2, nivel: 'validado', filas: 2, desde: '2026-08-01', hasta: '2026-08-31' },
+  }));
+  fs.writeFileSync(path.join(dir('mis-retenciones'), 'intentos.jsonl'), JSON.stringify({ cuando: 'c2', clave: '2026-09-01_2026-09-30', filas: 11, rango: 0, nivel: 'obtenido', promovido: false }) + '\n');
+  // Mis Facilidades: acumulado validado sin total de paginador.
+  fs.writeFileSync(path.join(dir('mis-facilidades'), 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c2', rango: 2, nivel: 'validado', filas: 14, acumulado: true } }));
+  // Mis Comprobantes: manifiesto propio (tramos verificados contra el total de ARCA).
+  fs.writeFileSync(path.join(dir('comprobantes-recibidos'), 'manifiesto.json'), JSON.stringify({ 'recibidos:2026-09-01:2026-09-30': { ok: true, fecha: '2026-10-20', filas: 62 } }));
+  // ct-pagos: nunca dio datos.
+  fs.writeFileSync(path.join(dir('ct-pagos'), 'intentos.jsonl'), JSON.stringify({ cuando: 'c2', estado: 'sin-extraccion', error: 'no se encontró el paso Pagos', promovido: false }) + '\n');
 
   const fuentes = [{ id: 'mis-retenciones', nombre: 'Ret' }, { id: 'mis-facilidades', nombre: 'MF' }, { id: 'comprobantes-recibidos', nombre: 'Rec' }, { id: 'ct-pagos', nombre: 'Pagos' }];
-  const { objeto, texto } = generarMatrizCobertura(datosDir, fuentes, { hoy: '2026-10-23', historicoDesde: '2026-06' });
+  const { objeto, texto } = generarMatrizCobertura(datosDir, fuentes, { hoy: '2026-10-24', historicoDesde: '2026-06' });
   const f = Object.fromEntries(objeto.fuentes.map((x) => [x.id, x]));
-  assert.equal(f['mis-retenciones'].tipo, 'por-periodo');
-  assert.equal(f['mis-retenciones'].mesesValidados, '2026-07');
-  assert.equal(f['mis-retenciones'].mesesSinVerificar, '2026-09');
-  assert.equal(f['mis-retenciones'].faltantes, '2026-06, 2026-08 a 2026-09', 'septiembre extraído sin verificar NO tapa el hueco');
+  assert.equal(f['mis-retenciones'].mesesAptos, '2026-07');
+  assert.equal(f['mis-retenciones'].mesesValidados, '2026-07 a 2026-08');
+  assert.equal(f['mis-retenciones'].mesesEvidencia, '2026-09');
+  assert.equal(f['mis-retenciones'].faltantes, '2026-06, 2026-09', 'la evidencia de septiembre NO tapa el hueco');
   assert.equal(f['mis-facilidades'].tipo, 'acumulado');
-  assert.match(f['mis-facilidades'].nota, /no demuestra el histórico completo/);
-  assert.equal(f['comprobantes-recibidos'].mesesValidados, '2026-09');
+  assert.match(f['mis-facilidades'].nota, /sin total de ARCA.*no demuestra el histórico completo/);
+  assert.equal(f['comprobantes-recibidos'].mesesAptos, '2026-09');
   assert.equal(f['ct-pagos'].tipo, 'sin-datos');
   assert.match(f['ct-pagos'].nota, /no se encontró el paso Pagos/);
   assert.match(texto, /no verificable por período/);
@@ -199,23 +324,28 @@ test('ejecutarTodo conserva entre corridas y escribe la cobertura histórica', a
   const outDir = tmp(); const datosDir = path.join(outDir, 'datos');
   const servicios = [{ id: 'mis-facilidades', nombre: 'MF', fuente: 15 }];
   const sesion = { cfg: { cuit: '20111111112' } };
-  // Corrida buena: 14 filas con columnas confirmadas.
-  const buena = async () => ({ estado: 'descargado', filas: 14,
-    intentos: [{ id: 'mis-facilidades', clave: 'acumulado', dirIntento: null, resultado: { estado: 'extraido', filas: 14, calidad: { exito: true }, archivos: [] } }] });
-  await ejecutarTodo(sesion, { servicios, outDir, datosDir, runner: buena, periodo: P });
+  // Corrida buena: validada, sin archivos que verificar (0 filas no; usamos un CSV real de 2 filas).
+  const dirI = () => fs.readdirSync(path.join(outDir)).filter((x) => /^\d{4}-/.test(x)).sort().at(-1);
+  const buenaRun = async () => {
+    const d = path.join(datosDir, 'mis-facilidades', 'intentos', dirI());
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'mf.csv'), csv(['Presentación', 'Número'], [['a', '1'], ['b', '2']]));
+    return { estado: 'validado', filas: 2,
+      intentos: [{ id: 'mis-facilidades', clave: 'acumulado', dirIntento: d, resultado: { filas: 2, archivos: ['mf.csv'], calidad: { nivel: 'validado' } } }] };
+  };
+  await ejecutarTodo(sesion, { servicios, outDir, datosDir, runner: buenaRun, periodo: P });
   await new Promise((r) => setTimeout(r, 1100)); // otra corrida = otro timestamp
-  // Corrida mala: tira error.
   const mala = async () => { throw new Error('timeout abriendo pantalla'); };
   const { baseDir, resultados } = await ejecutarTodo(sesion, { servicios, outDir, datosDir, runner: mala, periodo: P });
   assert.equal(resultados[0].estado, 'sin-acceso');
-  assert.equal(leerVigente(datosDir, 'mis-facilidades').acumulado.filas, 14, 'el fallo no borra lo conservado');
+  assert.equal(leerVigente(datosDir, 'mis-facilidades').acumulado.filas, 2, 'el fallo no borra lo conservado');
   assert.equal(leerIntentos(datosDir, 'mis-facilidades').length, 2);
   const hist = fs.readFileSync(path.join(baseDir, 'cobertura-historica.md'), 'utf8');
   assert.match(hist, /MF \(mis-facilidades\) \| acumulado/);
   assert.ok(fs.existsSync(path.join(datosDir, 'cobertura-historica.json')));
 });
 
-// ---------------- 1. Navegación ----------------
+// ---------------- navegación ----------------
 
 test('enlaceDeConsultaValido: texto exacto, mismo host, sin trámite', () => {
   const base = { texto: 'Pagos', title: 'Permite consultar los comprobantes de pagos', href: 'https://ctacte.cloud.afip.gob.ar/contribuyente/externo?service=partial&sp=SPagos', hostFrame: 'ctacte.cloud.afip.gob.ar' };
@@ -232,9 +362,8 @@ test('drill: si el ítem visible no aparece, usa el enlace exacto como respaldo 
   let navegado = null; let nivel = 0;
   const frame = {
     url: () => 'https://ctacte.cloud.afip.gob.ar/contribuyente/externo',
-    // Ningún control visible (el NavBar dibuja aparte): locator sin coincidencias.
     locator: () => { const l = { filter: () => l, count: async () => 0, first: () => null, nth: () => null }; return l; },
-    getByText: () => { const l = { count: async () => 0 }; return l; },
+    getByText: () => ({ count: async () => 0 }),
     evaluate: async () => [
       { texto: 'Presentación DJ / Pagos', title: '', href: 'https://ctacte.cloud.afip.gob.ar/contribuyente/externo?sp=SPresentacion' },
       { texto: 'Pagos', title: 'Permite consultar los comprobantes de pagos', href: 'https://ctacte.cloud.afip.gob.ar/contribuyente/externo?sp=SPagos' },

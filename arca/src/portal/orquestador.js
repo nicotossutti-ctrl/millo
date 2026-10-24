@@ -11,7 +11,7 @@ import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, 
 import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
 import { drillHaciaGrilla } from './navegar.js';
 import { slug } from './servicios.js';
-import { evaluarCalidad } from './calidad.js';
+import { evaluarCalidad, esGrillaAjena, estadoInforme } from './calidad.js';
 import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
 import { generarMatrizCobertura } from './coberturaHistorica.js';
 
@@ -35,9 +35,7 @@ function selectorDe(x) {
  * Tributarias, que aparece cuando la ruta no llegó a DJ/Pagos/Cuenta Corriente).
  */
 export function esGrillaRechazada(columnas, rechazar) {
-  if (!rechazar?.length || !columnas?.length) return false;
-  const hn = columnas.map(norm);
-  return rechazar.map(norm).every((r) => hn.some((h) => h.includes(r)));
+  return esGrillaAjena(columnas, rechazar);
 }
 
 /**
@@ -171,16 +169,17 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
   if (extraccion && !extraccion.error && extraccion.filas > 0) {
     const c = extraccion.calidad;
     const validacion = { desde: periodo.desde, hasta: periodo.hasta, filas: extraccion.filas, informados: extraccion.informados,
-      ok: extraccion.verificado && c.exito, cantidadVerificada: extraccion.coincideInformado === true, estadoExtractor: extraccion.estado,
+      ok: c.validado, nivel: c.nivel, cantidadVerificada: c.total === 'coincide', estadoExtractor: extraccion.estado,
       conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, paginas: extraccion.paginas,
       finPaginacion: extraccion.finPaginacion, calidad: c, resumenEstados: extraccion.resumenEstados };
-    // Con columnas propias confirmadas y los chequeos en verde, cuenta como dato de la fuente.
-    if (c.exito) {
-      return { estado: extraccion.estado === 'validado' ? 'validado' : 'descargado', archivos: extraccion.archivos, filas: extraccion.filas,
-        motivo: extraccion.motivo, drill: drillInfo, calidad: c, intentos, validaciones: [validacion] };
+    // validado: dato de la fuente. descargado: filas de la sección con algún control fallido.
+    // con-datos: filas que no se probó que sean de esta sección. Solo lo validado llega a vigente.
+    const estado = estadoInforme(c, extraccion.filas);
+    if (estado !== 'con-datos') {
+      return { estado, archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos, validaciones: [validacion],
+        motivo: c.motivos.length ? sanitizarTexto(c.motivos.join('; ')) : extraccion.motivo };
     }
-    // Hay filas pero la validación no pasó: se conservan como intento, sin contarlas como dato.
-    return { ...clas, url: rel.url, estado: 'con-datos', archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos,
+    return { ...clas, url: rel.url, estado, archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos,
       validaciones: [validacion],
       // Los encabezados reales van al informe: con ellos se confirman las columnas propias de la sección.
       motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}${extraccion.columnas?.length ? ` · encabezados leídos: ${extraccion.columnas.join(' / ')}` : ''}`) };
@@ -208,10 +207,9 @@ async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
   // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe.
   // Solo cuenta como "descargado" si realmente trajo filas; 0 filas (cero confirmado o ausencia
   // incierta) va a "relevado", nunca a "descargado sin validar".
-  // 'validado' exige además que pasen los chequeos de calidad (columnas, paginación, fechas).
-  const estado = (r.estado === 'validado' && r.calidad.exito) ? 'validado'
-    : (r.filas > 0 && ['validado', 'extraido', 'parcial'].includes(r.estado)) ? 'descargado'
-    : 'relevado';
+  // El estado del informe sale de la validación final (calidad.js): columnas reales, paginación,
+  // total, período y fechas. Un cero solo es 'validado' si la grilla propia estaba presente y vacía.
+  const estado = estadoInforme(r.calidad, r.filas) ?? 'relevado';
   const motivo = r.motivo ?? (r.calidad.motivos.length ? r.calidad.motivos.join('; ') : undefined);
   return {
     estado,
@@ -223,7 +221,7 @@ async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
     intentos: [{ id: servicio.id, dirIntento, clave: claveDe(r, periodo), resultado: rSinEstructura }],
     validaciones: [{
       desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados,
-      ok: r.verificado && r.calidad.exito, cantidadVerificada: r.coincideInformado === true,
+      ok: r.calidad.validado, nivel: r.calidad.nivel, cantidadVerificada: r.calidad.total === 'coincide',
       estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado,
       paginas: r.paginas, finPaginacion: r.finPaginacion, motivo, ceroConfirmado: r.ceroConfirmado,
       calidad: r.calidad, resumenEstados: r.resumenEstados,
@@ -314,12 +312,15 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
 
   const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
   const archivos = sub.flatMap((s) => s.archivos ?? []);
+  // Validado solo si TODOS los listados se validaron; con filas pero sin validar, descargado.
+  const estado = sub.length && sub.every((x) => x.calidad?.validado) ? 'validado' : filas > 0 ? 'descargado' : 'relevado';
   return {
-    estado: filas > 0 ? 'descargado' : 'relevado',
+    estado,
     archivos, filas, intentos,
     motivo: filas > 0 ? undefined
       : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
-    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, motivo: s.motivo ?? s.error, calidad: s.calidad,
+    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
+      motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
       finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
   };
 }
@@ -424,7 +425,10 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
   // Evidencia extra por fila: por qué no se validó, cómo se navegó y qué se conservó.
   const extras = (r) => {
     const x = [];
-    if (r.estado === 'descargado' && r.calidad?.motivos?.length) x.push(`sin validar: ${r.calidad.motivos.join('; ')}`);
+    const nivelTxt = { apto: 'APTO para cálculos', validado: 'validado, sin total de ARCA: no apto para cálculos', obtenido: 'obtenido sin validar (evidencia)' };
+    if (r.calidad?.nivel && nivelTxt[r.calidad.nivel]) x.push(nivelTxt[r.calidad.nivel]);
+    for (const v of r.validaciones ?? []) if (v.sub && v.nivel) x.push(`${v.sub}: ${nivelTxt[v.nivel] ?? v.nivel}`);
+    if (r.estado === 'descargado' && r.calidad?.motivos?.length && !r.motivo) x.push(`sin validar: ${r.calidad.motivos.join('; ')}`);
     if (r.drill?.recorrido?.length) x.push(`ruta: ${r.drill.recorrido.map((p) => `${p.paso}=${p.via}`).join(', ')}`);
     for (const c of r.conservacion ?? []) if (!c.promovido && c.vigente) x.push(`${c.id}: ${c.motivo}`);
     return x.length ? ` · ${x.join(' · ')}` : '';

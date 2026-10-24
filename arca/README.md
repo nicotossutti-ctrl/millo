@@ -153,21 +153,29 @@ Los archivos y el registro viven en una carpeta **persistente y compartida entre
 no se vuelve a descargar salvo `--rehacer`, y el informe lo marca como reutilizado. Así el
 histórico no se vuelve a bajar en cada ejecución.
 
-**Validación.** Llegar a una pantalla no cuenta como éxito. Una sección solo se da por descargada
-si la grilla tiene **sus columnas propias** (declaradas en `servicios.js`), la paginación terminó de
-forma verificable (no por el tope de seguridad), el total coincide con el que informa ARCA (si lo
-informa), el período filtrado quedó confirmado en pantalla y, si la sección declara su columna de
-fecha, todas las filas caen en el rango. Si falta algo, queda *Solo relevado* con el motivo, y los
-encabezados reales quedan en el informe para confirmarlos.
+**Validación** (`calidad.js`). Llegar a una pantalla no cuenta como éxito. Cada extracción queda en
+uno de tres niveles:
+- *obtenido*: se leyeron filas, pero algún control falló o no se pudo hacer. Es evidencia: se guarda
+  como intento y nunca se usa como dato.
+- *validado*: los **encabezados reales** tienen todas las columnas obligatorias de la sección (y no
+  son los de una grilla rechazada, como Vencimientos de la home), la paginación terminó de forma
+  **natural** (sin "siguiente"; una página repetida, una grilla que desaparece o el tope de seguridad
+  no alcanzan), ningún total la contradice y, si la consulta filtra por período, el rango quedó
+  confirmado en pantalla y **todas** las filas tienen fecha interpretable dentro del rango, según la
+  columna de fecha que declara la sección. Un cero solo vale con la grilla propia presente y vacía.
+- *apto para cálculos*: validado y con la cantidad cotejada contra el total que ARCA informa en el
+  paginador (o un cero validado).
 
-**Conservación.** Cada intento se guarda aparte en `out/datos/<fuente>/intentos/<corrida>/`
-(archivos + `intento.json` con el error, si lo hubo) y en `intentos.jsonl`. Solo se **promueve** a
-`out/datos/<fuente>/vigente/` (registro en `vigente.json`) si es al menos tan bueno como lo que ya
-había: una corrida fallida o parcial nunca reemplaza el último resultado validado.
+**Conservación** (`conservacion.js`). Cada intento se guarda aparte en
+`out/datos/<fuente>/intentos/<corrida>/` (archivos + `intento.json` con su nivel y su error) y en
+`intentos.jsonl`. A `out/datos/<fuente>/vigente/` (registro en `vigente.json`) solo llega lo
+**validado o apto**, y antes se comprueba que los archivos existan, se puedan leer y sumen las filas.
+Una grilla ajena o un intento sin validar nunca se promueve, ni siquiera como primer resultado, y un
+intento nunca reemplaza a un vigente de mejor nivel.
 
 **Cobertura histórica.** `out/datos/cobertura-historica.md` (copia en cada corrida) muestra, con
-lo conservado de todas las corridas, qué meses están validados, cuáles se obtuvieron sin verificar,
-cuáles faltan y qué fuentes son acumuladas (una foto de lo que ARCA lista ese día: no prueba el
+lo conservado de todas las corridas, qué meses son aptos para cálculos, cuáles están validados,
+cuáles solo tienen evidencia sin validar (no tapa huecos), cuáles faltan y qué fuentes son acumuladas (una foto de lo que ARCA lista ese día: no prueba el
 histórico completo). Con `FISCALOS_HISTORICO_DESDE=aaaa-mm` en `.env` los faltantes se cuentan
 desde esa fecha; si no, desde el primer mes validado.
 

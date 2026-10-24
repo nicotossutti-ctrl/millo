@@ -5,7 +5,8 @@
  *
  * Criterio:
  *   - Fuentes por período (filtran por fecha): un mes cuenta como cubierto solo si un rango
- *     VALIDADO lo contiene entero. Uno extraído sin verificar se muestra aparte, no tapa el hueco.
+ *     VALIDADO (vigente) lo contiene entero; "apto" si además se cotejó con el total de ARCA. Lo
+ *     leído sin validar (evidencia, en intentos.jsonl) se muestra aparte y NO tapa el hueco.
  *   - Fuentes acumuladas (muestran todo sin filtro): son una foto de lo que ARCA lista ese día.
  *     Aunque coincida con el total que informa la pantalla, NO demuestra el histórico completo.
  */
@@ -55,7 +56,7 @@ function periodosDe(datosDir, id) {
     const out = {};
     for (const [k, v] of Object.entries(m)) {
       const [, d, h] = k.split(':');
-      if (d && h && v?.ok) out[`${d}_${h}`] = { cuando: v.fecha, rango: 3, estado: 'validado', filas: v.filas ?? 0, informados: v.informados ?? null, desde: d, hasta: h, acumulado: false };
+      if (d && h && v?.ok) out[`${d}_${h}`] = { cuando: v.fecha, rango: 3, nivel: 'apto', estado: 'validado', filas: v.filas ?? 0, informados: v.informados ?? null, desde: d, hasta: h, acumulado: false };
     }
     return out;
   } catch { return {}; }
@@ -69,54 +70,66 @@ function periodosDe(datosDir, id) {
 export function generarMatrizCobertura(datosDir, fuentes, { hoy = new Date().toISOString().slice(0, 10), historicoDesde = null } = {}) {
   const ultimoMes = sumarMes(mes(hoy), -1);
   const filas = [];
+  const rangoDeClave = (c) => { const [d, h] = String(c ?? '').split('_'); return /^\d{4}-\d{2}-\d{2}$/.test(d ?? '') && /^\d{4}-\d{2}-\d{2}$/.test(h ?? '') ? [d, h] : null; };
   for (const f of fuentes) {
     const per = periodosDe(datosDir, f.id);
     const intentos = leerIntentos(datosDir, f.id);
     const ult = intentos.at(-1) ?? null;
-    const regs = Object.entries(per).map(([clave, r]) => ({ clave, ...r }));
+    // Vigente = solo lo validado (rango ≥ 2); los niveles vienen de calidad.js vía conservacion.js.
+    const regs = Object.entries(per).map(([clave, r]) => ({ clave, ...r })).filter((r) => (r.rango ?? 0) >= 2);
     const acum = regs.find((r) => r.clave === 'acumulado') ?? null;
     const porPeriodo = regs.filter((r) => r.clave !== 'acumulado');
-    const validados = porPeriodo.filter((r) => (r.rango ?? 0) >= 3);
-    const sinVerificar = porPeriodo.filter((r) => (r.rango ?? 0) < 3);
-    const mesesVal = validados.flatMap((r) => mesesCompletos(r.desde, r.hasta));
-    const mesesSinVer = sinVerificar.flatMap((r) => mesesCompletos(r.desde, r.hasta)).filter((m) => !mesesVal.includes(m));
+    const mesesVal = porPeriodo.flatMap((r) => mesesCompletos(r.desde, r.hasta));
+    const mesesApto = porPeriodo.filter((r) => r.rango >= 3).flatMap((r) => mesesCompletos(r.desde, r.hasta));
+    // Evidencia: intentos con filas que NO llegaron a validarse. Se muestran, pero no tapan huecos.
+    const evid = intentos.filter((i) => (i.filas ?? 0) > 0 && (i.rango ?? 0) < 2);
+    const mesesEvid = evid.map((i) => rangoDeClave(i.clave)).filter(Boolean).flatMap(([d, h]) => mesesCompletos(d, h)).filter((m) => !mesesVal.includes(m));
+    const evidAcum = evid.filter((i) => i.clave === 'acumulado').at(-1) ?? null;
 
     let faltantes = null;
-    const inicio = historicoDesde ?? [...mesesVal].sort()[0] ?? null;
-    if (porPeriodo.length || historicoDesde) {
+    const hayPeriodos = porPeriodo.length || mesesEvid.length;
+    const inicio = historicoDesde ?? [...mesesVal, ...mesesEvid].sort()[0] ?? null;
+    if (hayPeriodos || historicoDesde) {
       faltantes = [];
       if (inicio) for (let m = inicio; m <= ultimoMes; m = sumarMes(m)) if (!mesesVal.includes(m)) faltantes.push(m);
     }
 
-    const tipo = porPeriodo.length ? 'por-periodo' : acum ? 'acumulado' : 'sin-datos';
+    const tipo = hayPeriodos ? 'por-periodo' : (acum || evidAcum) ? 'acumulado' : 'sin-datos';
     let nota;
-    if (tipo === 'acumulado') {
-      const tot = acum.informados == null ? 'ARCA no informó un total' : acum.informados === acum.filas ? `coincide con el total informado (${acum.informados})` : `NO coincide con el total informado (${acum.filas} ≠ ${acum.informados})`;
-      nota = `foto del ${acum.cuando}: ${acum.filas} registros, ${tot}. Muestra lo que ARCA lista ese día; no demuestra el histórico completo.`;
+    if (tipo === 'acumulado' && acum) {
+      const tot = acum.rango >= 3 ? `cantidad cotejada con el total de ARCA (${acum.informados})` : 'sin total de ARCA en el paginador para cotejar la cantidad';
+      nota = `foto del ${acum.cuando}: ${acum.filas} registros validados, ${tot}. Muestra lo que ARCA lista ese día; no demuestra el histórico completo.`;
+    } else if (tipo === 'acumulado') {
+      nota = `solo evidencia: el ${evidAcum.cuando} se leyeron ${evidAcum.filas} filas que NO se validaron (${evidAcum.motivo ?? evidAcum.conservacion ?? evidAcum.nivel ?? 'sin detalle'}). No hay datos utilizables.`;
     } else if (tipo === 'sin-datos') {
       nota = ult ? `sin datos conservados; último intento ${ult.cuando}: ${ult.error ?? ult.motivo ?? ult.estado}` : 'sin intentos registrados';
     } else {
-      nota = historicoDesde ? `cobertura exigida desde ${historicoDesde}` : 'sin FISCALOS_HISTORICO_DESDE: los faltantes se cuentan desde el primer mes validado';
+      nota = historicoDesde ? `cobertura exigida desde ${historicoDesde}` : 'sin FISCALOS_HISTORICO_DESDE: los faltantes se cuentan desde el primer mes con datos';
     }
     filas.push({
       id: f.id, nombre: f.nombre, tipo,
-      mesesValidados: compactarMeses(mesesVal), mesesSinVerificar: compactarMeses(mesesSinVer),
+      mesesAptos: compactarMeses(mesesApto), mesesValidados: compactarMeses(mesesVal), mesesEvidencia: compactarMeses(mesesEvid),
       faltantes: faltantes == null ? null : compactarMeses(faltantes), cantidadFaltantes: faltantes?.length ?? null,
-      acumulado: acum ? { cuando: acum.cuando, estado: acum.estado, filas: acum.filas, informados: acum.informados, rango: acum.rango } : null,
-      ultimoIntento: ult ? { cuando: ult.cuando, clave: ult.clave ?? null, estado: ult.estado, filas: ult.filas, promovido: ult.promovido, error: ult.error ?? null } : null,
+      acumulado: acum ? { cuando: acum.cuando, nivel: acum.nivel ?? null, filas: acum.filas, informados: acum.informados, rango: acum.rango } : null,
+      evidenciaAcumulada: evidAcum ? { cuando: evidAcum.cuando, filas: evidAcum.filas, nivel: evidAcum.nivel ?? null } : null,
+      ultimoIntento: ult ? { cuando: ult.cuando, clave: ult.clave ?? null, estado: ult.estado, nivel: ult.nivel ?? null, filas: ult.filas, promovido: ult.promovido, error: ult.error ?? null } : null,
       nota,
     });
   }
   const md = ['# Cobertura histórica FiscalOS', '',
     `Generada ${hoy}. Último mes completo: ${ultimoMes}.${historicoDesde ? ` Cobertura exigida desde ${historicoDesde}.` : ''}`,
-    'Se arma con lo conservado (`out/datos/*/vigente.json`), no solo con la última corrida.', '',
-    '| Fuente | Tipo | Meses validados | Obtenido sin verificar | Faltan / no verificable | Último intento |', '|---|---|---|---|---|---|'];
+    'Se arma con lo conservado (`out/datos/*/vigente.json` e `intentos.jsonl`), no solo con la última corrida.',
+    'Niveles: **apto** = validado y cotejado con el total de ARCA (usable en cálculos); **validado** = controles OK pero sin total para cotejar; **evidencia** = se leyó, no se validó (no se usa).', '',
+    '| Fuente | Tipo | Aptos para cálculo | Validados | Evidencia sin validar | Faltan / no verificable | Último intento |', '|---|---|---|---|---|---|---|'];
+  const celda = (x) => String(x ?? '—').replace(/\|/g, '/');
   for (const r of filas) {
     const falta = r.tipo === 'acumulado' ? 'no verificable por período' : r.tipo === 'sin-datos' ? 'todo' : (r.faltantes || '—');
-    const sinVer = r.tipo === 'acumulado' ? `${r.acumulado.filas} registros (foto ${r.acumulado.cuando})` : (r.mesesSinVerificar || '—');
+    const aptos = r.tipo === 'acumulado' ? (r.acumulado?.rango >= 3 ? `${r.acumulado.filas} registros (foto ${r.acumulado.cuando})` : '—') : (r.mesesAptos || '—');
+    const val = r.tipo === 'acumulado' ? (r.acumulado ? `${r.acumulado.filas} registros (foto ${r.acumulado.cuando})` : '—') : (r.mesesValidados || '—');
+    const ev = r.tipo === 'acumulado' ? (r.evidenciaAcumulada && !r.acumulado ? `${r.evidenciaAcumulada.filas} filas (${r.evidenciaAcumulada.cuando})` : '—') : (r.mesesEvidencia || '—');
     const u = r.ultimoIntento;
-    const ult = u ? `${u.cuando} · ${u.estado ?? '?'}${u.promovido ? ' (vigente)' : u.error ? ' (falló, no reemplazó)' : u.clave ? ' (no reemplazó)' : ''}` : '—';
-    md.push(`| ${r.nombre} (${r.id}) | ${r.tipo} | ${r.mesesValidados || '—'} | ${sinVer} | ${falta} | ${ult} |`);
+    const ult = u ? `${u.cuando} · ${u.nivel ?? u.estado ?? '?'}${u.promovido ? ' (vigente)' : u.error ? ' (falló)' : ' (no promovido)'}` : '—';
+    md.push(`| ${celda(`${r.nombre} (${r.id})`)} | ${r.tipo} | ${celda(aptos)} | ${celda(val)} | ${celda(ev)} | ${celda(falta)} | ${celda(ult)} |`);
   }
   md.push('', '## Notas');
   for (const r of filas) md.push(`- **${r.id}**: ${r.nota}`);

@@ -1,8 +1,9 @@
 /**
  * Validación de lo extraído (pura, sin red ni disco). Llegar a una pantalla o leer "una tabla" no
- * es éxito: cada sección tiene que mostrar SUS columnas, el período tiene que estar confirmado (o
- * declararse acumulado), la paginación tiene que terminar de forma verificable y, si la sección
- * filtra por fecha y declara su columna de fecha, las filas tienen que caer dentro del rango.
+ * es éxito: cada sección tiene que mostrar SUS columnas (se contrastan los encabezados reales), el
+ * período tiene que estar confirmado (o declararse acumulado), la paginación tiene que terminar de
+ * forma natural y, si la consulta filtra por fecha, todas las filas tienen que tener fecha
+ * interpretable dentro del rango. Ver evaluarCalidad para los tres niveles.
  */
 // Mismo criterio que extractor.norm; se repite acá para que extractor.js pueda importar este módulo sin ciclo.
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -48,36 +49,108 @@ export function resumenEstados(headers, filas) {
   return out;
 }
 
+/** Columnas obligatorias que NO aparecen en los encabezados reales (comparación sin acentos ni mayúsculas, por inclusión). */
+export function columnasFaltantes(encabezados, requeridas) {
+  const hn = (encabezados ?? []).map(norm).filter(Boolean);
+  return (requeridas ?? []).filter((r) => !hn.some((h) => h.includes(norm(r))));
+}
+
+/** ¿Los encabezados son los de una grilla que la sección NO busca? true si TODOS los términos de `rechazar` aparecen. */
+export function esGrillaAjena(encabezados, rechazar) {
+  if (!rechazar?.length || !encabezados?.length) return false;
+  return columnasFaltantes(encabezados, rechazar).length === 0;
+}
+
 /**
- * Evalúa una extracción contra lo que la sección declara. Devuelve los chequeos y `exito`, que es
- * lo único que habilita contar la fuente como descargada. `rechazada`: la grilla leída es una que
- * la sección NO busca (p. ej. Vencimientos de la home de Cuentas Tributarias).
+ * Evalúa una extracción contra lo que la sección declara y la clasifica en uno de tres niveles,
+ * que es lo que distingue sin ambigüedad qué se puede usar:
+ *
+ *   'obtenido'  hay filas leídas, pero algún control falló o no se pudo hacer: es EVIDENCIA, se
+ *               guarda como intento y nunca pasa a los datos vigentes.
+ *   'validado'  la grilla es la de esta fuente (encabezados reales con todas las columnas
+ *               obligatorias, no es una grilla rechazada), la paginación terminó de forma natural
+ *               (sin control "siguiente"), ningún total la contradice y, si la consulta filtra por
+ *               período, el rango quedó confirmado en pantalla y TODAS las filas tienen fecha
+ *               interpretable dentro del rango (con la columna de fecha declarada por la sección).
+ *               Un cero solo se valida si la grilla propia está presente y vacía.
+ *   'apto'      validado y, además, la cantidad está cotejada contra el total que ARCA informa en
+ *               el paginador (o es un cero validado). Es lo único apto para usar en cálculos.
+ *
+ * `rechazada`: el que llama ya detectó que la grilla es ajena. También se detecta acá con
+ * `servicio.rechazarSiColumnas`, para que el control final no dependa de pasos anteriores.
  */
 export function evaluarCalidad(servicio, extraccion, { desde, hasta, rechazada = false } = {}) {
   const motivos = [];
   const filas = extraccion?.filas ?? 0;
-  const declaradas = (servicio?.columnasEsperadas ?? []).length > 0;
-  const columnas = rechazada ? 'rechazadas' : !filas ? 'sin-filas' : declaradas ? 'confirmadas' : 'sin-confirmar';
-  if (columnas === 'rechazadas') motivos.push('la grilla leída no es la de esta sección (columnas de otra pantalla)');
-  if (columnas === 'sin-confirmar') motivos.push('se leyó una grilla, pero la sección todavía no tiene columnas propias confirmadas: no cuenta como dato validado');
+  const encabezados = extraccion?.columnas ?? extraccion?.encabezadosGrilla ?? [];
+  const requeridas = servicio?.columnasEsperadas ?? [];
+  const faltan = columnasFaltantes(encabezados, requeridas);
 
-  const periodo = !extraccion?.conFiltroPeriodo ? 'acumulado'
-    : extraccion?.rangoOk === true ? 'confirmado' : 'sin-confirmar';
-  if (periodo === 'sin-confirmar') motivos.push('se filtró por fecha pero no se confirmó el rango aplicado en la pantalla');
+  // 1. Identidad de la fuente y columnas: se contrastan los ENCABEZADOS REALES.
+  let columnas;
+  if (extraccion?.id && servicio?.id && extraccion.id !== servicio.id) columnas = 'otra-fuente';
+  else if (rechazada || esGrillaAjena(encabezados, servicio?.rechazarSiColumnas)) columnas = 'rechazadas';
+  else if (!encabezados.length) columnas = 'sin-encabezados';
+  else if (!requeridas.length) columnas = 'sin-confirmar';
+  else if (faltan.length) columnas = 'no-coinciden';
+  else columnas = 'confirmadas';
+  const leidos = encabezados.length ? ` (encabezados leídos: ${encabezados.join(' / ')})` : '';
+  if (columnas === 'otra-fuente') motivos.push(`la extracción es de otra fuente (${extraccion.id}), no de ${servicio.id}`);
+  if (columnas === 'rechazadas') motivos.push(`la grilla leída no es la de esta sección: tiene las columnas de otra pantalla${leidos}`);
+  if (columnas === 'sin-encabezados' && (filas || extraccion?.ceroConfirmado)) motivos.push('la grilla no tiene encabezados: no se puede comprobar que sea la de esta sección');
+  if (columnas === 'sin-confirmar') motivos.push(`la sección todavía no tiene columnas obligatorias confirmadas${leidos}`);
+  if (columnas === 'no-coinciden') motivos.push(`faltan columnas obligatorias: ${faltan.join(', ')}${leidos}`);
 
+  // 2. Paginación: solo un fin NATURAL demuestra que se leyó todo.
   const fin = extraccion?.finPaginacion ?? null;
-  const paginacion = fin === 'tope' ? 'incompleta' : fin ? 'completa' : 'sin-dato';
-  if (paginacion === 'incompleta') motivos.push(`la paginación llegó al tope de seguridad (${extraccion.paginas} páginas): puede faltar el final`);
+  const paginacion = !filas ? 'no-aplica' : fin === 'sin-siguiente' ? 'completa' : 'incompleta';
+  if (paginacion === 'incompleta') {
+    motivos.push(fin === 'tope' ? `la paginación llegó al tope de seguridad (${extraccion.paginas} páginas): puede faltar el final`
+      : fin === 'pagina-repetida' ? 'el "siguiente" no avanzó (página repetida): puede ser una falla de navegación, no el final del listado'
+      : fin === 'grilla-desaparecio' ? 'al pasar de página la grilla desapareció: no se sabe si se leyó todo'
+      : 'no hay dato de cómo terminó la paginación');
+  }
 
+  // 3. Total: solo el del paginador de ARCA es un cotejo independiente (y solo él puede contradecir la
+  // cantidad). El de "la única tabla visible" se toma tras paginar (ve la última página): no cuenta.
   const informados = extraccion?.informados ?? null;
-  const total = informados == null ? 'no-informado' : informados === filas ? 'coincide' : 'no-coincide';
+  const total = extraccion?.totalFuente === 'paginador' ? (informados === filas ? 'coincide' : 'no-coincide')
+    : informados != null ? 'no-independiente' : 'no-informado';
   if (total === 'no-coincide') motivos.push(`filas ${filas} ≠ total informado por ARCA ${informados}`);
 
-  // El extractor ya contó las fechas (tiene las filas); acá solo se juzga.
-  const fechas = extraccion?.fechas ?? { verificado: false, motivo: extraccion?.conFiltroPeriodo ? 'fechas no verificadas' : 'sin filtro de período' };
-  if (fechas.verificado && fechas.fueraDeRango) motivos.push(`${fechas.fueraDeRango} fila(s) con fecha fuera del rango ${desde} a ${hasta}`);
+  // 4. Período y fechas. Con filtro de período, la validación temporal exige rango confirmado y
+  // TODAS las filas con fecha interpretable dentro del rango, según la columna declarada.
+  const periodo = !extraccion?.conFiltroPeriodo ? 'acumulado' : extraccion?.rangoOk === true ? 'confirmado' : 'sin-confirmar';
+  if (periodo === 'sin-confirmar') motivos.push('se filtró por fecha pero no se confirmó el rango aplicado en la pantalla');
+  const fechas = extraccion?.fechas ?? { verificado: false, motivo: 'la sección no declara su columna de fecha' };
+  let temporal = 'no-aplica';
+  if (periodo !== 'acumulado' && filas) {
+    if (!fechas.verificado) { temporal = 'no-verificada'; motivos.push(`no se pudo verificar las fechas de las filas: ${fechas.motivo}`); }
+    else if (fechas.fueraDeRango || fechas.sinFecha) {
+      temporal = 'fallida';
+      if (fechas.fueraDeRango) motivos.push(`${fechas.fueraDeRango} fila(s) con fecha fuera del rango ${desde} a ${hasta}`);
+      if (fechas.sinFecha) motivos.push(`${fechas.sinFecha} fila(s) sin fecha interpretable en "${fechas.columna}"`);
+    } else temporal = 'verificada';
+  }
 
-  const exito = filas > 0 && columnas === 'confirmadas' && paginacion !== 'incompleta' && total !== 'no-coincide'
-    && periodo !== 'sin-confirmar' && !(fechas.verificado && fechas.fueraDeRango);
-  return { exito, columnas, periodo, paginacion, total, fechas, motivos };
+  const cero = !filas && extraccion?.ceroConfirmado === true;
+  const validado = filas > 0
+    ? columnas === 'confirmadas' && paginacion === 'completa' && total !== 'no-coincide'
+      && (periodo === 'acumulado' || (periodo === 'confirmado' && temporal === 'verificada'))
+    : cero && columnas === 'confirmadas' && periodo !== 'sin-confirmar';
+  const apto = validado && (cero || total === 'coincide');
+  if (validado && !apto) motivos.push('validado, pero sin total de ARCA en el paginador para cotejar la cantidad: no apto para cálculos');
+  const nivel = apto ? 'apto' : validado ? 'validado' : filas > 0 ? 'obtenido' : 'sin-datos';
+  return { nivel, validado, apto, exito: validado, columnas, faltan, paginacion, total, periodo, temporal, fechas, motivos };
+}
+
+/**
+ * Estado del informe de una corrida a partir de la calidad: 'validado'; 'descargado' (filas de la
+ * sección, con columnas confirmadas, pero algún otro control falló); 'con-datos' (hay filas pero no
+ * se probó que sean de esta sección: no se cuentan como sus datos). null: sin filas, decide el que llama.
+ */
+export function estadoInforme(calidad, filas) {
+  if (calidad?.validado) return 'validado';
+  if (!filas) return null;
+  return calidad?.columnas === 'confirmadas' ? 'descargado' : 'con-datos';
 }

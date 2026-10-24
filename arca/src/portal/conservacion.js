@@ -1,7 +1,10 @@
 /**
- * Conservación de los datos extraídos. Regla: una corrida fallida o parcial NUNCA reemplaza el
- * último resultado bueno. Cada intento queda guardado aparte, con su error, y solo se PROMUEVE a
- * "vigente" si es al menos tan bueno como lo que ya había.
+ * Conservación de los datos extraídos. Separa sin ambigüedad la EVIDENCIA (todo intento, bueno o
+ * malo, con su error) de los DATOS FISCALES UTILIZABLES (vigente). Reglas:
+ *   - a vigente solo llega lo VALIDADO (nivel 'validado' o 'apto' de calidad.js); una grilla ajena,
+ *     sin columnas propias confirmadas o con un control fundamental fallido queda solo como intento;
+ *   - antes de promover se comprueba que los archivos existan, se puedan leer y sumen las filas;
+ *   - un intento nunca reemplaza a un vigente mejor (una corrida fallida o parcial no pisa nada).
  *
  *   out/datos/<fuente>/intentos/<corrida>/   CSV del intento + intento.json (resumen y error)
  *   out/datos/<fuente>/intentos.jsonl        una línea por intento (trazabilidad)
@@ -24,27 +27,47 @@ function leerJson(file, def) {
 }
 
 /**
- * Qué tan bueno es un resultado, para decidir si reemplaza al vigente:
- *   3 validado (período y cantidad confirmados)
- *   2 extraído con columnas propias confirmadas, o cero confirmado (grilla presente y vacía)
- *   1 hay filas pero algo no se pudo verificar (parcial, columnas sin confirmar, grilla ajena)
- *   0 nada utilizable (error, sin grilla)
+ * Qué tan bueno es un resultado, según el nivel que le asignó la validación (calidad.js):
+ *   3 apto para cálculos (validado y cantidad cotejada contra el total de ARCA, o cero validado)
+ *   2 validado (sin total de ARCA para cotejar la cantidad)
+ *   0 todo lo demás: evidencia (obtenido sin validar, grilla ajena, error). Nunca se promueve.
+ * Sin calidad evaluada no hay nivel: 0. No hay un nivel intermedio "con filas": tener filas no
+ * convierte un intento en dato utilizable.
  */
+export const RANGO_MINIMO_VIGENTE = 2;
 export function rangoResultado(r) {
-  if (!r || (r.error && !(r.filas > 0))) return 0;
-  if (r.estado === 'validado') return r.calidad?.exito === false ? 1 : 3;
-  if (r.estado === 'sin-datos' && r.ceroConfirmado) return 2;
-  if ((r.filas ?? 0) > 0 && r.calidad?.exito) return 2;
-  if ((r.filas ?? 0) > 0) return 1;
+  const nivel = r?.calidad?.nivel;
+  if (nivel === 'apto') return 3;
+  if (nivel === 'validado') return 2;
   return 0;
 }
 
-/** ¿El resultado nuevo reemplaza al vigente? Solo si es mejor, o igual de bueno y confiable (≥2: dato más reciente). */
+/** ¿El resultado nuevo reemplaza al vigente? Solo si está validado y es mejor, o igual de bueno (dato más reciente). */
 export function debeReemplazar(nuevo, vigente) {
   const a = rangoResultado(nuevo);
-  if (!vigente) return a > 0;
+  if (a < RANGO_MINIMO_VIGENTE) return false;
+  if (!vigente) return true;
   const b = vigente.rango ?? 0;
-  return a > b || (a === b && a >= 2);
+  return a > b || a === b;
+}
+
+/**
+ * Comprueba los archivos de un intento ANTES de promoverlo: que existan, que se puedan leer y que
+ * sus filas de datos (líneas no vacías menos el encabezado) sumen exactamente `filas`. Los CSV los
+ * escribe el extractor con toCsv (una fila por línea: las celdas no tienen saltos de línea).
+ */
+export function verificarArchivos(dir, archivos, filas) {
+  let total = 0;
+  for (const f of archivos ?? []) {
+    const ruta = path.join(dir, path.basename(f));
+    let txt;
+    try { txt = fs.readFileSync(ruta, 'utf8'); } catch { return { ok: false, motivo: `no se puede leer ${path.basename(f)}` }; }
+    const lineas = txt.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
+    if (!lineas.length) return { ok: false, motivo: `${path.basename(f)} está vacío (ni encabezado)` };
+    total += lineas.length - 1;
+  }
+  if (total !== (filas ?? 0)) return { ok: false, motivo: `los archivos tienen ${total} filas y la extracción informa ${filas ?? 0}` };
+  return { ok: true, filas: total };
 }
 
 export const claveDe = (r, { desde, hasta } = {}) => (r?.conFiltroPeriodo ? `${desde}_${hasta}` : 'acumulado');
@@ -81,8 +104,14 @@ export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIn
   const manifFile = path.join(base, 'vigente.json');
   const manif = leerJson(manifFile, {});
   const previo = manif[clave] ?? null;
-  const promovido = debeReemplazar(resultado, previo);
+  let promovido = debeReemplazar(resultado, previo);
   let motivo;
+  // Archivos: sin esto, un vigente podría apuntar a archivos que no están o que no tienen los datos.
+  const archivosOk = promovido ? verificarArchivos(dirI, resultado.archivos, resultado.filas) : null;
+  if (archivosOk && !archivosOk.ok) {
+    promovido = false;
+    motivo = `validado pero NO se promueve: ${archivosOk.motivo}`;
+  }
   if (promovido) {
     const destino = path.join(base, 'vigente', clave);
     fs.rmSync(destino, { recursive: true, force: true });
@@ -95,18 +124,20 @@ export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIn
       archivos.push(path.basename(f));
     }
     manif[clave] = {
-      cuando, rango, estado: resultado.estado, filas: resultado.filas ?? 0, informados: resultado.informados ?? null,
+      cuando, rango, nivel: resultado.calidad?.nivel ?? null, estado: resultado.estado, filas: resultado.filas ?? 0, informados: resultado.informados ?? null,
       desde: desde ?? null, hasta: hasta ?? null, acumulado: clave === 'acumulado', archivos,
       calidad: res.calidad ?? null, ceroConfirmado: resultado.ceroConfirmado ?? null,
     };
     escribir(manifFile, JSON.stringify(manif, null, 2));
-    motivo = previo ? `reemplaza al vigente del ${previo.cuando} (rango ${previo.rango} → ${rango})` : 'primer resultado utilizable';
-  } else {
+    motivo = previo ? `reemplaza al vigente del ${previo.cuando} (rango ${previo.rango} → ${rango})` : `primer resultado ${resultado.calidad.nivel === 'apto' ? 'apto para cálculos' : 'validado'}`;
+  } else if (!motivo) {
+    const evidencia = rango < RANGO_MINIMO_VIGENTE ? `queda solo como evidencia (nivel ${resultado?.calidad?.nivel ?? 'sin evaluar'})` : 'no es mejor';
     motivo = previo
-      ? `se conserva el vigente del ${previo.cuando} (${previo.estado}, ${previo.filas} filas): este intento (rango ${rango}) no es mejor`
-      : 'intento sin datos utilizables: no hay vigente';
+      ? `se conserva el vigente del ${previo.cuando} (${previo.nivel ?? previo.estado}, ${previo.filas} filas): este intento ${evidencia}`
+      : `este intento ${evidencia}; no hay datos vigentes`;
   }
-  const linea = { cuando, clave, estado: resultado?.estado ?? null, filas: resultado?.filas ?? 0, rango, promovido, error: res.error ?? null, motivo: res.motivo ?? null };
+  const linea = { cuando, clave, estado: resultado?.estado ?? null, nivel: resultado?.calidad?.nivel ?? null, filas: resultado?.filas ?? 0, rango, promovido,
+    error: res.error ?? null, motivo: res.motivo ?? null, conservacion: motivo };
   fs.mkdirSync(base, { recursive: true, mode: 0o700 });
   fs.appendFileSync(path.join(base, 'intentos.jsonl'), JSON.stringify(linea) + '\n', { mode: 0o600 });
   return { promovido, clave, motivo, vigente: manif[clave] ?? null };
@@ -121,7 +152,7 @@ export function registrarIntento({ datosDir, id, cuando, resultado }) {
   const res = resumen(resultado);
   const rango = rangoResultado(resultado);
   escribir(path.join(base, 'intentos', cuando, 'intento.json'), JSON.stringify({ cuando, rango, ...res }, null, 2));
-  const linea = { cuando, clave: null, estado: resultado?.estado ?? null, filas: resultado?.filas ?? 0, rango, promovido: false, error: res.error ?? null, motivo: res.motivo ?? null };
+  const linea = { cuando, clave: null, estado: resultado?.estado ?? null, nivel: resultado?.calidad?.nivel ?? null, filas: resultado?.filas ?? 0, rango, promovido: false, error: res.error ?? null, motivo: res.motivo ?? null };
   fs.appendFileSync(path.join(base, 'intentos.jsonl'), JSON.stringify(linea) + '\n', { mode: 0o600 });
   return linea;
 }

@@ -440,12 +440,14 @@ async function leerGrilla(pagina, expected) {
   }
   let headers = null; const filas = []; const vistas = new Set();
   let gridPresente = false; let paginas = 0; let duplicadosEnTabla = 0;
-  // Cómo terminó la paginación: 'sin-siguiente' (no hay más páginas: fin verificable), 'pagina-repetida'
-  // (el "siguiente" no avanzó), 'tope' (se cortó por seguridad: PUEDE FALTAR el final), 'sin-grilla'.
+  // Cómo terminó la paginación. Solo 'sin-siguiente' es un fin NATURAL (no hay control "siguiente"
+  // habilitado). Los demás no prueban que se leyó todo: 'pagina-repetida' (el "siguiente" no avanzó:
+  // puede ser una falla de navegación), 'grilla-desaparecio' (tras pasar de página ya no había
+  // grilla), 'tope' (corte de seguridad) y 'sin-grilla' (nunca hubo grilla).
   let finPaginacion = 'tope';
   for (let p = 0; p < TOPE_PAGINAS; p++) {
     const tabla = await scrapearFrames(pagina, expected);
-    if (!tabla) { finPaginacion = p === 0 ? 'sin-grilla' : 'sin-siguiente'; break; }
+    if (!tabla) { finPaginacion = p === 0 ? 'sin-grilla' : 'grilla-desaparecio'; break; }
     if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
     if (!headers) headers = tabla.headers;
     let nuevas = 0;
@@ -511,8 +513,11 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
 
   let gridPresente = false; let rangoOk = null; let errorUlt = null; let headersGuardados = null;
   let informadosTot = null; const mensajes = new Set(); const porImpuesto = [];
-  const todasLasFilas = []; let finPaginacion = null;
-  const PEOR_FIN = { tope: 3, 'pagina-repetida': 1, 'sin-siguiente': 0, 'sin-grilla': 0 };
+  const todasLasFilas = []; let finPaginacion = null; let encabezadosGrilla = null;
+  // De dónde sale el total: 'paginador' (ARCA lo informa en el texto de la paginación) o 'tabla-unica'
+  // (no hay paginador y se toman las filas de la única tabla visible: no es un cotejo independiente).
+  const fuentesTotal = [];
+  const PEOR_FIN = { tope: 4, 'grilla-desaparecio': 3, 'pagina-repetida': 2, 'sin-grilla': 1, 'sin-siguiente': 0 };
 
   for (let idx = 0; idx < impuestos.length; idx++) {
     const imp = impuestos[idx];
@@ -536,6 +541,8 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       const g = await leerGrilla(pagina, expected);
       resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
       if (g.filas.length && (finPaginacion == null || PEOR_FIN[g.finPaginacion] > PEOR_FIN[finPaginacion])) finPaginacion = g.finPaginacion;
+      // Encabezados reales de la grilla, aunque venga vacía: con ellos se valida la identidad de la sección.
+      if (!encabezadosGrilla && g.headers?.length) encabezadosGrilla = g.headers;
       const res = resumenResultados(await relevarPagina(pagina));
       // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
       const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
@@ -543,6 +550,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
       const informados = totalInformado(res);
       if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
+      if (g.filas.length) fuentesTotal.push(totalInformado({ ...res, tablasVisibles: [] }) != null ? 'paginador' : informados != null ? 'tabla-unica' : null);
       if (g.headers && g.filas.length) {
         if (!headersGuardados) headersGuardados = g.headers;
         const suf = imp ? `-${slugImpuesto(imp)}` : '';
@@ -567,7 +575,12 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   resultado.gridPresente = gridPresente;
   if (porImpuesto.length > 1) resultado.porImpuesto = porImpuesto;
   if (headersGuardados) resultado.columnas = headersGuardados;
+  if (encabezadosGrilla) resultado.encabezadosGrilla = encabezadosGrilla;
   resultado.finPaginacion = finPaginacion;
+  // Cotejado contra ARCA solo si TODAS las consultas con filas traían el total en el paginador.
+  resultado.totalFuente = !fuentesTotal.length ? null
+    : fuentesTotal.every((f) => f === 'paginador') ? 'paginador'
+    : fuentesTotal.some((f) => f) ? 'tabla-unica' : null;
   resultado.rangoOk = rangoOk;
   // Controles sobre las filas (sin guardarlas en el resultado: solo conteos).
   if (resultado.filas) {
