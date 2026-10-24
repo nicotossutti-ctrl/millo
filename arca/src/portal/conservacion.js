@@ -4,12 +4,19 @@
  *   - a vigente solo llega lo VALIDADO (nivel 'validado' o 'apto' de calidad.js); una grilla ajena,
  *     sin columnas propias confirmadas o con un control fundamental fallido queda solo como intento;
  *   - antes de promover se comprueba que los archivos existan, se puedan leer y sumen las filas;
- *   - un intento nunca reemplaza a un vigente mejor (una corrida fallida o parcial no pisa nada).
+ *   - un intento nunca reemplaza a un vigente mejor (una corrida fallida o parcial no pisa nada);
+ *   - un intento de igual nivel con MENOS filas no reemplaza, salvo que el total de ARCA confirme
+ *     la reducción: queda pendiente de revisión (el organismo puede haber cambiado registros, o la
+ *     corrida pudo perder cobertura sin detectarlo);
+ *   - la sustitución es segura: se copia a una carpeta temporal, se verifica, el vigente anterior
+ *     pasa a respaldos/ y recién entonces la copia nueva ocupa su lugar. Si algo falla, el anterior
+ *     queda intacto o se restaura; una interrupción a mitad se repara en la corrida siguiente.
  *
  *   out/datos/<fuente>/intentos/<corrida>/   CSV del intento + intento.json (resumen y error)
  *   out/datos/<fuente>/intentos.jsonl        una línea por intento (trazabilidad)
  *   out/datos/<fuente>/vigente/<clave>/      copia de los archivos del mejor resultado
  *   out/datos/<fuente>/vigente.json          { <clave>: resumen del resultado vigente }
+ *   out/datos/<fuente>/respaldos/<clave>/<corrida>/  vigentes anteriores (los últimos MAX_RESPALDOS)
  *
  * <clave> es el período consultado ("aaaa-mm-dd_aaaa-mm-dd") o "acumulado" para las fuentes que
  * muestran todo sin filtro de fecha. Todo queda local (out/ no se sube al repo).
@@ -42,13 +49,128 @@ export function rangoResultado(r) {
   return 0;
 }
 
-/** ¿El resultado nuevo reemplaza al vigente? Solo si está validado y es mejor, o igual de bueno (dato más reciente). */
-export function debeReemplazar(nuevo, vigente) {
+/**
+ * ¿El resultado nuevo reemplaza al vigente? Solo si está validado y es al menos tan bueno. Además,
+ * si trae MENOS filas que el vigente, solo reemplaza cuando la cantidad nueva está cotejada contra
+ * el total que informa ARCA (calidad.total === 'coincide'): eso prueba que la reducción es del
+ * organismo y no una pérdida de cobertura de la corrida. Si no, devuelve `reduccion` sin confirmar
+ * y el intento queda pendiente de revisión. Devuelve { reemplaza, motivo?, reduccion? }.
+ */
+export function evaluarReemplazo(nuevo, vigente) {
   const a = rangoResultado(nuevo);
-  if (a < RANGO_MINIMO_VIGENTE) return false;
-  if (!vigente) return true;
+  if (a < RANGO_MINIMO_VIGENTE) return { reemplaza: false, motivo: `queda solo como evidencia (nivel ${nuevo?.calidad?.nivel ?? 'sin evaluar'})` };
+  if (!vigente) return { reemplaza: true };
   const b = vigente.rango ?? 0;
-  return a > b || a === b;
+  if (a < b) return { reemplaza: false, motivo: `no es mejor que el vigente (nivel ${nuevo.calidad.nivel} < ${vigente.nivel ?? b})` };
+  const antes = vigente.filas ?? 0; const ahora = nuevo.filas ?? 0;
+  if (ahora < antes) {
+    if (nuevo.calidad?.total === 'coincide') return { reemplaza: true, reduccion: { antes, ahora, confirmada: true } };
+    return { reemplaza: false, reduccion: { antes, ahora, confirmada: false },
+      motivo: `trae ${ahora} filas y el vigente ${antes}: una reducción sin el total de ARCA que la confirme no reemplaza datos; queda pendiente de revisión` };
+  }
+  return { reemplaza: true };
+}
+
+export function debeReemplazar(nuevo, vigente) { return evaluarReemplazo(nuevo, vigente).reemplaza; }
+
+export const MAX_RESPALDOS = 3;
+
+/** Escritura atómica de un archivo: a un temporal y rename encima (en Windows también reemplaza). */
+function escribirAtomico(file, contenido) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, contenido, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Sustitución segura de vigente/<clave>. Pasos:
+ *   1. copiar los archivos a vigente/.nuevo-<clave>/ y VERIFICAR la copia (existencia, lectura, filas);
+ *   2. mover el vigente anterior a respaldos/<clave>/<corrida anterior>/;
+ *   3. mover la copia nueva a vigente/<clave>/.
+ * Si falla 1, el vigente anterior no se tocó. Si falla 3, se restaura el anterior desde el respaldo.
+ * `ops` permite inyectar fallas en los tests. Devuelve { ok, motivo?, respaldo? }.
+ */
+export function sustituirVigente({ base, clave, dirOrigen, archivos, filas, meta, cuandoPrevio = null, ops = {} }) {
+  const copiar = ops.copyFileSync ?? fs.copyFileSync;
+  const mover = ops.renameSync ?? fs.renameSync;
+  const vig = path.join(base, 'vigente');
+  const destino = path.join(vig, clave);
+  const temp = path.join(vig, `.nuevo-${clave}`);
+  fs.rmSync(temp, { recursive: true, force: true });
+  fs.mkdirSync(temp, { recursive: true, mode: 0o700 });
+  try {
+    for (const f of archivos ?? []) copiar(path.join(dirOrigen, path.basename(f)), path.join(temp, path.basename(f)));
+    const v = verificarArchivos(temp, archivos, filas);
+    if (!v.ok) throw new Error(`la copia no quedó bien: ${v.motivo}`);
+    fs.writeFileSync(path.join(temp, '_meta.json'), JSON.stringify(meta, null, 2), { mode: 0o600 });
+  } catch (e) {
+    fs.rmSync(temp, { recursive: true, force: true });
+    return { ok: false, motivo: `no se pudo preparar la copia nueva (${e.message}); el vigente anterior queda intacto` };
+  }
+  let respaldo = null;
+  if (fs.existsSync(destino)) {
+    const prevMeta = leerJson(path.join(destino, '_meta.json'), null);
+    respaldo = path.join(base, 'respaldos', clave, String(prevMeta?.cuando ?? cuandoPrevio ?? 'anterior'));
+    fs.rmSync(respaldo, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(respaldo), { recursive: true, mode: 0o700 });
+    try { mover(destino, respaldo); } catch (e) {
+      fs.rmSync(temp, { recursive: true, force: true });
+      return { ok: false, motivo: `no se pudo resguardar el vigente anterior (${e.message}); queda intacto` };
+    }
+  }
+  try { mover(temp, destino); } catch (e) {
+    let restaurado = false;
+    if (respaldo) { try { mover(respaldo, destino); restaurado = true; } catch { /* lo repara repararVigente */ } }
+    fs.rmSync(temp, { recursive: true, force: true });
+    return { ok: false, motivo: `no se pudo colocar la copia nueva (${e.message}); ${restaurado ? 'se restauró el vigente anterior' : 'el anterior está en respaldos/ y se restaura en la próxima corrida'}` };
+  }
+  podarRespaldos(base, clave);
+  return { ok: true, respaldo };
+}
+
+function podarRespaldos(base, clave) {
+  const dir = path.join(base, 'respaldos', clave);
+  let hijos = [];
+  try { hijos = fs.readdirSync(dir).sort(); } catch { return; }
+  for (const h of hijos.slice(0, Math.max(0, hijos.length - MAX_RESPALDOS))) fs.rmSync(path.join(dir, h), { recursive: true, force: true });
+}
+
+/**
+ * Repara una sustitución interrumpida (p. ej. Windows cortó a mitad). La carpeta vigente/<clave>
+ * es la fuente de verdad (su _meta.json), porque se coloca con un rename:
+ *   - borra copias temporales a medio hacer (vigente/.nuevo-*);
+ *   - si vigente/<clave> no está pero hay respaldo, restaura el más reciente;
+ *   - si el manifiesto no coincide con el _meta.json de la carpeta, lo actualiza.
+ * Devuelve el manifiesto (reparado si hizo falta).
+ */
+export function repararVigente(base) {
+  const manifFile = path.join(base, 'vigente.json');
+  const manif = leerJson(manifFile, {});
+  const vig = path.join(base, 'vigente');
+  let cambio = false;
+  let hijos = [];
+  try { hijos = fs.readdirSync(vig); } catch { /* sin vigente todavía */ }
+  for (const h of hijos) if (h.startsWith('.nuevo-')) fs.rmSync(path.join(vig, h), { recursive: true, force: true });
+  const claves = new Set([...Object.keys(manif), ...hijos.filter((h) => !h.startsWith('.'))]);
+  for (const clave of claves) {
+    const destino = path.join(vig, clave);
+    if (!fs.existsSync(destino)) {
+      let resp = [];
+      try { resp = fs.readdirSync(path.join(base, 'respaldos', clave)).sort(); } catch { /* sin respaldos */ }
+      if (resp.length) {
+        fs.mkdirSync(vig, { recursive: true, mode: 0o700 });
+        fs.renameSync(path.join(base, 'respaldos', clave, resp.at(-1)), destino);
+      } else continue;
+    }
+    const meta = leerJson(path.join(destino, '_meta.json'), null);
+    if (meta && meta.cuando !== manif[clave]?.cuando) {
+      manif[clave] = { ...meta, reparado: true };
+      cambio = true;
+    }
+  }
+  if (cambio) escribirAtomico(manifFile, JSON.stringify(manif, null, 2));
+  return manif;
 }
 
 /**
@@ -87,7 +209,7 @@ function resumen(r) {
  * extractor dejó los archivos de ESTE intento (puede no existir si falló antes de escribir).
  * Devuelve { promovido, clave, motivo, vigente } para el informe.
  */
-export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIntento, desde, hasta }) {
+export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIntento, desde, hasta, ops }) {
   // Sin clave (no se llegó a extraer nada): se registra el intento y su error, sin tocar el vigente.
   if (!clave) {
     registrarIntento({ datosDir, id, cuando, resultado });
@@ -102,39 +224,42 @@ export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIn
   escribir(path.join(dirI, 'intento.json'), JSON.stringify({ cuando, clave, desde, hasta, rango, ...res }, null, 2));
 
   const manifFile = path.join(base, 'vigente.json');
-  const manif = leerJson(manifFile, {});
+  const manif = repararVigente(base);
   const previo = manif[clave] ?? null;
-  let promovido = debeReemplazar(resultado, previo);
+  const decision = evaluarReemplazo(resultado, previo);
+  let promovido = decision.reemplaza;
   let motivo;
-  // Archivos: sin esto, un vigente podría apuntar a archivos que no están o que no tienen los datos.
+  // Archivos del intento: sin esto, un vigente podría apuntar a archivos que no están o que no tienen los datos.
   const archivosOk = promovido ? verificarArchivos(dirI, resultado.archivos, resultado.filas) : null;
   if (archivosOk && !archivosOk.ok) {
     promovido = false;
     motivo = `validado pero NO se promueve: ${archivosOk.motivo}`;
   }
   if (promovido) {
-    const destino = path.join(base, 'vigente', clave);
-    fs.rmSync(destino, { recursive: true, force: true });
-    fs.mkdirSync(destino, { recursive: true, mode: 0o700 });
-    const archivos = [];
-    for (const f of resultado.archivos ?? []) {
-      const src = path.join(dirI, path.basename(f));
-      if (!fs.existsSync(src)) continue;
-      fs.copyFileSync(src, path.join(destino, path.basename(f)));
-      archivos.push(path.basename(f));
-    }
-    manif[clave] = {
+    const entrada = {
       cuando, rango, nivel: resultado.calidad?.nivel ?? null, estado: resultado.estado, filas: resultado.filas ?? 0, informados: resultado.informados ?? null,
-      desde: desde ?? null, hasta: hasta ?? null, acumulado: clave === 'acumulado', archivos,
+      desde: desde ?? null, hasta: hasta ?? null, acumulado: clave === 'acumulado', archivos: (resultado.archivos ?? []).map((f) => path.basename(f)),
       calidad: res.calidad ?? null, ceroConfirmado: resultado.ceroConfirmado ?? null,
     };
-    escribir(manifFile, JSON.stringify(manif, null, 2));
-    motivo = previo ? `reemplaza al vigente del ${previo.cuando} (rango ${previo.rango} → ${rango})` : `primer resultado ${resultado.calidad.nivel === 'apto' ? 'apto para cálculos' : 'validado'}`;
+    const sust = sustituirVigente({ base, clave, dirOrigen: dirI, archivos: entrada.archivos, filas: entrada.filas, meta: entrada, cuandoPrevio: previo?.cuando, ops });
+    if (!sust.ok) {
+      promovido = false;
+      motivo = `validado pero NO se promueve: ${sust.motivo}`;
+    } else {
+      manif[clave] = entrada;
+      escribirAtomico(manifFile, JSON.stringify(manif, null, 2));
+      const red = decision.reduccion ? `; reducción ${decision.reduccion.antes} → ${decision.reduccion.ahora} filas confirmada por el total de ARCA` : '';
+      motivo = (previo ? `reemplaza al vigente del ${previo.cuando} (rango ${previo.rango} → ${rango}; el anterior queda en respaldos/)` : `primer resultado ${resultado.calidad.nivel === 'apto' ? 'apto para cálculos' : 'validado'}`) + red;
+    }
   } else if (!motivo) {
-    const evidencia = rango < RANGO_MINIMO_VIGENTE ? `queda solo como evidencia (nivel ${resultado?.calidad?.nivel ?? 'sin evaluar'})` : 'no es mejor';
     motivo = previo
-      ? `se conserva el vigente del ${previo.cuando} (${previo.nivel ?? previo.estado}, ${previo.filas} filas): este intento ${evidencia}`
-      : `este intento ${evidencia}; no hay datos vigentes`;
+      ? `se conserva el vigente del ${previo.cuando} (${previo.nivel ?? previo.estado}, ${previo.filas} filas): este intento ${decision.motivo}`
+      : `este intento ${decision.motivo}; no hay datos vigentes`;
+  }
+  // Reducción sin confirmar: el vigente sigue, y el intento queda marcado para revisión.
+  if (!promovido && decision.reduccion && !decision.reduccion.confirmada && previo) {
+    manif[clave] = { ...previo, pendienteRevision: { cuando, filas: resultado.filas ?? 0, nivel: resultado.calidad?.nivel ?? null, motivo: decision.motivo } };
+    escribirAtomico(manifFile, JSON.stringify(manif, null, 2));
   }
   const linea = { cuando, clave, estado: resultado?.estado ?? null, nivel: resultado?.calidad?.nivel ?? null, filas: resultado?.filas ?? 0, rango, promovido,
     error: res.error ?? null, motivo: res.motivo ?? null, conservacion: motivo };

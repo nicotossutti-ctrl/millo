@@ -106,8 +106,13 @@ export function generarMatrizCobertura(datosDir, fuentes, { hoy = new Date().toI
     } else {
       nota = historicoDesde ? `cobertura exigida desde ${historicoDesde}` : 'sin FISCALOS_HISTORICO_DESDE: los faltantes se cuentan desde el primer mes con datos';
     }
+    // Reducciones sin confirmar: el vigente se conservó y el intento nuevo espera revisión.
+    const pendientes = regs.filter((r) => r.pendienteRevision).map((r) => ({ clave: r.clave, vigente: r.filas, ...r.pendienteRevision }));
+    if (pendientes.length) {
+      nota += ` ⚠ Pendiente de revisión: ${pendientes.map((p) => `${p.clave}: el intento ${p.cuando} trajo ${p.filas} filas y el vigente tiene ${p.vigente} (no se reemplazó)`).join('; ')}.`;
+    }
     filas.push({
-      id: f.id, nombre: f.nombre, tipo,
+      id: f.id, nombre: f.nombre, tipo, pendientesRevision: pendientes,
       mesesAptos: compactarMeses(mesesApto), mesesValidados: compactarMeses(mesesVal), mesesEvidencia: compactarMeses(mesesEvid),
       faltantes: faltantes == null ? null : compactarMeses(faltantes), cantidadFaltantes: faltantes?.length ?? null,
       acumulado: acum ? { cuando: acum.cuando, nivel: acum.nivel ?? null, filas: acum.filas, informados: acum.informados, rango: acum.rango } : null,

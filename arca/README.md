@@ -171,7 +171,12 @@ uno de tres niveles:
 `intentos.jsonl`. A `out/datos/<fuente>/vigente/` (registro en `vigente.json`) solo llega lo
 **validado o apto**, y antes se comprueba que los archivos existan, se puedan leer y sumen las filas.
 Una grilla ajena o un intento sin validar nunca se promueve, ni siquiera como primer resultado, y un
-intento nunca reemplaza a un vigente de mejor nivel.
+intento nunca reemplaza a un vigente de mejor nivel. Si un intento de igual nivel trae **menos
+filas**, solo reemplaza cuando el total que informa ARCA confirma la cantidad nueva; si no, el
+vigente se conserva y el intento queda *pendiente de revisión* (se ve en la cobertura histórica).
+La sustitución es segura: copia a una carpeta temporal, la verifica, mueve el vigente anterior a
+`respaldos/<clave>/<corrida>/` (quedan los últimos 3) y recién entonces coloca la copia nueva. Si
+algo falla, el anterior queda intacto o se restaura; un corte a mitad se repara en la corrida siguiente.
 
 **Cobertura histórica.** `out/datos/cobertura-historica.md` (copia en cada corrida) muestra, con
 lo conservado de todas las corridas, qué meses son aptos para cálculos, cuáles están validados,

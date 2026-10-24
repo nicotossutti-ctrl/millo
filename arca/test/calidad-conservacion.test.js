@@ -388,3 +388,122 @@ test('las cuatro consultas de Cuentas Tributarias tienen respaldo por enlace en 
     assert.ok(s.rechazarSiColumnas?.length, `${id} rechaza la grilla de la home`);
   }
 });
+
+// ---------------- reducciones y sustitución segura ----------------
+
+// Prepara un vigente "acumulado" de `n` filas (vía conservarIntento, como en una corrida real).
+function conVigente(datosDir, id, n, cuando = 'c1') {
+  const d = path.join(datosDir, id, 'intentos', cuando);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'mf.csv'), csv(['Presentación', 'Número'], Array.from({ length: n }, (_, i) => [`p${i}`, String(i)])));
+  const r = conservarIntento({ datosDir, id, cuando, clave: 'acumulado', dirIntento: d, ...P,
+    resultado: { filas: n, archivos: ['mf.csv'], calidad: { nivel: 'validado', total: 'no-independiente' } } });
+  assert.equal(r.promovido, true);
+  return d;
+}
+const intentoDe = (datosDir, id, cuando, n, calidad) => {
+  const d = path.join(datosDir, id, 'intentos', cuando);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'mf.csv'), csv(['Presentación', 'Número'], Array.from({ length: n }, (_, i) => [`q${i}`, String(i)])));
+  return { d, resultado: { filas: n, archivos: ['mf.csv'], calidad } };
+};
+const filasVigente = (datosDir, id) => fs.readFileSync(path.join(datosDir, id, 'vigente', 'acumulado', 'mf.csv'), 'utf8').split('\r\n').filter(Boolean).length - 1;
+
+test('reducción sin confirmar: 14 validados no se reemplazan por 4 validados; el intento queda pendiente de revisión', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 14);
+  const { d, resultado } = intentoDe(datosDir, id, 'c2', 4, { nivel: 'validado', total: 'no-independiente' });
+  const r = conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', dirIntento: d, ...P, resultado });
+  assert.equal(r.promovido, false);
+  assert.match(r.motivo, /trae 4 filas y el vigente 14.*pendiente de revisión/);
+  const vig = leerVigente(datosDir, id).acumulado;
+  assert.equal(vig.filas, 14);
+  assert.equal(vig.cuando, 'c1');
+  assert.deepEqual([vig.pendienteRevision.cuando, vig.pendienteRevision.filas], ['c2', 4]);
+  assert.equal(filasVigente(datosDir, id), 14, 'los archivos vigentes siguen siendo los 14');
+  assert.ok(fs.existsSync(path.join(d, 'mf.csv')), 'el intento nuevo se conserva para revisar');
+  // La cobertura histórica lo avisa.
+  const m = generarMatrizCobertura(datosDir, [{ id, nombre: 'MF' }], { hoy: '2026-10-24' }).objeto.fuentes[0];
+  assert.match(m.nota, /Pendiente de revisión: acumulado: el intento c2 trajo 4 filas y el vigente tiene 14/);
+  // Un cero (grilla vacía) tampoco borra 14: no hay total de ARCA que confirme la reducción.
+  const cero = conservarIntento({ datosDir, id, cuando: 'c3', clave: 'acumulado', ...P, resultado: { filas: 0, archivos: [], calidad: { nivel: 'apto', total: 'no-informado' } } });
+  assert.equal(cero.promovido, false);
+  assert.equal(leerVigente(datosDir, id).acumulado.filas, 14);
+});
+
+test('reducción confirmada por el total de ARCA: sí reemplaza (el organismo cambió registros) y el anterior queda en respaldo', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 14);
+  const { d, resultado } = intentoDe(datosDir, id, 'c2', 4, { nivel: 'apto', total: 'coincide' });
+  const r = conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', dirIntento: d, ...P, resultado });
+  assert.equal(r.promovido, true);
+  assert.match(r.motivo, /reducción 14 → 4 filas confirmada por el total de ARCA/);
+  assert.equal(leerVigente(datosDir, id).acumulado.filas, 4);
+  assert.equal(filasVigente(datosDir, id), 4);
+  const resp = path.join(datosDir, id, 'respaldos', 'acumulado', 'c1', 'mf.csv');
+  assert.equal(fs.readFileSync(resp, 'utf8').split('\r\n').filter(Boolean).length - 1, 14, 'los 14 anteriores quedan en respaldos/');
+  // Igual nivel con MÁS o iguales filas reemplaza normalmente.
+  const mas = intentoDe(datosDir, id, 'c3', 5, { nivel: 'apto', total: 'coincide' });
+  assert.equal(conservarIntento({ datosDir, id, cuando: 'c3', clave: 'acumulado', dirIntento: mas.d, ...P, resultado: mas.resultado }).promovido, true);
+});
+
+test('sustitución segura: si la copia falla a mitad, el vigente anterior queda intacto y no queda basura', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 14);
+  const { d, resultado } = intentoDe(datosDir, id, 'c2', 20, { nivel: 'validado', total: 'no-independiente' });
+  const ops = { copyFileSync: () => { throw new Error('EIO: disco desconectado'); } };
+  const r = conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', dirIntento: d, ...P, resultado, ops });
+  assert.equal(r.promovido, false);
+  assert.match(r.motivo, /no se pudo preparar la copia nueva \(EIO: disco desconectado\); el vigente anterior queda intacto/);
+  assert.equal(leerVigente(datosDir, id).acumulado.filas, 14);
+  assert.equal(filasVigente(datosDir, id), 14);
+  assert.deepEqual(fs.readdirSync(path.join(datosDir, id, 'vigente')), ['acumulado'], 'sin carpeta temporal colgada');
+});
+
+test('sustitución segura: si falla colocar la copia nueva, se restaura el vigente anterior desde el respaldo', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 14);
+  const { d, resultado } = intentoDe(datosDir, id, 'c2', 20, { nivel: 'validado', total: 'no-independiente' });
+  // El primer rename (vigente -> respaldo) anda; el segundo (temporal -> vigente) falla.
+  let n = 0;
+  const ops = { renameSync: (a, b) => { if (++n === 2) throw new Error('EPERM: archivo en uso'); fs.renameSync(a, b); } };
+  const r = conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', dirIntento: d, ...P, resultado, ops });
+  assert.equal(r.promovido, false);
+  assert.match(r.motivo, /EPERM.*se restauró el vigente anterior/);
+  assert.equal(filasVigente(datosDir, id), 14);
+  assert.equal(leerVigente(datosDir, id).acumulado.cuando, 'c1');
+});
+
+test('interrupción a mitad (Windows corta): la corrida siguiente repara antes de seguir', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 14);
+  const base = path.join(datosDir, id);
+  // Estado tras un corte entre los dos renames: vigente movido a respaldo, copia nueva a medio hacer.
+  fs.mkdirSync(path.join(base, 'respaldos', 'acumulado'), { recursive: true });
+  fs.renameSync(path.join(base, 'vigente', 'acumulado'), path.join(base, 'respaldos', 'acumulado', 'c1'));
+  fs.mkdirSync(path.join(base, 'vigente', '.nuevo-acumulado'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'vigente', '.nuevo-acumulado', 'mf.csv'), 'a;b\n1;2\n'); // incompleta
+  // La corrida siguiente (con un intento que no se promueve) primero repara.
+  conservarIntento({ datosDir, id, cuando: 'c2', clave: 'acumulado', ...P, resultado: { filas: 3, calidad: { nivel: 'obtenido' } } });
+  assert.equal(filasVigente(datosDir, id), 14, 'se restauró el vigente desde el respaldo');
+  assert.ok(!fs.existsSync(path.join(base, 'vigente', '.nuevo-acumulado')), 'se borró la copia a medio hacer');
+  // Y si el corte fue DESPUÉS de colocar la copia pero ANTES de actualizar el manifiesto, la carpeta manda.
+  const datos2 = tmp();
+  conVigente(datos2, id, 14);
+  const b2 = path.join(datos2, id);
+  const meta = JSON.parse(fs.readFileSync(path.join(b2, 'vigente', 'acumulado', '_meta.json'), 'utf8'));
+  fs.writeFileSync(path.join(b2, 'vigente', 'acumulado', '_meta.json'), JSON.stringify({ ...meta, cuando: 'c9', filas: 14 }));
+  conservarIntento({ datosDir: datos2, id, cuando: 'c10', clave: null, resultado: { estado: 'error', filas: 0, error: 'x' } });
+  conservarIntento({ datosDir: datos2, id, cuando: 'c11', clave: 'acumulado', ...P, resultado: { filas: 1, calidad: { nivel: 'obtenido' } } });
+  assert.equal(leerVigente(datos2, id).acumulado.cuando, 'c9', 'el manifiesto se alineó con la carpeta colocada');
+});
+
+test('respaldos: se conservan los últimos MAX_RESPALDOS', () => {
+  const datosDir = tmp(); const id = 'mis-facilidades';
+  conVigente(datosDir, id, 1, 'c0');
+  for (let i = 1; i <= 5; i++) {
+    const { d, resultado } = intentoDe(datosDir, id, `c${i}`, 1 + i, { nivel: 'validado', total: 'no-independiente' });
+    assert.equal(conservarIntento({ datosDir, id, cuando: `c${i}`, clave: 'acumulado', dirIntento: d, ...P, resultado }).promovido, true);
+  }
+  assert.deepEqual(fs.readdirSync(path.join(datosDir, id, 'respaldos', 'acumulado')).sort(), ['c2', 'c3', 'c4']);
+});
