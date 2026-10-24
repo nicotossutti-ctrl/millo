@@ -75,12 +75,17 @@ test('evaluarCalidad: la extracción base es APTA (validada y cotejada con el pa
 // Caso 1 de la revisión: paginación.
 test('caso 1: solo un fin NATURAL de paginación valida; página repetida, grilla desaparecida o tope quedan como obtenido', () => {
   for (const fin of ['pagina-repetida', 'grilla-desaparecio', 'tope', 'sin-grilla', null]) {
-    const c = evaluarCalidad(SERV, buena({ finPaginacion: fin, paginas: 3 }), P);
+    const c = evaluarCalidad(SERV, buena({ finPaginacion: fin, paginas: 3, totalFuente: 'tabla-unica' }), P);
     assert.equal(c.validado, false, `fin ${fin}`);
     assert.equal(c.nivel, 'obtenido', `fin ${fin}`);
     assert.equal(c.paginacion, 'incompleta', `fin ${fin}`);
   }
-  assert.match(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida' }), P).motivos.join(' '), /falla de navegación/);
+  // Página repetida SIN total de paginador que la respalde: incompleta.
+  assert.match(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida', totalFuente: 'tabla-unica' }), P).motivos.join(' '), /falla de navegación/);
+  // Página repetida pero el paginador de ARCA dice 14 y se leyeron 14 (Mis Facilidades): completa.
+  const mf = evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida', filas: 14, informados: 14, totalFuente: 'paginador' }), P);
+  assert.equal(mf.paginacion, 'completa');
+  assert.equal(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida', filas: 13, informados: 14, totalFuente: 'paginador' }), P).validado, false);
 });
 
 // Caso 2 de la revisión: fechas.
@@ -134,7 +139,7 @@ test('un cero solo se valida con la grilla propia presente y vacía', () => {
 
 test('estadoInforme: validado / descargado (columnas propias, otro control falló) / con-datos (no es de la sección)', () => {
   assert.equal(estadoInforme(evaluarCalidad(SERV, buena(), P), 2), 'validado');
-  assert.equal(estadoInforme(evaluarCalidad(SERV, buena({ finPaginacion: 'pagina-repetida' }), P), 2), 'descargado');
+  assert.equal(estadoInforme(evaluarCalidad(SERV, buena({ finPaginacion: 'tope' }), P), 2), 'descargado');
   assert.equal(estadoInforme(evaluarCalidad(SERV, buena({ columnas: ['Otra'] }), P), 2), 'con-datos');
   assert.equal(estadoInforme(evaluarCalidad(SERV, { filas: 0 }, P), 0), null);
 });
@@ -151,12 +156,17 @@ test('completarFiltros genérico relee los campos: rango confirmado solo si toma
     return { pagina: { frames: () => [frame], waitForLoadState: async () => {}, waitForTimeout: async () => {} }, clicks: () => clicks };
   };
   const ok = mk(true);
-  const r = await completarFiltros(ok.pagina, P.desde, P.hasta, {}, () => {});
+  const r = await completarFiltros(ok.pagina, P.desde, P.hasta, { filtroPeriodo: true }, () => {});
   assert.equal(r.rangoOk, true);
   assert.equal(r.rangoAplicado, '01/09/2026 - 30/09/2026');
   assert.equal(ok.clicks(), 1);
-  const mal = await completarFiltros(mk(false).pagina, P.desde, P.hasta, {}, () => {});
+  const mal = await completarFiltros(mk(false).pagina, P.desde, P.hasta, { filtroPeriodo: true }, () => {});
   assert.equal(mal.rangoOk, false, 'si los campos no tomaron las fechas, el período no queda confirmado');
+  // Sin filtroPeriodo declarado no se toca ningún campo "fecha" (caso home de Cuentas Tributarias).
+  const sin = mk(true);
+  const r0 = await completarFiltros(sin.pagina, P.desde, P.hasta, {}, () => {});
+  assert.equal(r0.conFiltroPeriodo, false);
+  assert.equal(sin.clicks(), 0);
 });
 
 // ---------------- conservación ----------------

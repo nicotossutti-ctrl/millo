@@ -169,6 +169,28 @@ export class Sesion {
     return true;
   }
 
+  /**
+   * Antes de cada servicio: si la pestaña principal se cerró, abre otra; si el navegador entero se
+   * cerró, lo reabre y vuelve a asegurar el login (en modo visible, la persona tipea la clave).
+   * Devuelve qué hizo ('pestaña' | 'navegador' | null).
+   */
+  async asegurarVivo() {
+    const navegadorVivo = this.browser?.isConnected?.() !== false;
+    if (navegadorVivo && this.page && !this.page.isClosed()) return null;
+    if (navegadorVivo) {
+      try {
+        this.page = await this.context.newPage();
+        this.log('La pestaña principal se había cerrado: abrí una nueva.');
+        return 'pestaña';
+      } catch { /* el contexto también se cerró: se reabre todo */ }
+    }
+    this.log('El navegador se cerró: lo vuelvo a abrir (si la sesión venció, pide la clave de nuevo).');
+    await this.browser?.close().catch(() => {});
+    await this.abrir();
+    await this.asegurarLogin();
+    return 'navegador';
+  }
+
   async asegurarLogin() {
     if (await this.estaLogueado()) { this.log('Sesión vigente.'); return; }
     this.log('Sin sesión vigente: iniciando login.');
@@ -193,14 +215,18 @@ export class Sesion {
 
     // Servicio con URL DIRECTA (p. ej. SIFERE en COMARB, otro dominio que no está en el listado del
     // portal ARCA). La sesión de clave fiscal federa; navegamos directo y seguimos en esa página.
+    // Se abre en una PESTAÑA PROPIA: si ese sistema cierra su ventana o queda en "Sesión Expirada",
+    // la pestaña principal de ARCA sigue viva para los servicios siguientes (corrida 2026-10-24:
+    // SIFERE corría en la principal y, al cerrarse, Domicilio Fiscal y Retenciones fallaron).
     if (typeof target === 'object' && target.url) {
-      this.log(`Servicio "${nombre}": navegando directo a ${target.url}`);
-      await page.goto(target.url, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle').catch(() => {});
-      await page.waitForTimeout(2000);
-      const desafio = await hayDesafio(page);
+      this.log(`Servicio "${nombre}": navegando directo a ${target.url} (pestaña propia)`);
+      const propia = await this.context.newPage();
+      await propia.goto(target.url, { waitUntil: 'domcontentloaded' });
+      await propia.waitForLoadState('networkidle').catch(() => {});
+      await propia.waitForTimeout(2000);
+      const desafio = await hayDesafio(propia);
       if (desafio) throw new DesafioDeSeguridad(desafio);
-      return page;
+      return propia;
     }
 
     await page.goto(URL_PORTAL, { waitUntil: 'domcontentloaded' });

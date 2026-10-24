@@ -32,6 +32,29 @@
 const RECHAZAR_VENCIMIENTOS = ['impuesto', 'concepto', 'periodo', 'vencimiento'];
 
 export const SERVICIOS = [
+  // SIFERE va PRIMERO (corrida 2026-10-24T19-39-01): llegaba ~25 minutos después del login, cuando
+  // COMARB ya no tomaba la sesión de ARCA y pedía login de nuevo. Recién logueados, el SSO pasa
+  // solo; y si pide clave, la persona todavía está frente a la pantalla. Abre en pestaña propia.
+  // SIFERE (Convenio Multilateral) vive en COMARB (otro dominio), no en el listado de ARCA.
+  // CONFIRMADO por capturas: con la misma clave fiscal se entra por la URL de inicio, se elige el
+  // CUIT y se llega al módulo con los LISTADOS de DDJJ. Extractor dedicado 'sifere': entra por URL
+  // directa, selecciona el CUIT y baja los listados de solo lectura (mensuales 83, anuales 5):
+  //   Listado DDJJ Mensuales  -> MostrarListaDDJJController.do (Anticipo/Estado/Fecha/Presentación)
+  //   Listado DDJJ Anuales    -> MostrarListaDDJJAnualController.do (Año/Estado/Fecha/Presentación)
+  // NO toca "Nueva DJ" ni pagos: solo los listados. Resultado de presentación incluido.
+  // Entrada por el LOGIN de clave fiscal de AFIP con el parámetro del sistema SIFERE (confirmado por
+  // el usuario): esta URL establece la sesión de COMARB (la URL directa caía en 'Sesión Expirada').
+  // Como el robot ya tiene la sesión de AFIP abierta (login de ARCA), pasa por SSO sin reescribir la
+  // clave; si expiró, se completa en el navegador visible. Luego redirige a Seleccionar CUIT.
+  { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'sifere',
+    url: 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_ddjj',
+    grillas: [
+      { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
+      { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
+      // Volantes de Pago de DDJJ: los PAGOS reales de IIBB (Monto Total, Medio de Pago, N° VEP,
+      // Estado, Resultado). URL confirmada por captura. Solo lectura (no se paga nada).
+      { id: 'volantes-pago', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaVolantesPagoController.do', columnasEsperadas: ['Anticipo', 'Monto Total', 'Medio de Pago'] },
+    ] },
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'tabla',
@@ -64,7 +87,12 @@ export const SERVICIOS = [
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)', respaldoEnlace: true }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos', respaldoEnlace: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos', respaldoEnlace: true }],
+    // Formulario Fecha Desde/Hasta + CONSULTAR. Columnas REALES (corrida 2026-10-24T19-39-01):
+    // Fecha Operación / Formulario / Versión / Impuesto / Período Fiscal / Importe / Observaciones.
+    filtroPeriodo: true,
+    columnasEsperadas: ['Fecha Operacion', 'Formulario', 'Impuesto', 'Periodo Fiscal', 'Importe'],
+    columnaFecha: 'Fecha Operacion' },
   { id: 'ct-cuenta-corriente', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-CtaCte', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     // "Cuenta Corriente" es un ENCABEZADO de sección de la barra (no abre nada): se expande y se
@@ -72,7 +100,8 @@ export const SERVICIOS = [
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada', respaldoEnlace: true }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
-    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones', respaldoEnlace: true }] },
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones', respaldoEnlace: true }],
+    filtroPeriodo: true },
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
@@ -101,26 +130,6 @@ export const SERVICIOS = [
   { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
   { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },
-  // SIFERE (Convenio Multilateral) vive en COMARB (otro dominio), no en el listado de ARCA.
-  // CONFIRMADO por capturas: con la misma clave fiscal se entra por la URL de inicio, se elige el
-  // CUIT y se llega al módulo con los LISTADOS de DDJJ. Extractor dedicado 'sifere': entra por URL
-  // directa, selecciona el CUIT y baja los listados de solo lectura (mensuales 83, anuales 5):
-  //   Listado DDJJ Mensuales  -> MostrarListaDDJJController.do (Anticipo/Estado/Fecha/Presentación)
-  //   Listado DDJJ Anuales    -> MostrarListaDDJJAnualController.do (Año/Estado/Fecha/Presentación)
-  // NO toca "Nueva DJ" ni pagos: solo los listados. Resultado de presentación incluido.
-  // Entrada por el LOGIN de clave fiscal de AFIP con el parámetro del sistema SIFERE (confirmado por
-  // el usuario): esta URL establece la sesión de COMARB (la URL directa caía en 'Sesión Expirada').
-  // Como el robot ya tiene la sesión de AFIP abierta (login de ARCA), pasa por SSO sin reescribir la
-  // clave; si expiró, se completa en el navegador visible. Luego redirige a Seleccionar CUIT.
-  { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE', 'CONVENIO MULTILATERAL'], fuente: 5, confirmado: false, extractor: 'sifere',
-    url: 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_ddjj',
-    grillas: [
-      { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
-      { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
-      // Volantes de Pago de DDJJ: los PAGOS reales de IIBB (Monto Total, Medio de Pago, N° VEP,
-      // Estado, Resultado). URL confirmada por captura. Solo lectura (no se paga nada).
-      { id: 'volantes-pago', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaVolantesPagoController.do', columnasEsperadas: ['Anticipo', 'Monto Total', 'Medio de Pago'] },
-    ] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   // Columnas reales (diagnóstico 19-49-58): Notificado / Asunto / Organismo / Representado / Clasificación / Recibido.
   { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico',

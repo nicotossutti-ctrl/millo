@@ -182,7 +182,7 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
     return { ...clas, url: rel.url, estado, archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos,
       validaciones: [validacion],
       // Los encabezados reales van al informe: con ellos se confirman las columnas propias de la sección.
-      motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}${extraccion.columnas?.length ? ` · encabezados leídos: ${extraccion.columnas.join(' / ')}` : ''}`) };
+      motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}`) };
   }
   // No se extrajo: queda el relevamiento. Explicitamos por qué (acceso ≠ descarga).
   const motivo = extraccion?.error
@@ -428,7 +428,8 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
     const nivelTxt = { apto: 'APTO para cálculos', validado: 'validado, sin total de ARCA: no apto para cálculos', obtenido: 'obtenido sin validar (evidencia)' };
     if (r.calidad?.nivel && nivelTxt[r.calidad.nivel]) x.push(nivelTxt[r.calidad.nivel]);
     for (const v of r.validaciones ?? []) if (v.sub && v.nivel) x.push(`${v.sub}: ${nivelTxt[v.nivel] ?? v.nivel}`);
-    if (r.estado === 'descargado' && r.calidad?.motivos?.length && !r.motivo) x.push(`sin validar: ${r.calidad.motivos.join('; ')}`);
+    // Por qué no llegó a "apto"/"validado": el detalle de descargado/validado no muestra el motivo.
+    if ((r.estado === 'descargado' || r.estado === 'validado') && r.calidad?.motivos?.length) x.push(`motivo: ${r.calidad.motivos.join('; ')}`);
     if (r.drill?.recorrido?.length) x.push(`ruta: ${r.drill.recorrido.map((p) => `${p.paso}=${p.via}`).join(', ')}`);
     for (const c of r.conservacion ?? []) if (!c.promovido && c.vigente) x.push(`${c.id}: ${c.motivo}`);
     return x.length ? ` · ${x.join(' · ')}` : '';
@@ -509,6 +510,10 @@ export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/c
     // Doble red: correrUno ya aísla sus errores, pero por las dudas envolvemos igual para que NADA
     // (ni un error inesperado al abrir el servicio) corte la corrida antes de escribir los informes.
     try {
+      // Si una pantalla anterior cerró la pestaña principal (o el navegador), se recupera antes de seguir.
+      if (typeof sesion?.asegurarVivo === 'function') {
+        try { await sesion.asegurarVivo(); } catch (e) { log(`[${s.id}] no se pudo recuperar el navegador: ${sanitizarTexto(e?.message ?? String(e))}`); }
+      }
       resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, datosDir: datos, runner: runner ? () => runner(s) : undefined }));
     } catch (e) {
       const error = sanitizarTexto(e?.message ?? String(e));

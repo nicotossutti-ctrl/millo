@@ -178,11 +178,18 @@ function extraerTablasEnDocumento() {
   const out = [];
   for (const t of document.querySelectorAll('table')) {
     if (!vis(t)) continue;
-    const trs = [...t.querySelectorAll('tr')];
-    const headerCells = (t.querySelectorAll('thead th, thead td')[0] ? [...t.querySelectorAll('thead th, thead td')] : [...(trs[0]?.querySelectorAll('th, td') ?? [])]);
-    const headers = headerCells.map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
-    const bodyTrs = t.querySelector('tbody') ? [...t.querySelectorAll('tbody tr')] : trs.slice(1);
-    const rows = bodyTrs.map((tr) => [...tr.querySelectorAll('td, th')].map((c) => tx(c))).filter((r) => r.some((x) => x));
+    // Solo filas y celdas PROPIAS de la tabla (t.rows / tr.cells), no las de tablas anidadas. Las
+    // pantallas legacy (Cuentas Tributarias, CCMA) maquetan con tablas dentro de tablas: con
+    // querySelectorAll('tr') la tabla contenedora "se tragaba" las filas de la grilla real y ganaba
+    // con encabezados de maquetación (nombre, domicilio). Corrida 2026-10-24T19-39-01.
+    const trs = [...t.rows];
+    const head = t.tHead?.rows?.[0] ?? null;
+    const filaEncabezado = head ?? trs[0] ?? null;
+    const headers = [...(filaEncabezado?.cells ?? [])].map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
+    const cuerpo = t.tBodies.length ? [...t.tBodies].flatMap((b) => [...b.rows]) : trs;
+    // Sin <thead>, la fila de encabezado es la primera del cuerpo: no se cuenta como dato.
+    const bodyTrs = cuerpo.filter((tr) => tr !== filaEncabezado && tr.parentElement?.tagName !== 'THEAD');
+    const rows = bodyTrs.map((tr) => [...tr.cells].map((c) => tx(c))).filter((r) => r.some((x) => x));
     // Incluimos también grillas con encabezados pero SIN filas: sirven para confirmar un cero real
     // (grilla presente y vacía) y distinguirlo de "no encontré la grilla" (pestaña/consulta falló).
     if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
@@ -339,7 +346,11 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
     }
     return { conFiltroPeriodo: true, error: 'no se encontraron los filtros de fecha confirmados' };
   }
-  // Genérico: inputs con placeholder dd/mm/aaaa o id/name con "fecha". Después de completarlos se
+  // Genérico: SOLO si la sección declara que su consulta filtra por período (filtroPeriodo). Antes se
+  // completaba cualquier campo "fecha" que apareciera: en la home de Cuentas Tributarias llenó un
+  // campo ajeno y la pestaña Deudas quedó con el período "sin confirmar" (corrida 2026-10-24).
+  if (!servicio?.filtroPeriodo) return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null };
+  // Inputs con placeholder dd/mm/aaaa o id/name con "fecha". Después de completarlos se
   // RELEEN: si los dos campos tomaron el período pedido, el rango queda confirmado (rangoOk); si no,
   // queda sin confirmar y la extracción no se valida por período.
   let fechas = 0; const llenados = [];

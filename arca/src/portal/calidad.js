@@ -94,16 +94,22 @@ export function evaluarCalidad(servicio, extraccion, { desde, hasta, rechazada =
   else if (!requeridas.length) columnas = 'sin-confirmar';
   else if (faltan.length) columnas = 'no-coinciden';
   else columnas = 'confirmadas';
-  const leidos = encabezados.length ? ` (encabezados leídos: ${encabezados.join(' / ')})` : '';
+  // Para el informe: solo encabezados cortos (los de maquetación traen nombre, domicilio, etc.).
+  const cortos = encabezados.filter((h) => h && h.length <= 40).slice(0, 12);
+  const leidos = encabezados.length ? ` (encabezados leídos: ${cortos.length ? cortos.join(' / ') : 'solo textos largos de maquetación'})` : '';
   if (columnas === 'otra-fuente') motivos.push(`la extracción es de otra fuente (${extraccion.id}), no de ${servicio.id}`);
   if (columnas === 'rechazadas') motivos.push(`la grilla leída no es la de esta sección: tiene las columnas de otra pantalla${leidos}`);
   if (columnas === 'sin-encabezados' && (filas || extraccion?.ceroConfirmado)) motivos.push('la grilla no tiene encabezados: no se puede comprobar que sea la de esta sección');
   if (columnas === 'sin-confirmar') motivos.push(`la sección todavía no tiene columnas obligatorias confirmadas${leidos}`);
   if (columnas === 'no-coinciden') motivos.push(`faltan columnas obligatorias: ${faltan.join(', ')}${leidos}`);
 
-  // 2. Paginación: solo un fin NATURAL demuestra que se leyó todo.
+  // 2. Paginación: solo un fin NATURAL demuestra que se leyó todo. Excepción acotada: si el
+  // "siguiente" no avanzó (página repetida) pero el total que ARCA informa en el PAGINADOR coincide
+  // con las filas leídas (sin duplicar), el listado está completo por cotejo independiente: hay
+  // paginadores que no deshabilitan "siguiente" en la última página (Mis Facilidades, 14 de 14).
   const fin = extraccion?.finPaginacion ?? null;
-  const paginacion = !filas ? 'no-aplica' : fin === 'sin-siguiente' ? 'completa' : 'incompleta';
+  const completoPorTotal = fin === 'pagina-repetida' && extraccion?.totalFuente === 'paginador' && extraccion?.informados === filas;
+  const paginacion = !filas ? 'no-aplica' : (fin === 'sin-siguiente' || completoPorTotal) ? 'completa' : 'incompleta';
   if (paginacion === 'incompleta') {
     motivos.push(fin === 'tope' ? `la paginación llegó al tope de seguridad (${extraccion.paginas} páginas): puede faltar el final`
       : fin === 'pagina-repetida' ? 'el "siguiente" no avanzó (página repetida): puede ser una falla de navegación, no el final del listado'
