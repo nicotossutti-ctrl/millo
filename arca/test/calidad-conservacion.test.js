@@ -559,11 +559,49 @@ test('cuentas-tributarias elige expresamente la pestaña Vencimientos y lee solo
   const s = SERVICIOS.find((x) => x.id === 'cuentas-tributarias');
   assert.equal(s.extractor, 'generico');
   assert.match(s.ruta[0].selector, /role=tab.*Vencimientos/);
-  assert.match(s.requiereFrame, /homeContribuyente/);
+  assert.match(s.requiereFrame, /contribuyente\/externo/);
+  assert.match(s.frameInicio, /homeContribuyente/, 'Vencimientos exige la home (con sus pestañas)');
   assert.equal(s.frameDatos, 'scripts/vue/homeContribuyente');
   for (const id of ['ct-deudas', 'ct-ddjj', 'ct-pagos', 'ct-cuenta-corriente', 'ct-incumplimientos', 'ct-compensaciones']) {
-    assert.match(SERVICIOS.find((x) => x.id === id).requiereFrame, /homeContribuyente/, id);
+    assert.match(SERVICIOS.find((x) => x.id === id).requiereFrame, /contribuyente\/externo/, id);
   }
+  // Las secciones del menú NO exigen la home: el sistema reabre en la última pantalla visitada.
+  for (const id of ['ct-ddjj', 'ct-pagos', 'ct-cuenta-corriente', 'ct-incumplimientos', 'ct-compensaciones']) {
+    assert.equal(SERVICIOS.find((x) => x.id === id).frameInicio, undefined, id);
+  }
+});
+
+test('Vencimientos con el sistema abierto en otra pantalla: vuelve por "Inicio"; sin ese enlace, fallo de navegación', async () => {
+  const EXTERNO = 'https://ctacte.cloud.afip.gob.ar/contribuyente/externo';
+  const HOME = 'https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/homeContribuyente/index.html';
+  const armar = (conInicio) => {
+    let urls = [EXTERNO, 'https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/ddjj/index.html'];
+    const enlaces = conInicio ? [{ texto: 'Inicio', title: 'Ir al Inicio', href: `${EXTERNO}?service=partial&sp=SInicio` }] : [];
+    let navegado = null;
+    // Como en Playwright, los objetos frame son estables mientras no cambia la página.
+    const mkFrames = () => urls.map((u) => ({ url: () => u, name: () => '',
+      evaluate: async (fn) => (String(fn).includes('readyState') ? true : String(fn).includes('a[href]') ? enlaces : {}),
+      locator: () => { const l = { filter: () => l, count: async () => 0, first: () => l, nth: () => l, isVisible: async () => false }; return l; },
+      getByText: () => ({ count: async () => 0 }) }));
+    let frames = mkFrames();
+    const pagina = {
+      frames: () => frames,
+      mainFrame: () => frames[0], url: () => urls[0], title: async () => '', isClosed: () => false,
+      goto: async (u) => { navegado = u; urls = [EXTERNO, HOME]; frames = mkFrames(); },
+      waitForTimeout: async () => {}, waitForLoadState: async () => {}, close: async () => {}, content: async () => '', screenshot: async () => {},
+    };
+    return { pagina, navegado: () => navegado };
+  };
+  const servicio = { ...SERVICIOS.find((x) => x.id === 'cuentas-tributarias'), esperaFrameMs: 20 };
+  const baseDir = tmp();
+  const ok = armar(true);
+  const r = await correrUno({ cfg: { outDir: baseDir }, page: null, abrirServicio: async () => ok.pagina }, servicio, { baseDir, periodo: P, datosDir: path.join(baseDir, 'datos') });
+  assert.match(ok.navegado(), /SInicio/, 'volvió a la home por el enlace "Inicio"');
+  assert.notEqual(r.estado, 'sin-acceso');
+  const mal = armar(false);
+  const r2 = await correrUno({ cfg: { outDir: baseDir }, page: null, abrirServicio: async () => mal.pagina }, servicio, { baseDir: tmp(), periodo: P, datosDir: path.join(baseDir, 'datos2') });
+  assert.equal(r2.estado, 'sin-acceso');
+  assert.match(r2.error, /no se encontró el enlace "Inicio".*fallo de navegación/);
 });
 
 test('abrirServicio: si ARCA muestra el login, reintenta una vez; si sigue, falla como sin acceso', async () => {

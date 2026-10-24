@@ -9,7 +9,7 @@ import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento } from './re
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
 import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
-import { drillHaciaGrilla } from './navegar.js';
+import { drillHaciaGrilla, navegarPorEnlace } from './navegar.js';
 import { slug } from './servicios.js';
 import { evaluarCalidad, esGrillaAjena, estadoInforme } from './calidad.js';
 import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
@@ -127,6 +127,18 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
     const donde = sanitizarTexto(pagina.url());
     if (pagina !== sesion.page) await pagina.close().catch(() => {});
     throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de ${servicio.nombre} (no cargó ${servicio.requiereFrame}; la página quedó en ${donde}). Es un fallo de navegación, no un cero.`);
+  }
+  // Pantalla de inicio del sistema (p. ej. la home de Cuentas Tributarias con sus pestañas). El
+  // sistema puede reabrir en la última pantalla visitada: se vuelve por el enlace "Inicio" del menú.
+  if (servicio.frameInicio && !(await esperarFrame(pagina, servicio.frameInicio, servicio.esperaFrameMs ?? 8000))) {
+    log('  el sistema abrió en otra pantalla: vuelvo al inicio por el menú.');
+    const fue = await navegarPorEnlace(pagina, 'Inicio', log).catch(() => null);
+    if (!fue || !(await esperarFrame(pagina, servicio.frameInicio, servicio.esperaFrameMs ?? 20000))) {
+      const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+      escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+      if (pagina !== sesion.page) await pagina.close().catch(() => {});
+      throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de inicio de ${servicio.nombre} (${fue ? 'tras volver por "Inicio" no cargó' : 'no se encontró el enlace "Inicio"'} ${servicio.frameInicio}). Es un fallo de navegación, no un cero.`);
+    }
   }
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).

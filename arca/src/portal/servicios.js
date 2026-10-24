@@ -30,8 +30,12 @@
 // Encabezados de la grilla de Vencimientos de la home de Cuentas Tributarias (la del servicio
 // cuentas-tributarias). Si un ct-* lee ESA grilla, la ruta no llegó a su sección y no cuenta.
 const RECHAZAR_VENCIMIENTOS = ['impuesto', 'concepto', 'periodo', 'vencimiento'];
-// Pantalla de entrada de Cuentas Tributarias: el iframe Vue de la home. Si no carga, no se llegó al
-// sistema (p. ej. quedó en el login de ARCA): fallo de navegación, nunca un cero.
+// Cuentas Tributarias: CT_SISTEMA es la página del sistema (con el menú); si no carga, no se llegó
+// (p. ej. quedó en el login de ARCA): fallo de navegación, nunca un cero. CT_HOME es el iframe de la
+// home (pestañas Vencimientos/Deudas). OJO (corrida 2026-10-24T20-38-29): el sistema RECUERDA la
+// última pantalla; tras DJ, reabrirlo no muestra la home. Por eso solo Vencimientos y Deudas exigen
+// la home (frameInicio) y, si no está, vuelven por el enlace "Inicio" del menú.
+const CT_SISTEMA = 'ctacte.cloud.afip.gob.ar/contribuyente/externo';
 const CT_HOME = 'ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/homeContribuyente';
 
 export const SERVICIOS = [
@@ -64,14 +68,14 @@ export const SERVICIOS = [
   // filas; además la pestaña activa puede ser otra (Deudas). Ahora: se verifica que cargó la home,
   // se elige EXPRESAMENTE la pestaña Vencimientos y se lee solo el iframe Vue.
   { id: 'cuentas-tributarias', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: 12, confirmado: true, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/homeContribuyente',
+    requiereFrame: CT_SISTEMA, frameInicio: CT_HOME, frameDatos: 'scripts/vue/homeContribuyente',
     ruta: [{ selector: 'a[role=tab]:has-text("Vencimientos")' }],
     columnasEsperadas: ['Impuesto', 'Concepto', 'Periodo', 'Vencimiento'] },
   // Pestaña "Deudas N" de la misma home (iframe Vue homeContribuyente, diagnóstico 19-49-58): grilla
   // Establecimiento/Impuesto/Concepto/Subconcepto/Período/Ant-Cuota/Vencimiento, oculta hasta abrir
   // la pestaña. "Establecimiento" la distingue de Vencimientos (que no la tiene). Solo lectura.
   { id: 'ct-deudas', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Deudas', confirmado: false, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/homeContribuyente',
+    requiereFrame: CT_SISTEMA, frameInicio: CT_HOME, frameDatos: 'scripts/vue/homeContribuyente',
     columnasEsperadas: ['Establecimiento', 'Impuesto', 'Concepto', 'Periodo', 'Vencimiento'],
     ruta: [{ selector: 'a[role=tab]:has-text("Deudas")' }] },
   // Sub-rutas del Sistema de Cuentas Tributarias (frame legacy ctacte). CONFIRMADO por capturas:
@@ -91,14 +95,14 @@ export const SERVICIOS = [
   // DJ: su formulario EXIGE elegir Establecimiento = "0" (confirmado) antes de SIGUIENTE; con eso
   // (y dejando Impuesto/Formulario sin tocar) trae todas las DJ. requiereEstablecimiento lo maneja.
   { id: 'ct-ddjj', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-DJ', confirmado: false, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/',
+    requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/',
     // Columnas reales (diagnóstico 2026-10-24): Est. / Formulario / Versión / Impuesto / Periodo / Descripción / Observaciones / Detalle DJ.
     columnasEsperadas: ['Formulario', 'Version', 'Impuesto', 'Periodo', 'Descripcion'],
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     requiereEstablecimiento: true,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Declaraciones Juradas (DJ)' }, { texto: 'Declaraciones Juradas (DJ)', respaldoEnlace: true }] },
   { id: 'ct-pagos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Pagos', confirmado: false, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/',
+    requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos', respaldoEnlace: true }],
     // Formulario Fecha Desde/Hasta + CONSULTAR. Columnas REALES (corrida 2026-10-24T19-39-01):
@@ -110,19 +114,19 @@ export const SERVICIOS = [
     // "Detalle de Deuda Consolidada" es un FORMULARIO (diagnóstico 2026-10-24): combo "Trámite"
     // (INCUMPLIMIENTOS COMPLETOS / DEUDA EXIGIBLE Y FALTA DE PRESENTACION / CONSULTA DEUDA PROVEEDORES
     // DEL ESTADO) + CONSULTAR. Esta fuente consulta la deuda exigible; ct-incumplimientos, la otra.
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/deudaConsolidada',
+    requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/deudaConsolidada',
     seleccionarOpcion: 'DEUDA EXIGIBLE Y FALTA DE PRESENTACION',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     // "Cuenta Corriente" es un ENCABEZADO de sección de la barra (no abre nada): se expande y se
     // entra a la hoja "Detalle de Deuda Consolidada". Antes los 5 registros eran la grilla de la home.
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada', respaldoEnlace: true }] },
   { id: 'ct-incumplimientos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Incump', confirmado: false, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/deudaConsolidada',
+    requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/deudaConsolidada',
     seleccionarOpcion: 'INCUMPLIMIENTOS COMPLETOS',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada', respaldoEnlace: true }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
-    requiereFrame: CT_HOME, frameDatos: 'scripts/vue/consultaCompensacionesAfectaciones',
+    requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/consultaCompensacionesAfectaciones',
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones', respaldoEnlace: true }],
     filtroPeriodo: true },

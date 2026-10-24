@@ -111,7 +111,7 @@ export function enlaceDeConsultaValido({ texto, title, href, hostFrame }, buscad
  * texto EXACTO y se navega a su href, que es la misma URL que abre el menú. Solo si es una
  * navegación de consulta válida (enlaceDeConsultaValido). Devuelve la URL usada o null.
  */
-async function navegarPorEnlace(pagina, texto, log) {
+export async function navegarPorEnlace(pagina, texto, log = () => {}) {
   for (const frame of pagina.frames()) {
     const cands = await frame.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => ({
       texto: (a.textContent || '').replace(/\s+/g, ' ').trim(), title: a.getAttribute('title') || '', href: a.href,
