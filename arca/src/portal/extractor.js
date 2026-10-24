@@ -246,9 +246,12 @@ export function recolectarTablas(tablas, expected = []) {
 }
 
 /** Elige la mejor tabla entre todos los frames. Con encabezados esperados, descarta la que no coincide. */
-async function scrapearFrames(pagina, expected) {
+// `frameDatos`: si la sección declara en qué frame está su grilla (p. ej. 'scripts/vue/' en Cuentas
+// Tributarias), solo se leen las tablas de ESE frame: la maquetación del frame principal queda afuera.
+async function scrapearFrames(pagina, expected, frameDatos = null) {
   const todas = [];
   for (const frame of pagina.frames()) {
+    if (frameDatos && !String(frame.url?.() ?? '').includes(frameDatos)) continue;
     const t = await frame.evaluate(extraerTablasEnDocumento).catch(() => []);
     for (const x of t) todas.push(x);
   }
@@ -295,6 +298,32 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
   // Formulario de Declaraciones Juradas (DJ) de Cuentas Tributarias: EXIGE elegir Establecimiento
   // (valor "0" en esta clave fiscal) antes de SIGUIENTE; Impuesto/Formulario se dejan en "Nada
   // seleccionado" para traer TODAS las DJ. Solo lectura.
+  // Formulario con un combo de opción obligatoria y CONSULTAR (Detalle de Deuda Consolidada de
+  // Cuentas Tributarias: "Trámite"). Se elige la opción declarada por la sección y se consulta.
+  if (servicio.seleccionarOpcion) {
+    const buscada = norm(servicio.seleccionarOpcion);
+    for (const frame of pagina.frames()) {
+      const selects = frame.locator('select');
+      const n = Math.min(await selects.count().catch(() => 0), 10);
+      for (let i = 0; i < n; i++) {
+        const sel = selects.nth(i);
+        if (!(await sel.isVisible().catch(() => false))) continue;
+        const opciones = await sel.locator('option').allTextContents().catch(() => []);
+        const label = opciones.find((o) => norm(o) === buscada);
+        if (!label) continue;
+        await sel.selectOption({ label });
+        log(`  opción elegida: ${label}`);
+        const btn = frame.locator('button, [role=button], input[type=submit]').filter({ hasText: /consultar|buscar/i }).first();
+        if (!(await btn.count().catch(() => 0))) return { conFiltroPeriodo: false, error: `se eligió "${label}" pero no se encontró CONSULTAR` };
+        if (esProhibido((await btn.innerText().catch(() => '')) || '')) return { conFiltroPeriodo: false, error: 'el botón de consulta parece un trámite: no se toca' };
+        await btn.click();
+        await pagina.waitForLoadState('networkidle').catch(() => {});
+        await pagina.waitForTimeout(3000);
+        return { conFiltroPeriodo: false, rangoAplicado: null, rangoOk: null, opcion: label };
+      }
+    }
+    return { conFiltroPeriodo: false, error: `no se encontró el combo con la opción "${servicio.seleccionarOpcion}"` };
+  }
   if (servicio.requiereEstablecimiento) {
     for (const frame of pagina.frames()) {
       if (!(await seleccionarEstablecimiento(frame))) continue;
@@ -440,11 +469,11 @@ async function hayMensajeSinResultados(pagina) {
 }
 
 /** Lee la grilla actual (espera a que aparezca, recorre la paginación y deduplica). Solo lectura. */
-async function leerGrilla(pagina, expected) {
+async function leerGrilla(pagina, expected, frameDatos = null) {
   // La grilla puede tardar (iframe/SPA/pestaña nueva): esperamos hasta ~9s a que aparezca, pero
   // cortamos de inmediato si ARCA ya avisó "no hay resultados" (así no colgamos impuesto por impuesto).
   for (let i = 0; i < 6; i++) {
-    const t = await scrapearFrames(pagina, expected);
+    const t = await scrapearFrames(pagina, expected, frameDatos);
     if (t && (t.rows.length > 0 || (expected.length && (t.coincideCols ?? 0) > 0))) break;
     if (await hayMensajeSinResultados(pagina)) break;
     await pagina.waitForTimeout(1500);
@@ -457,7 +486,7 @@ async function leerGrilla(pagina, expected) {
   // grilla), 'tope' (corte de seguridad) y 'sin-grilla' (nunca hubo grilla).
   let finPaginacion = 'tope';
   for (let p = 0; p < TOPE_PAGINAS; p++) {
-    const tabla = await scrapearFrames(pagina, expected);
+    const tabla = await scrapearFrames(pagina, expected, frameDatos);
     if (!tabla) { finPaginacion = p === 0 ? 'sin-grilla' : 'grilla-desaparecio'; break; }
     if (p === 0) gridPresente = expected.length ? (tabla.coincideCols ?? 0) > 0 : true;
     if (!headers) headers = tabla.headers;
@@ -549,14 +578,18 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
         escribirProtegido(path.join(dir, `diagnostico-${desde}-${hasta}${imp ? '-' + slugImpuesto(imp) : ''}.json`), JSON.stringify({ impuesto: imp, error: filtro.error, resultados: resumenResultados(rel0), estructura: rel0 }, null, 2));
         continue;
       }
-      const g = await leerGrilla(pagina, expected);
+      const g = await leerGrilla(pagina, expected, servicio.frameDatos ?? null);
       resultado.paginas += g.paginas; resultado.duplicadosEnTabla += g.duplicadosEnTabla;
       if (g.filas.length && (finPaginacion == null || PEOR_FIN[g.finPaginacion] > PEOR_FIN[finPaginacion])) finPaginacion = g.finPaginacion;
       // Encabezados reales de la grilla, aunque venga vacía: con ellos se valida la identidad de la sección.
       if (!encabezadosGrilla && g.headers?.length) encabezadosGrilla = g.headers;
       const res = resumenResultados(await relevarPagina(pagina));
       // ARCA avisa explícitamente cuando no hay datos: es un CERO confirmado, no una ausencia incierta.
-      const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m));
+      // El cartel puede venir como mensaje relevado o como texto suelto en la pantalla (Compensaciones
+      // de Cuentas Tributarias: "No se encontraron resultados", corrida 2026-10-24).
+      const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m))
+        || (!g.filas.length && await hayMensajeSinResultados(pagina));
+      if (sinResultados && !g.filas.length) mensajes.add('ARCA informa: no se encontraron resultados');
       if (g.gridPresente || sinResultados) gridPresente = true;
       for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
       const informados = totalInformado(res);

@@ -172,7 +172,7 @@ test('esGrillaRechazada: detecta la grilla de Vencimientos de la home en un ct-*
 
 test('servicios ct-*: rechazan la grilla de la home y Cuenta Corriente va a una hoja real', () => {
   const ct = SERVICIOS.filter((s) => s.id.startsWith('ct-') && s.id !== 'ct-deudas');
-  assert.equal(ct.length, 4);
+  assert.equal(ct.length, 5);
   for (const s of ct) assert.ok(s.rechazarSiColumnas?.length, s.id);
   const cc = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
   assert.equal(cc.ruta.at(-1).texto, 'Detalle de Deuda Consolidada');

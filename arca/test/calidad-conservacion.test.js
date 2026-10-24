@@ -248,7 +248,11 @@ test('conservarIntento sanea el resumen guardado (CUIT e importes)', () => {
 
 // Caso pedido en la revisión: Cuenta Corriente que lee por accidente los 5 vencimientos de la home.
 test('Cuenta Corriente que lee los 5 vencimientos de la home: queda como evidencia, nunca como dato vigente', async () => {
-  const servicio = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  // Configuración real: lee solo su propio frame (deudaConsolidada), así que la grilla de la home ni
+  // siquiera se lee (se prueba abajo). Para ejercitar el control final, se simula una fuente sin esa
+  // restricción ni formulario, que SÍ lee la grilla de la home.
+  const real = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  const servicio = { ...real, frameDatos: undefined, seleccionarOpcion: undefined };
   const filasHome = Array.from({ length: 5 }, (_, i) => ['30 - IVA', '19 - DDJJ', '19 - DDJJ', `2026-0${i + 4}`, '0', `1${i}/10/2026`, '']);
   // Página falsa: el iframe Vue de la home muestra SOLO la grilla de Vencimientos (la ruta no llegó a la sección).
   const nada = { count: async () => 0, isVisible: async () => false };
@@ -280,6 +284,9 @@ test('Cuenta Corriente que lee los 5 vencimientos de la home: queda como evidenc
   const m = generarMatrizCobertura(datosDir, [{ id: servicio.id, nombre: 'CC' }], { hoy: '2026-10-24' }).objeto.fuentes[0];
   assert.equal(m.acumulado, null);
   assert.match(m.nota, /solo evidencia.*No hay datos utilizables/);
+  // Y con la configuración real (frameDatos de Cuenta Corriente), la grilla de la home no se lee.
+  const soloSuFrame = await extraerTablaEnPagina(pagina, { ...real, seleccionarOpcion: undefined }, { ...P, dirSalida: path.join(datosDir, 'otro') });
+  assert.equal(soloSuFrame.filas, 0);
 });
 
 // ---------------- cobertura histórica ----------------
@@ -516,4 +523,58 @@ test('respaldos: se conservan los últimos MAX_RESPALDOS', () => {
     assert.equal(conservarIntento({ datosDir, id, cuando: `c${i}`, clave: 'acumulado', dirIntento: d, ...P, resultado }).promovido, true);
   }
   assert.deepEqual(fs.readdirSync(path.join(datosDir, id, 'respaldos', 'acumulado')).sort(), ['c2', 'c3', 'c4']);
+});
+
+// ---------------- llegada real al sistema (Cuentas Tributarias en el login) ----------------
+
+import { esperarFrame, correrUno } from '../src/portal/orquestador.js';
+import { Sesion } from '../src/portal/sesion.js';
+
+const URL_LOGIN = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml';
+const paginaEn = (urls, { listo = true } = {}) => {
+  const frames = urls.map((u) => ({ url: () => u, name: () => '', evaluate: async (fn) => (fn.name === 'relevarEnDocumento' ? {} : listo) }));
+  return { frames: () => frames, mainFrame: () => frames[0], url: () => urls[0], title: async () => '', isClosed: () => false,
+    waitForTimeout: async () => {}, waitForLoadState: async () => {}, close: async () => {} };
+};
+
+test('esperarFrame: solo da por llegado si el frame de la sección existe y cargó', async () => {
+  const CT = 'ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/homeContribuyente';
+  assert.equal(await esperarFrame(paginaEn(['https://portalcf.cloud.afip.gob.ar/portal/app/', URL_LOGIN]), CT, 20), null);
+  assert.equal(await esperarFrame(paginaEn(['https://ctacte.cloud.afip.gob.ar/contribuyente/externo', `https://${CT}/index.html`], { listo: false }), CT, 20), null, 'existe pero no cargó');
+  assert.ok(await esperarFrame(paginaEn(['https://ctacte.cloud.afip.gob.ar/contribuyente/externo', `https://${CT}/index.html`]), CT, 20));
+});
+
+test('cuentas-tributarias que queda en el login: fallo de navegación (sin-acceso), nunca un cero', async () => {
+  const baseDir = tmp();
+  const servicio = { ...SERVICIOS.find((s) => s.id === 'cuentas-tributarias'), esperaFrameMs: 20 };
+  const sesion = { cfg: { outDir: baseDir }, page: null, abrirServicio: async () => paginaEn([URL_LOGIN]) };
+  const r = await correrUno(sesion, servicio, { baseDir, periodo: P, datosDir: path.join(baseDir, 'datos') });
+  assert.equal(r.estado, 'sin-acceso');
+  assert.match(r.error, /no se llegó a la pantalla.*fallo de navegación, no un cero/);
+  assert.ok(fs.existsSync(path.join(baseDir, 'cuentas-tributarias', 'estructura.json')), 'queda el diagnóstico de dónde quedó');
+  assert.deepEqual(leerVigente(path.join(baseDir, 'datos'), 'cuentas-tributarias'), {});
+});
+
+test('cuentas-tributarias elige expresamente la pestaña Vencimientos y lee solo el iframe Vue', () => {
+  const s = SERVICIOS.find((x) => x.id === 'cuentas-tributarias');
+  assert.equal(s.extractor, 'generico');
+  assert.match(s.ruta[0].selector, /role=tab.*Vencimientos/);
+  assert.match(s.requiereFrame, /homeContribuyente/);
+  assert.equal(s.frameDatos, 'scripts/vue/homeContribuyente');
+  for (const id of ['ct-deudas', 'ct-ddjj', 'ct-pagos', 'ct-cuenta-corriente', 'ct-incumplimientos', 'ct-compensaciones']) {
+    assert.match(SERVICIOS.find((x) => x.id === id).requiereFrame, /homeContribuyente/, id);
+  }
+});
+
+test('abrirServicio: si ARCA muestra el login, reintenta una vez; si sigue, falla como sin acceso', async () => {
+  const s = new Sesion({ outDir: tmp() }, { visible: false });
+  s.esperaLoginMs = 20;
+  s.page = paginaEn(['https://portalcf.cloud.afip.gob.ar/portal/app/']);
+  const ctacte = paginaEn(['https://ctacte.cloud.afip.gob.ar/contribuyente/externo']);
+  let llamadas = 0;
+  s._abrirServicio = async () => (++llamadas === 1 ? paginaEn([URL_LOGIN]) : ctacte);
+  assert.equal(await s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), ctacte);
+  assert.equal(llamadas, 2);
+  s._abrirServicio = async () => paginaEn([URL_LOGIN]);
+  await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: ARCA pide volver a iniciar sesión/);
 });

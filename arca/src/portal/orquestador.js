@@ -68,6 +68,20 @@ export function buscarElementosConTexto(texto) {
   return out;
 }
 
+/** Espera (hasta `ms`) a que exista un frame cuya URL contenga `fragmento` y cuyo documento haya cargado. */
+export async function esperarFrame(pagina, fragmento, ms = 20000) {
+  const limite = Date.now() + ms;
+  while (Date.now() < limite) {
+    for (const f of pagina.frames()) {
+      if (!String(f.url?.() ?? '').includes(fragmento)) continue;
+      const listo = await f.evaluate(() => document.readyState === 'complete' && !!document.body && document.body.children.length > 0).catch(() => false);
+      if (listo) return f;
+    }
+    await pagina.waitForTimeout(1000);
+  }
+  return null;
+}
+
 /**
  * Clasifica lo que se encontró en un servicio genérico a partir del relevamiento, sin descargar.
  * Devuelve estado y los elementos candidatos para escribir después el extractor confirmado.
@@ -104,6 +118,16 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
   const pagina = await sesion.abrirServicio(servicio);
   // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
   await pagina.waitForTimeout(3500);
+  // ¿Llegamos de verdad al sistema? (corrida 2026-10-24T19-39-01: Cuentas Tributarias quedó en el
+  // login de ARCA y se leyó esa pantalla: 0 filas que parecían un cero.) Si la sección declara el
+  // frame de su pantalla de entrada, se espera a que cargue; si no aparece, es FALLO DE NAVEGACIÓN.
+  if (servicio.requiereFrame && !(await esperarFrame(pagina, servicio.requiereFrame, servicio.esperaFrameMs ?? 20000))) {
+    const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+    escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+    const donde = sanitizarTexto(pagina.url());
+    if (pagina !== sesion.page) await pagina.close().catch(() => {});
+    throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de ${servicio.nombre} (no cargó ${servicio.requiereFrame}; la página quedó en ${donde}). Es un fallo de navegación, no un cero.`);
+  }
   const expected = (servicio.columnasEsperadas ?? []).map(norm);
   // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).
   // Puede terminar en una pestaña nueva: trabajamos sobre drill.pagina.

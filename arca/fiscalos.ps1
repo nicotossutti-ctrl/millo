@@ -5,6 +5,7 @@
 #   .\fiscalos.ps1 correr         Recorre todos los servicios en modo lectura y genera el informe de cobertura.
 #   .\fiscalos.ps1 correr -Desde 2026-09-01 -Hasta 2026-09-30
 #   .\fiscalos.ps1 correr -Rehacer    Vuelve a descargar periodos ya verificados.
+#   .\fiscalos.ps1 correr -Servicios cuentas-tributarias,ct-deudas   Prueba solo esas fuentes.
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
 param(
   [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe')]
@@ -12,7 +13,8 @@ param(
   [string]$Desde,
   [string]$Hasta,
   [switch]$Rehacer,
-  [switch]$Oculto
+  [switch]$Oculto,
+  [string]$Servicios
 )
 $ErrorActionPreference = 'Stop'
 $Rama = 'claude/elegant-gauss-djpghk'
@@ -82,6 +84,7 @@ function Correr {
     if ($Rehacer) { $a += '--rehacer' }
     if ($Desde) { $a += @('--desde', $Desde) }
     if ($Hasta) { $a += @('--hasta', $Hasta) }
+    if ($Servicios) { $a += @('--servicios', $Servicios) }
     Correr-Paso 'Recorriendo servicios fiscales' 'npm.cmd' $a
   } finally { Pop-Location }
   Abrir-Informe

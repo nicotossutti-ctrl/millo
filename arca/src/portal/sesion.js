@@ -207,6 +207,40 @@ export class Sesion {
    * Los servicios suelen abrir en una pestaña nueva; devolvemos esa página.
    */
   async abrirServicio(target) {
+    // Los servicios por URL directa (SIFERE) manejan su propio login.
+    if (typeof target === 'object' && target.url) return this._abrirServicio(target);
+    const espera = this.esperaLoginMs ?? 8000;
+    let p = await this._abrirServicio(target);
+    if (!(await this._esperarFueraDelLogin(p, espera))) {
+      // Corrida 2026-10-24T19-39-01: el primer servicio después de un login nuevo (Cuentas
+      // Tributarias) cayó en el login de ARCA y se leyó esa pantalla. Se reintenta una vez.
+      this.log('  ARCA mostró la pantalla de login al abrir el servicio: reintento una vez.');
+      if (p !== this.page) await p.close().catch(() => {});
+      await this.page.waitForTimeout(3000);
+      p = await this._abrirServicio(target);
+      if (!(await this._esperarFueraDelLogin(p, this.visible ? 180000 : espera))) {
+        if (p !== this.page) await p.close().catch(() => {});
+        throw new Error('no pude abrir el servicio: ARCA pide volver a iniciar sesión (login de clave fiscal)');
+      }
+    }
+    return p;
+  }
+
+  /** Espera a que la página salga del login de ARCA (SSO que redirige solo, o la persona que lo completa). */
+  async _esperarFueraDelLogin(p, ms) {
+    const enLogin = () => /auth\.afip\.gob\.ar\/contribuyente_?\/login/i.test(p.url());
+    if (!enLogin()) return true;
+    if (ms > 10000) this.log('  Completá el login en la ventana visible (espero hasta 3 minutos).');
+    const limite = Date.now() + ms;
+    while (Date.now() < limite) {
+      await p.waitForTimeout(1000).catch(() => {});
+      if (p.isClosed?.()) return false;
+      if (!enLogin()) { await p.waitForLoadState('networkidle').catch(() => {}); return true; }
+    }
+    return false;
+  }
+
+  async _abrirServicio(target) {
     const { page } = this;
     const nombre = typeof target === 'string' ? target : target.nombre;
     const terminos = typeof target === 'string'
