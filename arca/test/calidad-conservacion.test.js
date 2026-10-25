@@ -655,3 +655,30 @@ test('extractor: el cartel solo cuenta en el frame de la sección (Detalle de De
   assert.equal(enOtro.ceroPorCartel, undefined, 'un cartel en otra pantalla no vale');
   assert.equal(evaluarCalidad(cc, enOtro, P).validado, false);
 });
+
+test('el informe muestra como VALIDADO un cero por cartel (no como con-datos)', async () => {
+  // Pantalla de Detalle de Deuda Consolidada tras consultar: sin grilla, con "No registra deudas".
+  const URL_CC = 'https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/deudaConsolidada/index.html';
+  const frames = ['https://ctacte.cloud.afip.gob.ar/contribuyente/externo', URL_CC].map((u) => ({
+    url: () => u, name: () => '',
+    evaluate: async (fn) => (fn.name === 'extraerTablasEnDocumento' ? []
+      : fn.name === 'relevarEnDocumento' ? { tablas: u === URL_CC ? [] : [{ visible: true, filas: 2, encabezados: [] }], inputs: [], botones: [], enlaces: [],
+        conRol: [], menus: [], iframes: [], formularios: [], textosVisibles: [], paginacion: [], mensajes: [] }
+      : true),
+    locator: (sel) => {
+      const hay = u === URL_CC && /No registra deudas/.test(sel);
+      const l = { count: async () => (hay ? 1 : 0), isVisible: async () => hay };
+      l.filter = () => l; l.first = () => l; l.nth = () => l; return l;
+    },
+    getByText: () => ({ count: async () => 0 }),
+  }));
+  const pagina = { frames: () => frames, mainFrame: () => frames[0], url: () => frames[0].url(), title: async () => '', isClosed: () => false,
+    waitForTimeout: async () => {}, waitForLoadState: async () => {}, close: async () => {}, content: async () => '', screenshot: async () => {} };
+  const servicio = { ...SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente'), ruta: [], seleccionarOpcion: undefined, esperaFrameMs: 20 };
+  const baseDir = tmp();
+  const r = await correrUno({ cfg: { outDir: baseDir }, page: null, abrirServicio: async () => pagina }, servicio, { baseDir, periodo: P, datosDir: path.join(baseDir, 'datos') });
+  assert.equal(r.estado, 'validado');
+  assert.equal(r.filas, 0);
+  assert.match(r.motivo, /cero confirmado por ARCA.*No registra deudas/);
+  assert.equal(leerVigente(path.join(baseDir, 'datos'), servicio.id).acumulado.filas, 0);
+});

@@ -220,6 +220,14 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
       // Los encabezados reales van al informe: con ellos se confirman las columnas propias de la sección.
       motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}`) };
   }
+  // Cero VALIDADO (grilla propia vacía o cartel declarado de la sección en su pantalla): es un dato.
+  if (extraccion && !extraccion.error && !extraccion.filas && extraccion.calidad?.validado) {
+    const c = extraccion.calidad;
+    return { estado: 'validado', archivos: [], filas: 0, drill: drillInfo, calidad: c, intentos, ceroConfirmado: true,
+      motivo: extraccion.ceroPorCartel ? `cero confirmado por ARCA en la pantalla de la sección: "${extraccion.ceroPorCartel}"` : 'cero confirmado: grilla propia presente y vacía',
+      validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: 0, ok: true, nivel: c.nivel, estadoExtractor: extraccion.estado,
+        conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, calidad: c, ceroConfirmado: true }] };
+  }
   // No se extrajo: queda el relevamiento. Explicitamos por qué (acceso ≠ descarga).
   const motivo = extraccion?.error
     ? `grilla alcanzada pero la extracción falló: ${extraccion.error}`
@@ -466,6 +474,7 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
     for (const v of r.validaciones ?? []) if (v.sub && v.nivel) x.push(`${v.sub}: ${nivelTxt[v.nivel] ?? v.nivel}`);
     // Por qué no llegó a "apto"/"validado": el detalle de descargado/validado no muestra el motivo.
     if ((r.estado === 'descargado' || r.estado === 'validado') && r.calidad?.motivos?.length) x.push(`motivo: ${r.calidad.motivos.join('; ')}`);
+    else if (r.estado === 'validado' && r.ceroConfirmado && r.motivo) x.push(r.motivo);
     if (r.drill?.recorrido?.length) x.push(`ruta: ${r.drill.recorrido.map((p) => `${p.paso}=${p.via}`).join(', ')}`);
     for (const c of r.conservacion ?? []) if (!c.promovido && c.vigente) x.push(`${c.id}: ${c.motivo}`);
     return x.length ? ` · ${x.join(' · ')}` : '';

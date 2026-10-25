@@ -659,7 +659,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
     resultado.motivo = errorUlt
       ? errorUlt
       : d.ceroConfirmado
-        ? 'grilla presente y vacía: 0 filas confirmado para el rango'
+        ? (resultado.ceroPorCartel ? `cero confirmado por el cartel de ARCA en la pantalla de la sección ("${resultado.ceroPorCartel}")` : 'grilla presente y vacía: 0 filas confirmado para el rango')
         : 'no se confirmó la grilla de resultados (pestaña/consulta sin verificar): ausencia incierta, no es un cero';
     if (mensajes.size) { resultado.mensajes = [...mensajes]; resultado.motivo += ` · pantalla: ${[...mensajes].join(' / ')}`; }
   }
