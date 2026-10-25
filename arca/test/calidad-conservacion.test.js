@@ -616,3 +616,42 @@ test('abrirServicio: si ARCA muestra el login, reintenta una vez; si sigue, fall
   s._abrirServicio = async () => paginaEn([URL_LOGIN]);
   await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: ARCA pide volver a iniciar sesión/);
 });
+
+// ---------------- cero por cartel de la sección ----------------
+
+test('cero por el cartel declarado de la sección: validado (no apto); sin cartel ni grilla, no valida', () => {
+  const cc = SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente');
+  const ext = { id: cc.id, filas: 0, ceroConfirmado: true, ceroPorCartel: 'No registra deudas', conFiltroPeriodo: false };
+  const c = evaluarCalidad(cc, ext, P);
+  assert.equal(c.nivel, 'validado');
+  assert.match(c.motivos.join(' '), /cero según el cartel de ARCA.*No registra deudas/);
+  assert.equal(evaluarCalidad(cc, { ...ext, ceroPorCartel: undefined }, P).validado, false);
+  // Con filtro de período, el rango tiene que estar confirmado (Compensaciones).
+  const comp = SERVICIOS.find((s) => s.id === 'ct-compensaciones');
+  const e2 = { id: comp.id, filas: 0, ceroConfirmado: true, ceroPorCartel: 'No se encontraron resultados', conFiltroPeriodo: true };
+  assert.equal(evaluarCalidad(comp, { ...e2, rangoOk: true }, P).nivel, 'validado');
+  assert.equal(evaluarCalidad(comp, { ...e2, rangoOk: null }, P).validado, false);
+});
+
+test('extractor: el cartel solo cuenta en el frame de la sección (Detalle de Deuda Consolidada)', async () => {
+  const cc = { ...SERVICIOS.find((s) => s.id === 'ct-cuenta-corriente'), seleccionarOpcion: undefined };
+  const armar = (urlCartel) => {
+    const frames = ['https://ctacte.cloud.afip.gob.ar/contribuyente/externo', urlCartel].map((u) => ({
+      url: () => u, name: () => '',
+      evaluate: async (fn) => (fn.name === 'extraerTablasEnDocumento' ? [] : { tablas: [], inputs: [], paginacion: [], mensajes: [] }),
+      locator: (sel) => {
+        const hay = u === urlCartel && /No registra deudas/.test(sel);
+        const l = { count: async () => (hay ? 1 : 0), isVisible: async () => hay };
+        l.filter = () => l; l.first = () => l; l.nth = () => l; return l;
+      },
+    }));
+    return { frames: () => frames, mainFrame: () => frames[0], url: () => frames[0].url(), title: async () => '', waitForTimeout: async () => {}, waitForLoadState: async () => {} };
+  };
+  const enSuFrame = await extraerTablaEnPagina(armar('https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/deudaConsolidada/index.html'), cc, { ...P, dirSalida: tmp() });
+  assert.equal(enSuFrame.ceroPorCartel, 'No registra deudas');
+  assert.equal(enSuFrame.ceroConfirmado, true);
+  assert.equal(evaluarCalidad(cc, enSuFrame, P).nivel, 'validado');
+  const enOtro = await extraerTablaEnPagina(armar('https://ctacte.cloud.afip.gob.ar/contribuyente/scripts/vue/homeContribuyente/index.html'), cc, { ...P, dirSalida: tmp() });
+  assert.equal(enOtro.ceroPorCartel, undefined, 'un cartel en otra pantalla no vale');
+  assert.equal(evaluarCalidad(cc, enOtro, P).validado, false);
+});

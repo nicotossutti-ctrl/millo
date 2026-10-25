@@ -143,8 +143,11 @@ export function evaluarCalidad(servicio, extraccion, { desde, hasta, rechazada =
   const validado = filas > 0
     ? columnas === 'confirmadas' && paginacion === 'completa' && total !== 'no-coincide'
       && (periodo === 'acumulado' || (periodo === 'confirmado' && temporal === 'verificada'))
-    : cero && columnas === 'confirmadas' && periodo !== 'sin-confirmar';
-  const apto = validado && (cero || total === 'coincide');
+    : cero && (columnas === 'confirmadas' || !!extraccion?.ceroPorCartel) && periodo !== 'sin-confirmar';
+  // Cero APTO solo con la grilla propia presente y vacía; un cero por el cartel declarado de la
+  // sección (en su pantalla verificada) queda VALIDADO: es la palabra de ARCA, sin grilla que contar.
+  const apto = validado && (cero ? columnas === 'confirmadas' : total === 'coincide');
+  if (validado && cero && !apto) motivos.push(`cero según el cartel de ARCA en la pantalla de la sección ("${extraccion.ceroPorCartel}")`);
   if (validado && !apto) motivos.push('validado, pero sin total de ARCA en el paginador para cotejar la cantidad: no apto para cálculos');
   const nivel = apto ? 'apto' : validado ? 'validado' : filas > 0 ? 'obtenido' : 'sin-datos';
   return { nivel, validado, apto, exito: validado, columnas, faltan, paginacion, total, periodo, temporal, fechas, motivos };

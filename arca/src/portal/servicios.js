@@ -116,6 +116,8 @@ export const SERVICIOS = [
     // DEL ESTADO) + CONSULTAR. Esta fuente consulta la deuda exigible; ct-incumplimientos, la otra.
     requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/deudaConsolidada',
     seleccionarOpcion: 'DEUDA EXIGIBLE Y FALTA DE PRESENTACION',
+    // Cartel real cuando no hay deuda (corrida 2026-10-25): cero confirmado por ARCA en esta pantalla.
+    mensajesCero: ['No registra deudas'],
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     // "Cuenta Corriente" es un ENCABEZADO de sección de la barra (no abre nada): se expande y se
     // entra a la hoja "Detalle de Deuda Consolidada". Antes los 5 registros eran la grilla de la home.
@@ -123,10 +125,12 @@ export const SERVICIOS = [
   { id: 'ct-incumplimientos', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Incump', confirmado: false, extractor: 'generico',
     requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/deudaConsolidada',
     seleccionarOpcion: 'INCUMPLIMIENTOS COMPLETOS',
+    mensajesCero: ['No registra deudas'],
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Cuenta Corriente', opcional: true, continuar: true, siNoVisible: 'Detalle de Deuda Consolidada' }, { texto: 'Detalle de Deuda Consolidada', respaldoEnlace: true }] },
   { id: 'ct-compensaciones', nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS', terminos: ['SISTEMA DE CUENTAS TRIBUTARIAS', 'CUENTAS TRIBUTARIAS'], fuente: '12-Comp', confirmado: false, extractor: 'generico',
     requiereFrame: CT_SISTEMA, frameDatos: 'scripts/vue/consultaCompensacionesAfectaciones',
+    mensajesCero: ['No se encontraron resultados'],
     rechazarSiColumnas: RECHAZAR_VENCIMIENTOS,
     ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consultas', opcional: true, continuar: true, siNoVisible: 'Consulta Compensaciones y Afectaciones' }, { texto: 'Consulta Compensaciones y Afectaciones', respaldoEnlace: true }],
     filtroPeriodo: true },

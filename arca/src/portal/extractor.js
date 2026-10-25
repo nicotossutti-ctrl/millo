@@ -468,6 +468,18 @@ async function hayMensajeSinResultados(pagina) {
   return false;
 }
 
+/** ¿Está visible alguno de los carteles declarados por la sección, en su frame? Devuelve el texto o null. */
+async function cartelDeLaSeccion(pagina, textos, frameDatos) {
+  for (const frame of pagina.frames()) {
+    if (frameDatos && !String(frame.url?.() ?? '').includes(frameDatos)) continue;
+    for (const t of textos) {
+      const loc = frame.locator(`:text("${String(t).replace(/"/g, '')}")`);
+      if ((await loc.count().catch(() => 0)) && (await loc.first().isVisible().catch(() => false))) return t;
+    }
+  }
+  return null;
+}
+
 /** Lee la grilla actual (espera a que aparezca, recorre la paginación y deduplica). Solo lectura. */
 async function leerGrilla(pagina, expected, frameDatos = null) {
   // La grilla puede tardar (iframe/SPA/pestaña nueva): esperamos hasta ~9s a que aparezca, pero
@@ -590,7 +602,13 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
       const sinResultados = (res.mensajes ?? []).some((m) => /no hay resultados|importe en cero|no se encontraron/i.test(m))
         || (!g.filas.length && await hayMensajeSinResultados(pagina));
       if (sinResultados && !g.filas.length) mensajes.add('ARCA informa: no se encontraron resultados');
-      if (g.gridPresente || sinResultados) gridPresente = true;
+      // Cero por CARTEL DE LA SECCIÓN: solo el texto que la sección declara (mensajesCero), visible en
+      // SU frame (frameDatos). Ej.: Detalle de Deuda Consolidada -> "No registra deudas" (corrida 2026-10-25).
+      if (!g.filas.length && servicio.mensajesCero?.length) {
+        const cartel = await cartelDeLaSeccion(pagina, servicio.mensajesCero, servicio.frameDatos ?? null);
+        if (cartel) { resultado.ceroPorCartel = cartel; mensajes.add(`ARCA informa: ${cartel}`); }
+      }
+      if (g.gridPresente || sinResultados || resultado.ceroPorCartel) gridPresente = true;
       for (const m of (res.mensajes ?? [])) { const s = String(m).trim(); if (s) mensajes.add(s); }
       const informados = totalInformado(res);
       if (informados != null) informadosTot = (informadosTot ?? 0) + informados;
