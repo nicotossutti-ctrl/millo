@@ -109,7 +109,9 @@ export function evaluarCalidad(servicio, extraccion, { desde, hasta, rechazada =
   // paginadores que no deshabilitan "siguiente" en la última página (Mis Facilidades, 14 de 14).
   const fin = extraccion?.finPaginacion ?? null;
   const completoPorTotal = fin === 'pagina-repetida' && extraccion?.totalFuente === 'paginador' && extraccion?.informados === filas;
-  const paginacion = !filas ? 'no-aplica' : (fin === 'sin-siguiente' || completoPorTotal) ? 'completa' : 'incompleta';
+  // 'paginacion-cliente': todas las filas ya estaban en el DOM (ocultas por el paginador) y el
+  // "siguiente" no agregó ninguna: el listado completo se leyó en la primera página.
+  const paginacion = !filas ? 'no-aplica' : (fin === 'sin-siguiente' || fin === 'paginacion-cliente' || completoPorTotal) ? 'completa' : 'incompleta';
   if (paginacion === 'incompleta') {
     motivos.push(fin === 'tope' ? `la paginación llegó al tope de seguridad (${extraccion.paginas} páginas): puede faltar el final`
       : fin === 'pagina-repetida' ? 'el "siguiente" no avanzó (página repetida): puede ser una falla de navegación, no el final del listado'

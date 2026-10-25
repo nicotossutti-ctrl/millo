@@ -190,17 +190,24 @@ function extraerTablasEnDocumento() {
     // Sin <thead>, la fila de encabezado es la primera del cuerpo: no se cuenta como dato.
     const bodyTrs = cuerpo.filter((tr) => tr !== filaEncabezado && tr.parentElement?.tagName !== 'THEAD');
     const rows = bodyTrs.map((tr) => [...tr.cells].map((c) => tx(c))).filter((r) => r.some((x) => x));
+    // Filas presentes en el DOM pero no dibujadas: paginación del lado del cliente (todas las filas ya
+    // están en la tabla y el paginador solo muestra/oculta). Ej.: Mis Facilidades, 14 filas en "1 2".
+    const ocultas = bodyTrs.filter((tr) => tr.getClientRects().length === 0 && [...tr.cells].some((c) => (c.textContent || '').trim())).length;
     // Incluimos también grillas con encabezados pero SIN filas: sirven para confirmar un cero real
     // (grilla presente y vacía) y distinguirlo de "no encontré la grilla" (pestaña/consulta falló).
-    if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
+    if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows, ocultas });
   }
   // Grillas de componente (no <table>): ARIA role=grid y Syncfusion EJ2 (.e-grid), usadas por los
   // portales nuevos de ARCA (IVA, Bienes Personales, DDJJ y Pagos: clases e-*). Mismo formato.
+  // Solo los elementos de NIVEL SUPERIOR del selector: en EJ2 cada encabezado es th[role=columnheader]
+  // > div.e-headercelldiv > span.e-headertext y los tres coinciden; antes cada encabezado salía
+  // triplicado y la columna de fecha de Mis Retenciones apuntaba a otra celda (corrida 2026-10-25).
+  const superiores = (els) => els.filter((e) => !els.some((o) => o !== e && o.contains(e)));
   for (const g of document.querySelectorAll('[role="grid"], [role="table"], .e-grid, .ag-root-wrapper, .k-grid')) {
     if (!vis(g)) continue;
-    const headers = [...g.querySelectorAll('[role="columnheader"], .e-headercelldiv, .e-headertext, th')].map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
-    const rowEls = [...g.querySelectorAll('[role="row"], .e-row')].filter((r) => r.querySelector('[role="gridcell"], [role="cell"], .e-rowcell, td'));
-    const rows = rowEls.map((r) => [...r.querySelectorAll('[role="gridcell"], [role="cell"], .e-rowcell, td')].map((c) => tx(c))).filter((r) => r.some((x) => x));
+    const headers = superiores([...g.querySelectorAll('[role="columnheader"], .e-headercelldiv, .e-headertext, th')]).map((c) => tx(c).replace(/\s*\(.*?sort.*?\)\s*/i, ''));
+    const rowEls = superiores([...g.querySelectorAll('[role="row"], .e-row')]).filter((r) => r.querySelector('[role="gridcell"], [role="cell"], .e-rowcell, td'));
+    const rows = rowEls.map((r) => superiores([...r.querySelectorAll('[role="gridcell"], [role="cell"], .e-rowcell, td')]).map((c) => tx(c))).filter((r) => r.some((x) => x));
     if (rows.length || headers.filter(Boolean).length) out.push({ headers, rows });
   }
   return out;
@@ -242,7 +249,7 @@ export function recolectarTablas(tablas, expected = []) {
   };
   const match = tablas.filter(coincide);
   if (!match.length) return null; // ninguna coincide: era navegación/título
-  return { headers: match[0].headers, rows: match.flatMap((t) => t.rows), coincideCols: exp.length };
+  return { headers: match[0].headers, rows: match.flatMap((t) => t.rows), coincideCols: exp.length, ocultas: match.reduce((n, t) => n + (t.ocultas ?? 0), 0) };
 }
 
 /** Elige la mejor tabla entre todos los frames. Con encabezados esperados, descarta la que no coincide. */
@@ -368,9 +375,16 @@ export async function completarFiltros(pagina, desde, hasta, servicio, log, impu
         await btn.click();
         await pagina.waitForLoadState('networkidle').catch(() => {});
         await pagina.waitForTimeout(2500);
-        const leidoDesde = await frame.locator(sel.fechaDesde).first().inputValue().catch(() => '');
-        const leidoHasta = await frame.locator(sel.fechaHasta).first().inputValue().catch(() => '');
-        return { conFiltroPeriodo: true, rangoAplicado: `${leidoDesde} - ${leidoHasta}`, rangoOk: leidoDesde.includes(fechaArca(desde)) && leidoHasta.includes(fechaArca(hasta)) };
+        // fijar() ya verificó que los dos campos TOMARON el período antes de Consultar. Si después
+        // los campos siguen en pantalla, se relee y tiene que coincidir; si la consulta saltó a otra
+        // pantalla (Mis Retenciones -> /resultados, sin los campos), vale la verificación previa.
+        // Antes esto daba siempre "rango sin confirmar" en Retenciones (corrida 2026-10-25).
+        const leidoDesde = await frame.locator(sel.fechaDesde).first().inputValue({ timeout: 2000 }).catch(() => null);
+        const leidoHasta = await frame.locator(sel.fechaHasta).first().inputValue({ timeout: 2000 }).catch(() => null);
+        if (leidoDesde == null && leidoHasta == null) {
+          return { conFiltroPeriodo: true, rangoAplicado: `${fechaArca(desde)} - ${fechaArca(hasta)} (verificado en los campos al consultar)`, rangoOk: true };
+        }
+        return { conFiltroPeriodo: true, rangoAplicado: `${leidoDesde ?? ''} - ${leidoHasta ?? ''}`, rangoOk: String(leidoDesde ?? '').includes(fechaArca(desde)) && String(leidoHasta ?? '').includes(fechaArca(hasta)) };
       } catch (e) { return { conFiltroPeriodo: true, error: `filtro/consulta: ${e.message}` }; }
     }
     return { conFiltroPeriodo: true, error: 'no se encontraron los filtros de fecha confirmados' };
@@ -496,7 +510,7 @@ async function leerGrilla(pagina, expected, frameDatos = null) {
   // habilitado). Los demás no prueban que se leyó todo: 'pagina-repetida' (el "siguiente" no avanzó:
   // puede ser una falla de navegación), 'grilla-desaparecio' (tras pasar de página ya no había
   // grilla), 'tope' (corte de seguridad) y 'sin-grilla' (nunca hubo grilla).
-  let finPaginacion = 'tope';
+  let finPaginacion = 'tope'; let ocultasPrimera = 0;
   for (let p = 0; p < TOPE_PAGINAS; p++) {
     const tabla = await scrapearFrames(pagina, expected, frameDatos);
     if (!tabla) { finPaginacion = p === 0 ? 'sin-grilla' : 'grilla-desaparecio'; break; }
@@ -509,7 +523,11 @@ async function leerGrilla(pagina, expected, frameDatos = null) {
       vistas.add(firma); filas.push(r); nuevas++;
     }
     paginas = p + 1;
-    if (!nuevas) { finPaginacion = p === 0 ? 'sin-siguiente' : 'pagina-repetida'; break; } // corte verificable
+    if (p === 0) ocultasPrimera = tabla.ocultas ?? 0;
+    // Página "siguiente" sin filas nuevas. Si la primera página ya traía filas ocultas en el DOM, era
+    // paginación del lado del cliente: todas las filas estaban leídas desde el principio (fin
+    // verificable). Si no, el "siguiente" no avanzó: no prueba que se terminó el listado.
+    if (!nuevas) { finPaginacion = p === 0 ? 'sin-siguiente' : (ocultasPrimera > 0 ? 'paginacion-cliente' : 'pagina-repetida'); break; }
     const sig = await botonSiguiente(pagina);
     if (!sig) { finPaginacion = 'sin-siguiente'; break; }
     await sig.click().catch(() => {});
@@ -569,7 +587,7 @@ export async function extraerTablaEnPagina(pagina, servicio, { desde, hasta, out
   // De dónde sale el total: 'paginador' (ARCA lo informa en el texto de la paginación) o 'tabla-unica'
   // (no hay paginador y se toman las filas de la única tabla visible: no es un cotejo independiente).
   const fuentesTotal = [];
-  const PEOR_FIN = { tope: 4, 'grilla-desaparecio': 3, 'pagina-repetida': 2, 'sin-grilla': 1, 'sin-siguiente': 0 };
+  const PEOR_FIN = { tope: 4, 'grilla-desaparecio': 3, 'pagina-repetida': 2, 'sin-grilla': 1, 'paginacion-cliente': 0, 'sin-siguiente': 0 };
 
   for (let idx = 0; idx < impuestos.length; idx++) {
     const imp = impuestos[idx];

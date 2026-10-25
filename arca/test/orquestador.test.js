@@ -44,11 +44,14 @@ test('orden de servicios: datos fiscales primero, Mis Retenciones al final', () 
   assert.ok(pos('cuentas-tributarias') < pos('portal-iva'), 'cuentas-tributarias antes que portal-iva');
 });
 
-test('SIFERE se configura para entrar por COMARB (URL directa + listados de solo lectura), sin bloqueo', () => {
+test('SIFERE entra por el acceso del portal "SIFERE WEB - DDJJ" (no el de Consultas) y baja listados de solo lectura', async () => {
   const s = SERVICIOS.find((x) => x.id === 'sifere-consultas');
   assert.equal(s.extractor, 'sifere');
-  assert.ok(!s.bloqueo, 'SIFERE ya no se trata como sin-acceso: se entra por COMARB');
-  assert.match(s.url, /auth\.afip\.gob\.ar.*comarb_sifereweb/, 'entra por el login de clave fiscal que arma la sesión de COMARB');
+  assert.ok(!s.bloqueo);
+  assert.ok(!s.url, 'ya no entra por la URL de login de COMARB (terminaba en Sesión Expirada)');
+  const { coincideServicio } = await import('../src/portal/sesion.js');
+  assert.equal(coincideServicio('Convenio Multilateral – SIFERE WEB - DDJJ', s.terminos), true);
+  assert.equal(coincideServicio('Convenio Multilateral – SIFERE WEB - Consultas', s.terminos), false);
   assert.ok(Array.isArray(s.grillas) && s.grillas.length >= 2, 'baja al menos DDJJ mensuales y anuales');
   for (const g of s.grillas) {
     assert.match(g.url, /\.do$/, 'cada listado es un controller .do');
