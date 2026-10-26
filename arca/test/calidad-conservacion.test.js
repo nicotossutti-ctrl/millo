@@ -617,6 +617,64 @@ test('abrirServicio: si ARCA muestra el login, reintenta una vez; si sigue, fall
   await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: ARCA pide volver a iniciar sesión/);
 });
 
+// ---------------- interfaz de Cuentas Tributarias sin cargar (corrida 2026-10-26T20-04-19) ----------------
+
+// Página de .../contribuyente/externo: `cargada` dice si su documento tiene algún elemento de la
+// interfaz (menú, enlaces del menú, iframes). Vacía = como en la corrida: carga "completa" pero sin nada.
+const paginaCt = (cargada) => {
+  const frames = ['https://ctacte.cloud.afip.gob.ar/contribuyente/externo'].map((u) => ({
+    url: () => u, name: () => '',
+    evaluate: async (fn, arg) => (Array.isArray(arg) ? cargada
+      : fn.name === 'extraerTablasEnDocumento' ? []
+      : fn.name === 'relevarEnDocumento' ? { tablas: [], inputs: [], botones: [], enlaces: [], conRol: [], menus: [], iframes: [], formularios: [], textosVisibles: [], paginacion: [], mensajes: [] }
+      : true),
+    locator: () => { const l = { count: async () => 0, isVisible: async () => false }; l.filter = () => l; l.first = () => l; l.nth = () => l; return l; },
+    getByText: () => ({ count: async () => 0 }),
+  }));
+  let cerrada = false;
+  return { frames: () => frames, mainFrame: () => frames[0], url: () => frames[0].url(), title: async () => '', isClosed: () => cerrada,
+    waitForTimeout: async () => {}, waitForLoadState: async () => {}, close: async () => { cerrada = true; }, content: async () => '', screenshot: async () => {} };
+};
+const ctPagos = () => ({ ...SERVICIOS.find((s) => s.id === 'ct-pagos'), ruta: [], esperaFrameMs: 20, esperaInterfazMs: 20, esperaReintentoMs: 1 });
+
+test('todas las secciones de Cuentas Tributarias exigen que cargue la interfaz del sistema', () => {
+  for (const s of SERVICIOS.filter((x) => x.requiereFrame?.includes('ctacte'))) {
+    assert.ok(s.interfazCargada?.selectores?.length, s.id);
+    assert.ok(s.interfazCargada.selectores.includes('a.menu-a'), s.id);
+  }
+});
+
+test('interfaz vacía dos veces: un solo reintento, "servicio no cargado" (sin-acceso) y el vigente intacto', async () => {
+  const baseDir = tmp(); const datosDir = path.join(baseDir, 'datos');
+  conVigente(datosDir, 'ct-pagos', 15);
+  const antes = leerVigente(datosDir, 'ct-pagos');
+  const abiertas = [];
+  const sesion = { cfg: { outDir: baseDir }, page: null, abrirServicio: async () => { const p = paginaCt(false); abiertas.push(p); return p; } };
+  const r = await correrUno(sesion, ctPagos(), { baseDir, periodo: { desde: '2026-10-01', hasta: '2026-10-26' }, datosDir });
+  assert.equal(abiertas.length, 2, 'un acceso + un único reintento');
+  assert.ok(abiertas.every((p) => p.isClosed()), 'las pestañas vacías se cierran');
+  assert.equal(r.estado, 'sin-acceso');
+  assert.equal(r.filas ?? 0, 0);
+  assert.match(r.error, /servicio no cargado/);
+  assert.deepEqual(leerVigente(datosDir, 'ct-pagos'), antes, 'se conservan los datos anteriores');
+  assert.equal(filasVigente(datosDir, 'ct-pagos'), 15);
+  assert.ok(fs.existsSync(path.join(baseDir, 'ct-pagos', 'estructura.json')), 'queda el diagnóstico de la página vacía');
+});
+
+test('interfaz vacía en el primer acceso y cargada en el reintento: sigue con la consulta', async () => {
+  const baseDir = tmp();
+  let n = 0;
+  const sesion = { cfg: { outDir: baseDir }, page: null, abrirServicio: async () => paginaCt(++n > 1) };
+  const r = await correrUno(sesion, ctPagos(), { baseDir, periodo: { desde: '2026-10-01', hasta: '2026-10-26' }, datosDir: path.join(baseDir, 'datos') });
+  assert.equal(n, 2);
+  assert.notEqual(r.estado, 'sin-acceso');
+  assert.doesNotMatch(String(r.error ?? ''), /servicio no cargado/);
+  // Y con la interfaz cargada de entrada, no hay reintento.
+  let m = 0;
+  await correrUno({ cfg: { outDir: baseDir }, page: null, abrirServicio: async () => { m++; return paginaCt(true); } }, ctPagos(), { baseDir: tmp(), periodo: P, datosDir: path.join(baseDir, 'datos2') });
+  assert.equal(m, 1);
+});
+
 // ---------------- cero por cartel de la sección ----------------
 
 test('cero por el cartel declarado de la sección: validado (no apto); sin cartel ni grilla, no valida', () => {

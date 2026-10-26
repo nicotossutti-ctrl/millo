@@ -83,6 +83,62 @@ export async function esperarFrame(pagina, fragmento, ms = 20000) {
   return null;
 }
 
+/** ¿Hay en la página del sistema algún elemento propio de su interfaz (menú, enlaces del menú, iframes)? */
+async function interfazPresente(frame, selectores) {
+  return frame.evaluate((sels) => sels.some((s) => !!document.querySelector(s)), selectores).catch(() => false);
+}
+
+/** Espera (hasta `ms`) a que el frame `fragmento` muestre su interfaz (alguno de `selectores`). */
+export async function esperarInterfaz(pagina, fragmento, selectores, ms = 20000) {
+  const limite = Date.now() + ms;
+  for (;;) {
+    for (const f of pagina.frames()) {
+      if (String(f.url?.() ?? '').includes(fragmento) && (await interfazPresente(f, selectores))) return f;
+    }
+    if (Date.now() >= limite) return null;
+    await pagina.waitForTimeout(1000);
+  }
+}
+
+/**
+ * Abre el servicio y comprueba que se llegó de verdad al sistema antes de navegar por su menú.
+ * Corrida 2026-10-24T19-39-01: Cuentas Tributarias quedó en el login de ARCA y se leyó esa pantalla
+ * (0 filas que parecían un cero). Corrida 2026-10-26T20-04-19: quedó en .../contribuyente/externo
+ * con la página VACÍA (sin título, 5 elementos, sin menú, enlaces, botones ni iframes). Por eso:
+ *  - requiereFrame: el frame de la pantalla de entrada tiene que existir y haber cargado;
+ *  - interfazCargada: además tiene que mostrar algún elemento propio del sistema. Si no aparece, se
+ *    espera, se cierra esa pestaña y se reintenta el acceso UNA vez (solo navegación de lectura).
+ * Si sigue sin cargar: "servicio no cargado" (sin-acceso). No se lee nada y el vigente no se toca.
+ */
+async function abrirSistema(sesion, servicio, dir, log) {
+  for (let intento = 1; ; intento++) {
+    const pagina = await sesion.abrirServicio(servicio);
+    // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
+    await pagina.waitForTimeout(3500);
+    if (!servicio.requiereFrame) return pagina;
+    const diagnostico = async () => {
+      const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+      escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+      const donde = sanitizarTexto(pagina.url());
+      if (pagina !== sesion.page) await pagina.close().catch(() => {});
+      return donde;
+    };
+    if (!(await esperarFrame(pagina, servicio.requiereFrame, servicio.esperaFrameMs ?? 20000))) {
+      const donde = await diagnostico();
+      throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de ${servicio.nombre} (no cargó ${servicio.requiereFrame}; la página quedó en ${donde}). Es un fallo de navegación, no un cero.`);
+    }
+    const interfaz = servicio.interfazCargada;
+    if (!interfaz?.selectores?.length
+      || (await esperarInterfaz(pagina, interfaz.frame ?? servicio.requiereFrame, interfaz.selectores, servicio.esperaInterfazMs ?? 20000))) return pagina;
+    const donde = await diagnostico();
+    if (intento >= 2) {
+      throw new Error(`no pude abrir el servicio: servicio no cargado (${servicio.nombre}: la página ${donde} quedó vacía o incompleta, sin el menú del sistema, también tras un reintento). Se conservan los datos anteriores.`);
+    }
+    log('  la interfaz del sistema no cargó (página vacía o incompleta): espero y reintento el acceso una vez.');
+    await new Promise((r) => setTimeout(r, servicio.esperaReintentoMs ?? 5000));
+  }
+}
+
 /**
  * Clasifica lo que se encontró en un servicio genérico a partir del relevamiento, sin descargar.
  * Devuelve estado y los elementos candidatos para escribir después el extractor confirmado.
@@ -116,19 +172,7 @@ export function clasificarRelevamiento(rel) {
  * saneado del nivel alcanzado para escribir el extractor real si todavía no se pudo.
  */
 async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
-  const pagina = await sesion.abrirServicio(servicio);
-  // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
-  await pagina.waitForTimeout(3500);
-  // ¿Llegamos de verdad al sistema? (corrida 2026-10-24T19-39-01: Cuentas Tributarias quedó en el
-  // login de ARCA y se leyó esa pantalla: 0 filas que parecían un cero.) Si la sección declara el
-  // frame de su pantalla de entrada, se espera a que cargue; si no aparece, es FALLO DE NAVEGACIÓN.
-  if (servicio.requiereFrame && !(await esperarFrame(pagina, servicio.requiereFrame, servicio.esperaFrameMs ?? 20000))) {
-    const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
-    escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
-    const donde = sanitizarTexto(pagina.url());
-    if (pagina !== sesion.page) await pagina.close().catch(() => {});
-    throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de ${servicio.nombre} (no cargó ${servicio.requiereFrame}; la página quedó en ${donde}). Es un fallo de navegación, no un cero.`);
-  }
+  const pagina = await abrirSistema(sesion, servicio, dir, log);
   // Pantalla de inicio del sistema (p. ej. la home de Cuentas Tributarias con sus pestañas). El
   // sistema puede reabrir en la última pantalla visitada: se vuelve por el enlace "Inicio" del menú.
   if (servicio.frameInicio && !(await esperarFrame(pagina, servicio.frameInicio, servicio.esperaFrameMs ?? 8000))) {
