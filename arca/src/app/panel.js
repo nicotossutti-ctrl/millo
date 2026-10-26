@@ -91,19 +91,61 @@ function contribuyente(paramsFile) {
   try { return JSON.parse(fs.readFileSync(paramsFile, 'utf8')); } catch { return null; }
 }
 
-/** Pagos de Cuentas Tributarias con fecha en el mes y cuyo impuesto cumple `re`. Verificados. */
-function pagosCtDelMes(datosDir, mes, re) {
+/**
+ * Período fiscal de un pago de Cuentas Tributarias: { tipo: 'mes', mes } | { tipo: 'anual', anio } | null. Pura.
+ * Formatos de CT: AAAAMM, AAAAMM00 (DJ mensual), AAAA00 / AAAA0000 / AAAA (impuestos anuales).
+ */
+export function periodoFiscal(texto) {
+  const s = String(texto ?? '').trim();
+  let m = s.match(/^(\d{4})(\d{2})(\d{2})?$/);
+  if (m) {
+    if (m[2] === '00') return { tipo: 'anual', anio: m[1] };
+    return Number(m[2]) <= 12 ? { tipo: 'mes', mes: `${m[1]}-${m[2]}` } : null;
+  }
+  m = s.match(/^(\d{4})$/);
+  if (m) return { tipo: 'anual', anio: m[1] };
+  const mes = periodoDe(s);
+  return mes ? { tipo: 'mes', mes } : null;
+}
+
+/**
+ * Qué impuesto es un pago, por el CÓDIGO de impuesto de Cuentas Tributarias ("11 - GANANCIAS ..."). Pura.
+ * Importante: 217 (SICORE) y los regímenes de retención/percepción son pagos como AGENTE (retenciones
+ * a terceros), no el impuesto propio, aunque digan "Ganancias".
+ */
+export function clasificarImpuesto(texto) {
+  const t = norm(texto); const codigo = Number(t.match(/^\d+/)?.[0] ?? NaN);
+  if ([217, 218, 767, 216, 787].includes(codigo) || /sicore|sire|retenc|percep/.test(t)) return { clave: 'agente', nombre: 'Retenciones/percepciones como agente', propio: false, codigo };
+  if (codigo === 30 || (/\biva\b/.test(t) && Number.isNaN(codigo))) return { clave: 'iva', nombre: 'IVA', propio: true, codigo };
+  if ([10, 11].includes(codigo) || (/ganancia/.test(t) && Number.isNaN(codigo))) return { clave: 'ganancias', nombre: 'Ganancias', propio: true, codigo };
+  if (/autonom/.test(t)) return { clave: 'autonomos', nombre: 'Autónomos', propio: true, codigo };
+  if (/bienes personales/.test(t)) return { clave: 'bienes-personales', nombre: 'Bienes Personales', propio: true, codigo };
+  return { clave: 'otro', nombre: texto ? String(texto) : 'sin impuesto', propio: null, codigo };
+}
+
+/**
+ * Pagos de Cuentas Tributarias con FECHA de pago en el mes (todos los impuestos), cada uno con su
+ * impuesto, formulario, período fiscal al que se imputó y a qué corresponde. Es el flujo de caja
+ * real del mes; NO es la carga atribuible al mes (un pago de septiembre puede ser de otro período).
+ */
+export function pagosDelMes(datosDir, mes) {
   const out = [];
   for (const v of vigentes(datosDir, 'ct-pagos')) {
     for (const t of v.tablas) {
       const ii = col(t.headers, /impuesto/); const im = col(t.headers, /importe/); const fe = col(t.headers, /fecha/); const ip = col(t.headers, /periodo/);
+      const fo = col(t.headers, /formulario/); const ve = col(t.headers, /version/); const ob = col(t.headers, /observ/); const co = col(t.headers, /^concepto/);
       for (const f of t.rows) {
-        if (!re.test(norm(f[ii])) || (fechaIso(f[fe]) ?? '').slice(0, 7) !== mes) continue;
-        out.push({ fecha: f[fe], impuesto: f[ii], periodo: f[ip], importe: importeDe(f[im]), fuente: `ct-pagos (${v.entrada.nivel ?? 'validado'}, ${v.entrada.cuando})` });
+        const fechaIsoPago = fechaIso(f[fe]);
+        if ((fechaIsoPago ?? '').slice(0, 7) !== mes) continue;
+        const imp = clasificarImpuesto(f[ii]); const per = periodoFiscal(f[ip]);
+        const imputadoA = !per ? `período "${f[ip] ?? ''}" (sin interpretar)` : per.tipo === 'anual' ? `período fiscal ${per.anio} (anual)` : `período ${per.mes.slice(5)}/${per.mes.slice(0, 4)}`;
+        out.push({ fecha: fechaIsoPago, impuesto: f[ii] ?? '', clasificacion: imp, formulario: fo >= 0 ? f[fo] : null, version: ve >= 0 ? f[ve] : null,
+          concepto: co >= 0 ? f[co] : null, observaciones: ob >= 0 ? f[ob] : null, periodoFiscal: f[ip] ?? null, periodo: per, imputadoA,
+          delMismoPeriodo: per?.tipo === 'mes' && per.mes === mes, importe: importeDe(f[im]), fuente: `ct-pagos (${v.entrada.nivel ?? 'validado'}, ${v.entrada.cuando})` });
       }
     }
   }
-  return out;
+  return out.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
 }
 
 /** Volantes de pago de SIFERE (IIBB) del anticipo `mes`, si se conservaron. Verificados. */
@@ -122,6 +164,7 @@ function volantesSifere(datosDir, mes) {
   return out;
 }
 
+const fechaDma = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—');
 const suma = (xs) => (xs.length ? r2(xs.reduce((n, x) => n + (x.importe ?? 0), 0)) : null);
 
 /** Obligaciones registradas en Cuentas Tributarias (vencimientos y deudas de todos los impuestos). */
@@ -184,7 +227,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
       creditoDeclarado: idd.creditoFiscal?.importe != null ? cifra(idd.creditoFiscal.importe, 'verificado', inf.declarado.fuente) : faltante(idd.creditoFiscal?.ambiguo ? 'ambiguo en la DJ' : 'no identificado en la DJ'),
       percepcionesDeclaradas: idd.retencionesPercepciones?.importe != null ? cifra(idd.retencionesPercepciones.importe, 'verificado', inf.declarado.fuente) : faltante(idd.retencionesPercepciones?.ambiguo ? 'ambiguo en la DJ' : 'no identificado en la DJ'),
       percepcionesSufridas: inf.retenciones.length ? cifra(inf.retencionesIva, 'verificado', 'Mis Retenciones') : faltante('sin retenciones/percepciones de IVA conservadas para el mes'),
-      composicionDebito: inf.declarado?.composicionDebito ?? [],
+      composicionDebito: inf.declarado?.composicionDebito ?? { disponible: false, componentes: [], motivo: 'falta el detalle de la DJ' },
     },
     avisos: inf.avisos, faltantes: inf.faltantes,
   };
@@ -232,18 +275,23 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
         `provisión del mes; resultado = facturación neta − ${imp['costo-mercaderia'] ? 'costo de mercadería importado' : 'compras netas facturadas (supone stock estable)'} − gastos importados − IIBB − autónomos; proyección anual ${est.proyeccionAnual}`);
     }
   }
-  const ganPagosCt = pagosCtDelMes(datosDir, mes, /ganancia/);
-  const ganPagos = [importado('ganancias-anticipo'), ganPagosCt.length ? cifra(suma(ganPagosCt), 'verificado', ganPagosCt[0].fuente, `${ganPagosCt.length} pago(s) con fecha en el mes (incluye anticipos y retenciones depositadas si las hubiera)`) : null].filter(Boolean);
+  // Ganancias es ANUAL: un pago con fecha en el mes (anticipo o saldo de DJ) se imputa a un período
+  // fiscal anual; no es la carga del mes. Se muestra con su período en "Pagos realizados en el mes".
+  const pagosMes = pagosDelMes(datosDir, mes);
+  const ganPagosMes = pagosMes.filter((x) => x.clasificacion.clave === 'ganancias');
+  const ganImp = importado('ganancias-anticipo');
   const ganancias = {
     impuesto: 'Ganancias', periodo: mes, declarado: faltante('es anual: la DJ de Ganancias (F.711) no se lee todavía'), estimado: ganEstimado,
-    pagos: ganPagos.length ? cifra(ganPagos.reduce((n, c) => n + c.valor, 0), ganPagos.every((c) => c.nivel === 'verificado') ? 'verificado' : 'importado', ganPagos.map((c) => c.fuente).join(' + '), ganPagos.map((c) => c.nota).filter(Boolean).join(' · ') || null) : faltante('sin pagos de Ganancias con fecha en el mes'),
+    pagos: faltante('impuesto anual: los pagos no se atribuyen a un mes'),
+    pagosEnElMes: ganPagosMes.length || ganImp ? cifra((ganPagosMes.reduce((n, x) => n + (x.importe ?? 0), 0)) + (ganImp?.valor ?? 0), ganImp && !ganPagosMes.length ? 'importado' : 'verificado',
+      'ct-pagos', ganPagosMes.map((x) => `${fechaDma(x.fecha)}: ${x.imputadoA}`).join(' · ') || null) : null,
     saldoPendiente: faltante('se determina en la DJ anual'),
     vencimientoPresentacion: { fecha: null, nivel: 'faltante', nota: 'DJ anual' }, vencimientoPago: { fecha: null, nivel: 'faltante', nota: 'ver obligaciones (anticipos) registradas en ARCA' },
     estado: ganEstimado.valor != null ? 'provisión estimada' : 'sin datos',
   };
 
   // ---------- Autónomos ----------
-  const autPagosCt = pagosCtDelMes(datosDir, mes, /autonom/);
+  const autPagosCt = pagosMes.filter((x) => x.clasificacion.clave === 'autonomos');
   const autImp = importado('autonomos');
   const autonomos = {
     impuesto: 'Autónomos', periodo: mes,
@@ -287,7 +335,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   ];
 
   return {
-    mes, hoy, iva, iibb, ganancias, autonomos, rentabilidad, caja,
+    mes, hoy, iva, iibb, ganancias, autonomos, rentabilidad, caja, pagosDelMes: pagosMes,
     obligaciones: obligaciones(datosDir, hoy),
     importado: Object.fromEntries(Object.entries(imp).map(([k, v]) => [k, { ...v, nombre: CONCEPTOS[k]?.nombre ?? k }])),
     configuracion: { contribuyente: !!contrib, iibbEstimable: alic > 0, iibbParaGanancias },

@@ -8,6 +8,7 @@
 </head>
 <body>
   <header class="barra">
+   <div class="contenedor barra-interior">
     <div class="marca">
       <strong>FiscalOS</strong>
       <span class="sub">Panel fiscal mensual · datos locales</span>
@@ -17,7 +18,9 @@
       <select id="mes" aria-label="Mes de facturación"></select>
       <button id="mes-sig" class="icono" title="Mes siguiente" aria-label="Mes siguiente">›</button>
     </div>
+   </div>
   </header>
+  <div class="contenedor">
 
   <nav class="pestanas" role="tablist">
     <button role="tab" data-pestana="impuestos" class="activa">Impuestos del mes</button>
@@ -43,6 +46,7 @@
   </main>
 
   <footer>FiscalOS trabaja solo con lo que ya está en tu computadora (out/datos y out/importados). No abre ARCA ni envía datos a internet.</footer>
+  </div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

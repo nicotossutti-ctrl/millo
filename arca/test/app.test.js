@@ -142,7 +142,7 @@ function escenario({ conDeuda = true } = {}) {
   ], { desde: '2026-09-01', hasta: '2026-09-30' });
   vig('portal-iva', 'acumulado', 'portal-iva.csv', ['Período Fiscal', 'Formulario', 'Secuencia', 'Presentación'], [['09/2026', '2051', 'DJ Original', '16/10/2026']]);
   vig('ct-pagos', '2026-10-01_2026-10-26', 'ct-pagos.csv', ['Fecha Operación', 'Formulario', 'Versión', 'Impuesto', 'Período Fiscal', 'Importe'],
-    [['17/09/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202608', '7.000,00']], { desde: '2026-10-01', hasta: '2026-10-26' });
+    [['17/10/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '7.000,00']], { desde: '2026-10-01', hasta: '2026-10-26' });
   vig('mis-retenciones', '2026-09-01_2026-09-30', 'mis-retenciones-767-sicore-2026-09-01-2026-09-30.csv', ['Impuesto', 'Fecha', 'Importe'], [['767', '10/09/2026', '1.000,00']], { desde: '2026-09-01', hasta: '2026-09-30' });
   vig('cuentas-tributarias', 'acumulado', 'v.csv', ['Impuesto', 'Concepto', 'Período', 'Vencimiento'], [['217 - SICORE', '19 - DDJJ', '202610', '10/11/2026']]);
   if (conDeuda) vig('ct-deudas', 'acumulado', 'd.csv', ['Establecimiento', 'Impuesto', 'Concepto', 'Subconcepto', 'Período', 'Ant/Cuota', 'Vencimiento', 'Saldo'],
@@ -175,11 +175,21 @@ test('informe IVA: IVA diferido — deuda registrada con vencimiento propio = pe
   assert.match(inf.conciliacion.detalle, /igual a lo declarado.*21\/12\/2026/);
   assert.equal(generarInformeIva(path.join(out, 'datos'), '2026-09', { hoy: '2026-12-22' }).objeto.conciliacion.estado, 'pendiente de pago (vencido)');
   assert.equal(generarInformeIva(path.join(escenario({ conDeuda: false }), 'datos'), '2026-09', { hoy: '2026-10-26' }).objeto.conciliacion.estado, 'pago no verificado', 'sin deuda registrada no se asume impago');
-  const comp = composicionDebito(inf.declarado.conceptos);
-  assert.ok(comp.some((c) => /restitucion/.test(c.concepto)), 'la pantalla solo trae el total: se muestran los rubros del JSON');
-  assert.ok(!comp.some((c) => /total credito fiscal|saldo/.test(c.concepto)));
-  const conRubros = composicionDebito([{ concepto: 'Débito fiscal por ventas', importe: 10 }, { concepto: 'Restitución de crédito fiscal (débito)', importe: 2 }, { concepto: 'json dj debito fiscal otros', importe: 3 }]);
-  assert.equal(conRubros.length, 2, 'con rubros en pantalla, mandan esos');
+  // Fixture: la pantalla solo trae el total; el JSON trae rubros con nombres técnicos -> no disponible.
+  assert.equal(inf.declarado.composicionDebito.disponible, false);
+  assert.match(inf.declarado.composicionDebito.motivo, /no trae el detalle/);
+  // Rubros de pantalla que suman el total: disponible, sin crédito, sin duplicados, sin JSON.
+  const ok = composicionDebito([
+    { concepto: 'Total del débito fiscal del período', importe: 12 }, { concepto: 'Débito fiscal por ventas gravadas 21%', importe: 10 },
+    { concepto: 'Débito fiscal por ventas gravadas 21%', importe: 10 }, { concepto: 'Débito fiscal por restitución de créditos', importe: 2 },
+    { concepto: 'Crédito fiscal por compras (débito y crédito)', importe: 5 }, { concepto: 'json dj debito fiscal operaciones', importe: 10 },
+  ]);
+  assert.equal(ok.disponible, true);
+  assert.deepEqual(ok.componentes.map((c) => c.concepto), ['Débito fiscal por ventas gravadas 21%', 'Débito fiscal por restitución de créditos']);
+  // Con un rubro de menos no suma el total: no se muestra una composición parcial.
+  const parcial = composicionDebito([{ concepto: 'Total del débito fiscal del período', importe: 12 }, { concepto: 'Débito fiscal por ventas', importe: 10 }]);
+  assert.equal(parcial.disponible, false);
+  assert.match(parcial.motivo, /no reconstruyen el total/);
 });
 
 test('panel del mes: IVA verificado con vencimiento diferido; estimaciones y faltantes rotulados', () => {
@@ -249,4 +259,40 @@ test('servidor: solo atiende a 127.0.0.1/localhost y a la propia página', async
     assert.equal(html.status, 200);
     assert.match(html.headers.get('content-security-policy'), /default-src 'self'/);
   } finally { s.close(); }
+});
+
+test('pagos realizados en el mes: impuesto por código, período fiscal y sin atribuir Ganancias al mes', async () => {
+  const { periodoFiscal, clasificarImpuesto, pagosDelMes } = await import('../src/app/panel.js');
+  assert.deepEqual(periodoFiscal('202609'), { tipo: 'mes', mes: '2026-09' });
+  assert.deepEqual(periodoFiscal('20260900'), { tipo: 'mes', mes: '2026-09' });
+  assert.deepEqual(periodoFiscal('202500'), { tipo: 'anual', anio: '2025' });
+  assert.deepEqual(periodoFiscal('2025'), { tipo: 'anual', anio: '2025' });
+  assert.equal(clasificarImpuesto('11 - GANANCIAS PERSONAS HUMANAS').clave, 'ganancias');
+  assert.equal(clasificarImpuesto('217 - SICORE-IMPTO.A LAS GANANCIAS').clave, 'agente', 'SICORE no es Ganancias propia');
+  assert.equal(clasificarImpuesto('30 - IVA').clave, 'iva');
+  const out = escenario(); const d = path.join(out, 'datos');
+  // Pagos de septiembre: saldo de DJ de Ganancias 2025, SICORE como agente e IVA de agosto.
+  const dir = path.join(d, 'ct-pagos', 'vigente', '2026-09-01_2026-09-30');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'p.csv'), toCsv([
+    ['15/09/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '3.878.285,26', ''],
+    ['10/09/2026', '1571', '1', '217 - SICORE-IMPTO.A LAS GANANCIAS', '202608', '326.384,15', ''],
+    ['21/09/2026', '2051', '1', '30 - IVA', '202608', '980,00', ''],
+  ], ['Fecha Operación', 'Formulario', 'Versión', 'Impuesto', 'Período Fiscal', 'Importe', 'Observaciones'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  const man = JSON.parse(fs.readFileSync(path.join(d, 'ct-pagos', 'vigente.json'), 'utf8'));
+  man['2026-09-01_2026-09-30'] = { cuando: '2026-10-25T14-51-11', nivel: 'validado', archivos: ['p.csv'], desde: '2026-09-01', hasta: '2026-09-30' };
+  fs.writeFileSync(path.join(d, 'ct-pagos', 'vigente.json'), JSON.stringify(man));
+  const pagos = pagosDelMes(d, '2026-09');
+  assert.equal(pagos.length, 3);
+  const gan = pagos.find((x) => x.clasificacion.clave === 'ganancias');
+  assert.equal(gan.imputadoA, 'período fiscal 2025 (anual)');
+  assert.equal(gan.delMismoPeriodo, false);
+  const p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.ganancias.pagos.valor, null, 'no se atribuye a septiembre');
+  assert.equal(p.ganancias.pagosEnElMes.valor, 3878285.26);
+  assert.match(p.ganancias.pagosEnElMes.nota, /período fiscal 2025/);
+  assert.equal(p.pagosDelMes.find((x) => x.clasificacion.clave === 'agente').clasificacion.propio, false);
+  // Los importes declarados y fechas verificadas no cambian.
+  assert.equal(p.iva.declarado.valor, 8500);
+  assert.equal(p.iva.vencimientoPago.fecha, '2026-12-21');
 });

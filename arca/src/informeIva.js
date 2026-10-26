@@ -91,19 +91,28 @@ export function resumenComprobantes(texto, mes) {
 const fechaDma = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—');
 
 /**
- * Conceptos del débito fiscal que declara la DJ, distintos de cero, para explicar diferencias con el
- * IVA de los comprobantes emitidos (ventas sin comprobante electrónico, restituciones, etc.). Pura.
- * Se prefieren los rótulos de pantalla; si no hay, los del JSON. Sin duplicar importes iguales.
+ * Componentes del débito fiscal que declara la DJ, para explicar diferencias con el IVA de los
+ * comprobantes emitidos. Pura. Solo rótulos de la PANTALLA de la DJ (nunca rutas técnicas del JSON),
+ * sin el total, sin conceptos de crédito fiscal ni saldos, sin duplicados. Y solo si los componentes
+ * SUMAN el total del débito declarado: si no lo reconstruyen, no se muestra una composición parcial.
+ * Devuelve { disponible, componentes, total, motivo }.
  */
-export function composicionDebito(conceptos) {
-  // Fuera: saldos y el total de crédito (las rutas JSON "debito credito fiscal ..." agrupan ambos).
-  const deb = (conceptos ?? []).filter((c) => /debito/.test(norm(c.concepto)) && !/saldo|total (del )?credito fiscal/.test(norm(c.concepto)) && c.importe);
-  const pantalla = deb.filter((c) => !/^json\b/.test(c.concepto));
-  // Si la pantalla trae solo el total, no explica nada: se suman los rubros del JSON.
-  const base = pantalla.length > 1 ? pantalla : deb;
-  const vistos = new Set(); const out = [];
-  for (const c of base) { const k = `${norm(c.concepto)}|${c.importe}`; if (!vistos.has(k)) { vistos.add(k); out.push(c); } }
-  return out.slice(0, 30);
+export function composicionDebito(conceptos, totalDebito = null) {
+  const pantalla = (conceptos ?? []).filter((c) => !/^json\b/.test(String(c.concepto ?? '')) && c.importe != null);
+  const esTotal = (n) => /total.*debito fiscal|debito fiscal total/.test(n);
+  const vistos = new Set(); const componentes = [];
+  for (const c of pantalla) {
+    const n = norm(c.concepto);
+    // La restitución de crédito fiscal SÍ es débito; cualquier otro rótulo con "crédito" no.
+    if (!/debito/.test(n) || /saldo/.test(n) || (/credito/.test(n) && !/restitu/.test(n)) || esTotal(n) || !c.importe) continue;
+    const k = `${n}|${c.importe}`;
+    if (!vistos.has(k)) { vistos.add(k); componentes.push({ concepto: c.concepto, importe: c.importe }); }
+  }
+  const total = totalDebito ?? pantalla.find((c) => esTotal(norm(c.concepto)))?.importe ?? null;
+  if (!componentes.length) return { disponible: false, componentes: [], total, motivo: 'la DJ conservada no trae el detalle del débito por rubro' };
+  const suma = r2(componentes.reduce((n, c) => n + c.importe, 0));
+  if (total == null || Math.abs(suma - total) >= 1) return { disponible: false, componentes: [], total, motivo: `los rubros leídos (${fmt(suma)}) no reconstruyen el total del débito (${fmt(total)})` };
+  return { disponible: true, componentes, total, motivo: null };
 }
 
 function textoComprobantes(dirFuente, archivo) {
@@ -162,7 +171,8 @@ export function generarInformeIva(datosDir, mes, { hoy = new Date().toISOString(
   if (ddjj) {
     const t = tablaDe(ddjj.archivos[0]?.texto ?? '', (f) => /concepto/i.test(norm(f[0] ?? '')));
     const conceptos = t.rows.map((f) => ({ concepto: f[0], importe: importeDe(f[1]) })).filter((c) => c.importe != null);
-    declarado = { conceptos, identificados: identificarConceptosIva(conceptos), composicionDebito: composicionDebito(conceptos), fuente: fuenteTxt('portal-iva-ddjj', ddjj.entrada) };
+    const identificados = identificarConceptosIva(conceptos);
+    declarado = { conceptos, identificados, composicionDebito: composicionDebito(conceptos, identificados.debitoFiscal?.importe ?? null), fuente: fuenteTxt('portal-iva-ddjj', ddjj.entrada) };
   } else faltantes.push(`declarado: no hay detalle de la DJ de IVA ${etiqueta} conservado (fuente portal-iva-ddjj: correr con -Servicios portal-iva-ddjj y el mes)`);
 
   // 3. Presentación (Portal IVA y DJ de Cuentas Tributarias).
@@ -285,10 +295,11 @@ export function generarInformeIva(datosDir, mes, { hoy = new Date().toISOString(
   md.push('', '## Declarado (detalle de la DJ, Portal IVA)', '');
   if (declarado) {
     for (const [k, v] of Object.entries(declarado.identificados)) md.push(`- ${k}: ${v.ambiguo ? `AMBIGUO (${v.ambiguo.map((a) => `${a.concepto} ${fmt(a.importe)}`).join(' / ')})` : `${fmt(v.importe)} — "${v.concepto}"`}`);
-    if (declarado.composicionDebito.length) {
-      md.push('- composición del débito según la DJ (conceptos distintos de cero):');
-      for (const c of declarado.composicionDebito) md.push(`  - ${c.concepto}: ${fmt(c.importe)}`);
-    }
+    const cd = declarado.composicionDebito;
+    if (cd.disponible) {
+      md.push('- composición del débito según la DJ:');
+      for (const c of cd.componentes) md.push(`  - ${c.concepto}: ${fmt(c.importe)}`);
+    } else md.push(`- composición del débito: detalle no disponible (${cd.motivo})`);
     md.push(`- conceptos leídos: ${declarado.conceptos.length} · ${declarado.fuente}`);
   } else md.push('- falta (ver faltantes)');
   md.push('', '## Presentación', '');

@@ -110,44 +110,87 @@ function renderImpuestos() {
       iva.presentacion.fecha ? `DJ presentada: ${iva.presentacion.fecha}` : null,
     ]),
     tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
-      iibb.declarado.valor != null ? 'Declarado (importado)' : iibb.estimado.valor != null ? 'Estimado' : iibb.declarado.nota,
+      iibb.declarado.valor != null ? 'Declarado (importado)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin DJ: importala en "Importar archivo"',
     ]),
-    tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [ganancias.estimado.valor != null ? 'Provisión estimada del mes' : ganancias.estimado.nota]),
+    tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [
+      ganancias.estimado.valor != null ? 'Provisión estimada del mes' : 'Sin provisión (faltan datos)',
+      ganancias.pagosEnElMes ? `Pagado en el mes: ${fmt(ganancias.pagosEnElMes.valor)} (de otro período, ver abajo)` : null,
+    ]),
     tarjeta('Autónomos', autonomos.declarado, null, [autonomos.pagos.valor != null ? `Pagado en el mes: ${fmt(autonomos.pagos.valor)}` : 'Sin pagos registrados en el mes']),
   );
 
-  const fila = (t) => h('tr', {},
-    h('td', {}, h('strong', {}, t.impuesto)), h('td', {}, nombreMes(t.periodo)),
-    celdaCifra(t.declarado), celdaCifra(t.estimado), celdaCifra(t.pagos), celdaCifra(t.saldoPendiente),
-    celdaFecha(t.vencimientoPresentacion), celdaFecha(t.vencimientoPago));
-  const tabla = h('div', { class: 'caja' }, h('h2', {}, 'Detalle por impuesto'),
-    h('table', {}, h('thead', {}, h('tr', {}, ...['Impuesto', 'Período', 'Declarado', 'Estimado', 'Pagos', 'Saldo pendiente', 'Venc. presentación', 'Venc. pago'].map((x, i) => h('th', { class: i >= 2 && i <= 5 ? 'num' : '' }, x)))),
-      h('tbody', {}, fila(iva), fila(iibb), fila(ganancias))),
-    h('p', { class: 'nota' }, 'Pasá el mouse sobre una cifra para ver su fuente. IVA: el vencimiento de pago es el que registra Cuentas Tributarias para tu régimen (no se aplica el calendario general).'));
+  // Detalle por impuesto: cada celda solo importe/fecha y nivel. Las fuentes y explicaciones van en
+  // una fila desplegable (botón accesible con teclado) y en el title de la celda.
+  const COLS = [['declarado', 'Declarado'], ['estimado', 'Estimado'], ['pagos', 'Pagos imputados'], ['saldoPendiente', 'Saldo pendiente']];
+  const FECHAS = [['vencimientoPresentacion', 'Venc. presentación'], ['vencimientoPago', 'Venc. pago']];
+  const celdaCorta = (c, rotulo) => h('td', { class: 'num', 'data-rotulo': rotulo, title: [c?.fuente, c?.nota].filter(Boolean).join(' · ') || null },
+    h('span', {}, c?.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(c.valor), badge(c?.nivel ?? 'faltante')));
+  const fechaCorta = (f, rotulo) => h('td', { 'data-rotulo': rotulo, title: [f?.fuente, f?.nota].filter(Boolean).join(' · ') || null },
+    h('span', {}, f?.fecha ? fecha(f.fecha) : h('span', { class: 'sin-dato' }, '—'), badge(f?.nivel ?? 'faltante')));
+  const filas = [];
+  [iva, iibb, ganancias].forEach((t, n) => {
+    const id = `fuentes-${n}`;
+    const det = h('tr', { class: 'fuentes', id, hidden: true }, h('td', { colspan: 9 }, h('dl', {},
+      ...[...COLS, ...FECHAS].flatMap(([k, rot]) => {
+        const c = t[k]; const txt = [c?.fuente, c?.nota].filter(Boolean).join(' — ');
+        return txt ? [h('dt', {}, rot), h('dd', {}, txt)] : [];
+      }),
+      t.pagosEnElMes ? [h('dt', {}, 'Pagado en el mes'), h('dd', {}, `${fmt(t.pagosEnElMes.valor)} — ${t.pagosEnElMes.nota ?? ''} (no se atribuye a ${nombreMes(p.mes)})`)] : null,
+      t.detalle ? [h('dt', {}, 'Estado'), h('dd', {}, t.detalle)] : null)));
+    const boton = h('button', { class: 'ver-fuentes', 'aria-expanded': 'false', 'aria-controls': id, onclick: (e) => {
+      const abierto = det.hidden; det.hidden = !abierto; e.currentTarget.setAttribute('aria-expanded', String(abierto)); e.currentTarget.textContent = abierto ? 'Ocultar' : 'Fuentes';
+    } }, 'Fuentes');
+    filas.push(h('tr', {},
+      h('td', { 'data-rotulo': 'Impuesto' }, h('strong', {}, t.impuesto)),
+      h('td', { 'data-rotulo': 'Estado' }, t.estado ? h('span', { class: `estado ${claseEstado(t.estado)}` }, t.estado) : '—'),
+      ...COLS.map(([k, rot]) => celdaCorta(t[k], rot)),
+      ...FECHAS.map(([k, rot]) => fechaCorta(t[k], rot)),
+      h('td', { 'data-rotulo': 'Detalle' }, boton)), det);
+  });
+  const tabla = h('div', { class: 'caja' }, h('h2', {}, `Detalle por impuesto · ${nombreMes(p.mes)}`),
+    h('table', { class: 'tabla-impuestos apilable' },
+      h('thead', {}, h('tr', {}, ...['Impuesto', 'Estado', ...COLS.map((c) => c[1]), ...FECHAS.map((c) => c[1]), ''].map((x, i) => h('th', { class: i >= 2 && i <= 5 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...filas)),
+    h('p', { class: 'nota' }, '"Fuentes" muestra de dónde sale cada cifra. El vencimiento de pago del IVA es el que registra Cuentas Tributarias para tu régimen.'));
 
+  // IVA: declarado vs. comprobantes.
   const d = iva.detalle_;
-  const filaD = (nombre, c) => h('tr', {}, h('td', {}, nombre), celdaCifra(c));
-  const detalle = h('div', { class: 'caja' }, h('h2', {}, `IVA ${nombreMes(p.mes)}: declarado vs. comprobantes`),
-    h('p', { class: 'nota' }, iva.detalle),
+  const filaD = (nombre, c) => h('tr', {}, h('td', { 'data-rotulo': '' }, nombre), celdaCorta(c, 'Importe'));
+  const cd = d.composicionDebito;
+  const detalle = h('div', { class: 'caja' }, h('h2', {}, `IVA: declarado vs. comprobantes`),
     h('table', {}, h('tbody', {},
       filaD('Débito fiscal declarado (DJ)', d.debitoDeclarado),
-      filaD('IVA de comprobantes emitidos (Mis Comprobantes)', d.debitoComprobantes),
+      filaD('IVA de comprobantes emitidos', d.debitoComprobantes),
       d.diferenciaDebito ? filaD('Diferencia de débito (DJ − comprobantes)', d.diferenciaDebito) : null,
       filaD('Crédito fiscal declarado (DJ)', d.creditoDeclarado),
-      filaD('IVA facturado por proveedores (Mis Comprobantes)', d.ivaProveedores),
+      filaD('IVA facturado por proveedores', d.ivaProveedores),
       filaD('Retenciones y percepciones declaradas (DJ)', d.percepcionesDeclaradas),
-      filaD('Percepciones de IVA sufridas (Mis Retenciones)', d.percepcionesSufridas),
-    )),
-    d.diferenciaDebito ? h('p', { class: 'nota' }, d.diferenciaDebito.nota) : null,
-    d.composicionDebito?.length > 1 ? [h('h3', {}, 'Composición del débito según la DJ'),
-      h('table', {}, h('tbody', {}, ...d.composicionDebito.map((c) => h('tr', {}, h('td', {}, c.concepto), h('td', { class: 'num' }, fmt(c.importe))))))] : null,
-    iva.avisos.length ? [h('h3', {}, 'Avisos'), ...iva.avisos.map((a) => h('div', { class: 'aviso' }, a))] : null,
-    iva.faltantes.length ? [h('h3', {}, 'Faltantes y cómo completarlos'), h('ul', { class: 'lista' }, ...iva.faltantes.map((f) => h('li', {}, f)))] : null);
+      filaD('Percepciones de IVA sufridas (Mis Retenciones)', d.percepcionesSufridas))),
+    h('h3', {}, 'Composición del débito según la DJ'),
+    cd?.disponible
+      ? h('table', {}, h('tbody', {}, ...cd.componentes.map((c) => h('tr', {}, h('td', {}, c.concepto), h('td', { class: 'num' }, fmt(c.importe))))))
+      : h('p', { class: 'no-disponible' }, `Detalle no disponible${cd?.motivo ? `: ${cd.motivo}` : ''}.`),
+    d.diferenciaDebito ? h('details', {}, h('summary', { class: 'nota' }, 'Sobre la diferencia de débito'), h('p', { class: 'nota' }, d.diferenciaDebito.nota)) : null,
+    iva.avisos.length || iva.faltantes.length ? h('details', {}, h('summary', { class: 'nota' }, `Avisos y faltantes (${iva.avisos.length + iva.faltantes.length})`),
+      ...iva.avisos.map((a) => h('div', { class: 'aviso' }, a)), h('ul', { class: 'lista' }, ...iva.faltantes.map((f) => h('li', {}, f)))) : null);
+
+  // Pagos de impuestos realizados en el mes (caja), con a qué período corresponden.
+  const pagos = p.pagosDelMes ?? [];
+  const pagosCaja = h('div', { class: 'caja' }, h('h2', {}, `Pagos de impuestos realizados en ${nombreMes(p.mes)}`),
+    h('p', { class: 'nota' }, 'Flujo de caja: lo que se pagó con fecha en el mes. Cada pago dice a qué período se imputó; un pago de otro período no es carga de este mes.'),
+    pagos.length ? h('table', { class: 'apilable' },
+      h('thead', {}, h('tr', {}, ...['Fecha', 'Impuesto', 'Formulario', 'Corresponde a', 'Importe'].map((x, i) => h('th', { class: i === 4 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...pagos.map((x) => h('tr', { title: [x.observaciones, x.fuente].filter(Boolean).join(' · ') },
+        h('td', { 'data-rotulo': 'Fecha' }, fecha(x.fecha)),
+        h('td', { 'data-rotulo': 'Impuesto' }, h('span', {}, x.impuesto, ' ', h('span', { class: `etiqueta ${x.clasificacion.propio ? 'propio' : ''}` }, x.clasificacion.propio === false ? 'como agente' : x.clasificacion.propio ? 'propio' : 'sin clasificar'))),
+        h('td', { 'data-rotulo': 'Formulario' }, x.formulario ?? '—'),
+        h('td', { 'data-rotulo': 'Corresponde a' }, h('span', {}, x.imputadoA, x.delMismoPeriodo ? ' (este mes)' : '')),
+        h('td', { class: 'num', 'data-rotulo': 'Importe' }, fmt(x.importe)))))) : h('p', { class: 'no-disponible' }, 'No hay pagos con fecha en este mes en las consultas conservadas de Cuentas Tributarias.'));
 
   const config = !p.configuracion.contribuyente
     ? h('div', { class: 'aviso' }, 'Para estimar Ingresos Brutos, Ganancias y autónomos falta params/contribuyente.json (copiá params/contribuyente.example.json y completalo con los datos de tu contador).')
     : null;
-  poner($('#impuestos'), tarjetas, config, tabla, detalle);
+  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, pagosCaja));
 }
 
 // ---------------- Rentabilidad ----------------
