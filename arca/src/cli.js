@@ -12,6 +12,9 @@ import { descargarMisComprobantes, diagnosticoMisComprobantes, pruebaConsulta } 
 import { ejecutarTodo } from './portal/orquestador.js';
 import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
+import { reprocesarDjIva } from './reprocesarDj.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -35,6 +38,8 @@ Comandos:
 Informes (sin abrir ARCA, con los datos conservados en out/datos):
   informe:iva --periodo AAAA-MM  IVA del mes: comprobantes, declarado (DJ), pagado, retenciones, presentación,
                                 vencimiento y deuda; conciliación solo con cifras existentes y validadas.
+  dj:iva --periodo AAAA-MM      Vuelve a interpretar la DJ de IVA del mes con la última captura ya bajada
+                                (vista + JSON de Portal IVA), sin abrir ARCA. Si queda validada, se conserva.
 
 Portal (sesión autenticada con navegador, sin certificado):
   portal:login [--visible]      Inicia sesión en el portal y guarda las cookies en .sesion/. Sin ARCA_CLAVE
@@ -139,6 +144,19 @@ try {
     const r = escribirInformeIva(cfg.outDir ?? 'out', mes);
     console.log(r.texto);
     console.error(`\nInforme guardado en ${r.archivo}`);
+    process.exit(0);
+  }
+
+  if (cmd === 'dj:iva') {
+    // No abre ARCA: reinterpreta la última captura de la vista de la DJ guardada en out/datos.
+    const cfg = loadConfig({ requireAuth: false });
+    const mes = need('periodo');
+    if (!/^\d{4}-\d{2}$/.test(mes)) throw new Error('--periodo tiene que ser AAAA-MM (p. ej. 2026-09)');
+    const r = reprocesarDjIva({ datosDir: path.join(cfg.outDir ?? 'out', 'datos'), mes });
+    console.log(fs.readFileSync(r.archivoAnalisis, 'utf8'));
+    console.error(`Captura usada: ${r.corrida} · intento ${r.cuando}`);
+    console.error(`Conservación: ${r.conservacion.promovido ? 'PROMOVIDO al vigente' : 'no promovido'} — ${r.conservacion.motivo}`);
+    console.error(`Análisis guardado en ${r.archivoAnalisis}`);
     process.exit(0);
   }
 

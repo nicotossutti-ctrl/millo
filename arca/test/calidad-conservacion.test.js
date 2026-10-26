@@ -604,17 +604,39 @@ test('Vencimientos con el sistema abierto en otra pantalla: vuelve por "Inicio";
   assert.match(r2.error, /no se encontró el enlace "Inicio".*fallo de navegación/);
 });
 
-test('abrirServicio: si ARCA muestra el login, reintenta una vez; si sigue, falla como sin acceso', async () => {
+test('abrirServicio: si el servicio cae en el login, reingresa en la pestaña principal y reabre una vez', async () => {
   const s = new Sesion({ outDir: tmp() }, { visible: false });
   s.esperaLoginMs = 20;
   s.page = paginaEn(['https://portalcf.cloud.afip.gob.ar/portal/app/']);
   const ctacte = paginaEn(['https://ctacte.cloud.afip.gob.ar/contribuyente/externo']);
-  let llamadas = 0;
+  let llamadas = 0; let reingresos = 0;
+  s.reingresar = async () => { reingresos++; };
   s._abrirServicio = async () => (++llamadas === 1 ? paginaEn([URL_LOGIN]) : ctacte);
   assert.equal(await s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), ctacte);
   assert.equal(llamadas, 2);
-  s._abrirServicio = async () => paginaEn([URL_LOGIN]);
-  await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: ARCA pide volver a iniciar sesión/);
+  assert.equal(reingresos, 1, 'reabrir sin reingresar volvía a caer en el login (corrida 20-50-36)');
+  // Sigue en el login después de reingresar: sin-acceso, sin más intentos.
+  llamadas = 0;
+  s._abrirServicio = async () => { llamadas++; return paginaEn([URL_LOGIN]); };
+  await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: ARCA pide volver a iniciar sesión.*después de reingresar/);
+  assert.equal(llamadas, 2);
+  // El reingreso no se puede completar (oculto y sin clave): sin-acceso, no un error suelto.
+  s.reingresar = async () => { throw new Error('Sin ARCA_CLAVE y sin --visible no se puede loguear.'); };
+  await assert.rejects(s.abrirServicio({ nombre: 'SISTEMA DE CUENTAS TRIBUTARIAS' }), /no pude abrir el servicio: .*reingreso no se completó/);
+});
+
+test('reingresar: si ARCA ya no muestra el formulario, solo confirma la sesión (no tipea nada)', async () => {
+  const s = new Sesion({ outDir: tmp() }, { visible: false });
+  let url = '';
+  s.page = { goto: async () => { url = 'https://portalcf.cloud.afip.gob.ar/portal/app/'; }, url: () => url, waitForLoadState: async () => {} };
+  let confirmado = 0; let login = 0;
+  s.confirmarLogin = async () => { confirmado++; };
+  s.login = async () => { login++; };
+  await s.reingresar();
+  assert.deepEqual([confirmado, login], [1, 0]);
+  s.page.goto = async () => { url = URL_LOGIN; };
+  await s.reingresar();
+  assert.deepEqual([confirmado, login], [1, 1]);
 });
 
 // ---------------- interfaz de Cuentas Tributarias sin cargar (corrida 2026-10-26T20-04-19) ----------------

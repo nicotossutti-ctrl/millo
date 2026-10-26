@@ -193,6 +193,12 @@ la presentación, el vencimiento y la deuda registrada. El saldo pendiente solo 
 existentes; "conciliado" solo si el saldo declarado coincide con los pagos. Lo que falta se lista con
 cómo obtenerlo. El IVA de un mes se paga al mes siguiente: los pagos se consultan con esas fechas.
 
+**Importe declarado de la DJ.** Es el saldo a pagar ("Saldo de impuesto a favor de ARCA"). Se toma
+solo si aparece con su nombre y un único valor (pantalla y datos JSON tienen que coincidir); nunca se
+deduce del saldo técnico ni se calcula. `dj:iva --periodo AAAA-MM` (o `fiscalos.ps1 reprocesar-dj
+-Periodo AAAA-MM`) vuelve a interpretar la última captura ya bajada, sin abrir ARCA: deja el análisis
+en `analisis-ddjj-iva-AAAA-MM.txt` (local) y, si queda validada, la conserva.
+
 Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 
 ### Windows: un solo script, sin Git

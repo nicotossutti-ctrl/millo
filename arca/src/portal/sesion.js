@@ -211,19 +211,40 @@ export class Sesion {
     if (typeof target === 'object' && target.url) return this._abrirServicio(target);
     const espera = this.esperaLoginMs ?? 8000;
     let p = await this._abrirServicio(target);
+    if (await this._esperarFueraDelLogin(p, espera)) return p;
+    // El servicio cayó en el login de clave fiscal aunque el portal se ve logueado (corridas
+    // 2026-10-24T19-39-01 y 2026-10-26T20-50-36, Cuentas Tributarias). El portal tiene su propia
+    // sesión; el acceso a cada servicio pasa por la sesión de clave fiscal (auth.afip.gob.ar), que
+    // puede estar vencida: p. ej. la sesión guardada en .sesion/ se reutilizó ("Sesión vigente")
+    // porque el portal todavía abría, pero la de clave fiscal ya no servía. Reabrir el servicio
+    // sin más vuelve a caer en el login. Por eso: se cierra esa pestaña, se REINGRESA en la pestaña
+    // principal (el robot pone el CUIT y la persona tipea la clave en la ventana visible, como al
+    // empezar) y recién ahí se reabre el servicio, UNA vez.
+    this.log('  El servicio abrió el login de ARCA: la sesión de clave fiscal venció. Vuelvo a iniciar sesión en la pestaña principal y reabro el servicio una vez.');
+    if (p !== this.page) await p.close().catch(() => {});
+    try {
+      await this.reingresar();
+    } catch (e) {
+      if (e?.name === 'DesafioDeSeguridad') throw e;
+      throw new Error(`no pude abrir el servicio: ARCA pide volver a iniciar sesión y el reingreso no se completó (${e?.message ?? e})`);
+    }
+    p = await this._abrirServicio(target);
     if (!(await this._esperarFueraDelLogin(p, espera))) {
-      // Corrida 2026-10-24T19-39-01: el primer servicio después de un login nuevo (Cuentas
-      // Tributarias) cayó en el login de ARCA y se leyó esa pantalla. Se reintenta una vez.
-      this.log('  ARCA mostró la pantalla de login al abrir el servicio: reintento una vez.');
       if (p !== this.page) await p.close().catch(() => {});
-      await this.page.waitForTimeout(3000);
-      p = await this._abrirServicio(target);
-      if (!(await this._esperarFueraDelLogin(p, this.visible ? 180000 : espera))) {
-        if (p !== this.page) await p.close().catch(() => {});
-        throw new Error('no pude abrir el servicio: ARCA pide volver a iniciar sesión (login de clave fiscal)');
-      }
+      throw new Error('no pude abrir el servicio: ARCA pide volver a iniciar sesión (login de clave fiscal), también después de reingresar');
     }
     return p;
+  }
+
+  /**
+   * Nuevo login de clave fiscal en la pestaña principal. Si ARCA ya no muestra el formulario (la
+   * sesión de clave fiscal sigue viva), solo confirma y guarda la sesión.
+   */
+  async reingresar() {
+    await this.page.goto(URL_LOGIN, { waitUntil: 'domcontentloaded' });
+    await this.page.waitForLoadState('networkidle').catch(() => {});
+    if (!this.page.url().includes('auth.afip.gob.ar')) return this.confirmarLogin();
+    return this.login();
   }
 
   /** Espera a que la página salga del login de ARCA (SSO que redirige solo, o la persona que lo completa). */

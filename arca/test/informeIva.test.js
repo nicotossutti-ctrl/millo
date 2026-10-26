@@ -172,3 +172,65 @@ test('conceptosDeJson: la DJ leída de los datos que carga la app (claves camelC
   assert.equal(id.saldoTecnicoAFavorArca.importe, 69999.5);
   assert.equal(id.debitoFiscal.importe, 250000);
 });
+
+// ---------------- interpretación de importes de la DJ (corrida 2026-10-26T20-15-38) ----------------
+
+test('parsearConceptos: concepto en un renglón y su importe solo en el siguiente', () => {
+  const texto = 'Liquidación\nSaldo técnico a favor de ARCA\n$ 70.000,00\nSaldo de impuesto a favor de ARCA\n$ 59.999,50\nPRESENTAR\n12,00';
+  const c = parsearConceptos(texto);
+  assert.deepEqual(c, [{ concepto: 'Saldo técnico a favor de ARCA', importe: 70000 }, { concepto: 'Saldo de impuesto a favor de ARCA', importe: 59999.5 }, { concepto: 'PRESENTAR', importe: 12 }]);
+  assert.equal(identificarConceptosIva(c).saldoAPagar.importe, 59999.5);
+});
+
+test('conceptosDeJson: objetos con el nombre del concepto en un campo de texto y montos como texto', async () => {
+  const { conceptosDeJson } = await import('../src/portal/ivaDdjj.js');
+  const json = { rubros: [
+    { codigo: 101, orden: 3, descripcion: 'Total del débito fiscal', importe: '250000.00' },
+    { codigo: 205, orden: 9, descripcion: 'Saldo técnico a favor de ARCA', importe: 70000 },
+    { codigo: 301, orden: 12, descripcion: 'Saldo de impuesto a favor de ARCA', importe: '59.999,50' },
+  ], idDeclaracion: 987654 };
+  const c = conceptosDeJson(json, 'json');
+  const id = identificarConceptosIva(c);
+  assert.equal(id.saldoAPagar.importe, 59999.5, 'el monto se nombra con su descripción');
+  assert.equal(id.saldoTecnicoAFavorArca.importe, 70000);
+  assert.equal(id.debitoFiscal.importe, 250000);
+  // Los números que no son montos (código, orden, id) no toman el nombre del concepto.
+  assert.ok(!c.some((x) => /saldo/.test(x.concepto) && [205, 301, 9, 12].includes(x.importe)));
+  assert.ok(c.some((x) => x.concepto === 'json id declaracion' && x.importe === 987654));
+});
+
+test('analizarDj: validado solo con el saldo a pagar identificado, único y del período', async () => {
+  const { analizarDj } = await import('../src/portal/ivaDdjj.js');
+  const vista = 'IVA SIMPLE\nDeclaración jurada de IVA | 09/2026\nOriginal - Presentada\n\n----- paso -----\n\nLiquidación\nSaldo de impuesto a favor de ARCA\n$ 59.999,50';
+  const ok = analizarDj(vista, [{ url: 'x', json: { saldoAFavorAfip: 59999.5 } }], '2026-09');
+  assert.equal(ok.calidad.nivel, 'validado');
+  assert.equal(ok.declarado.importe, 59999.5, 'pantalla y JSON coinciden');
+  const choca = analizarDj(vista, [{ url: 'x', json: { saldoAFavorAfip: 1 } }], '2026-09');
+  assert.equal(choca.calidad.nivel, 'obtenido');
+  assert.match(choca.motivos.join(' '), /AMBIGUO/);
+  const sinSaldo = analizarDj('Declaración jurada de IVA | 09/2026\nTotal Débito Fiscal $ 250.000,00\nSaldo técnico a favor de ARCA $ 70.000,00', [], '2026-09');
+  assert.equal(sinSaldo.calidad.nivel, 'obtenido', 'el saldo técnico no es el importe declarado ni se deduce de él');
+  assert.equal(sinSaldo.declarado, null);
+  assert.equal(analizarDj(vista.replace('09/2026', '08/2026'), [], '2026-09').calidad.validado, false, 'otra DJ');
+});
+
+test('reprocesar la DJ desde la captura ya bajada: se conserva y el informe toma el importe declarado', async () => {
+  const { reprocesarDjIva } = await import('../src/reprocesarDj.js');
+  const d = datosDePrueba({ ddjj: false });
+  const cap = path.join(d, 'portal-iva-ddjj', 'intentos', '2026-10-26T20-15-38');
+  fs.mkdirSync(cap, { recursive: true });
+  fs.writeFileSync(path.join(cap, 'vista-ddjj-iva-2026-09.txt'), 'Declaración jurada de IVA | 09/2026\nDatos iniciales\n\n----- paso -----\n\nDébito fiscal\nTotal Débito Fiscal\n$ 2.100,00');
+  fs.writeFileSync(path.join(cap, 'datos-ddjj-iva-2026-09.json'), JSON.stringify([{ url: 'https://siapweb/api/dj', json: { liquidacion: [{ descripcion: 'Saldo de impuesto a favor de ARCA', importe: 1050 }] } }]));
+  const antes = fs.readFileSync(path.join(cap, 'vista-ddjj-iva-2026-09.txt'), 'utf8');
+  const r = reprocesarDjIva({ datosDir: d, mes: '2026-09' });
+  assert.equal(r.corrida, '2026-10-26T20-15-38');
+  assert.equal(r.analisis.declarado.importe, 1050);
+  assert.equal(r.conservacion.promovido, true);
+  assert.equal(fs.readFileSync(path.join(cap, 'vista-ddjj-iva-2026-09.txt'), 'utf8'), antes, 'la captura original no se toca');
+  assert.match(fs.readFileSync(r.archivoAnalisis, 'utf8'), /saldoAPagar: 1\.050,00/);
+  const { objeto } = generarInformeIva(d, '2026-09');
+  assert.equal(objeto.declarado.identificados.saldoAPagar.importe, 1050);
+  assert.equal(objeto.conciliacion.estado, 'conciliado');
+  // Sin captura: lo dice (no inventa nada).
+  assert.throws(() => reprocesarDjIva({ datosDir: tmp(), mes: '2026-09' }), /no hay captura/);
+});

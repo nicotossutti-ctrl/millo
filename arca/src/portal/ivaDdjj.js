@@ -38,21 +38,46 @@ export function periodoDe(texto) {
   return null;
 }
 
+// Claves de un objeto JSON que traen el NOMBRE del concepto (p. ej. { descripcion: "Saldo...", importe: 1 }).
+const CLAVE_ETIQUETA = /^(descripcion|desc|concepto|nombre|label|etiqueta|titulo|title|leyenda|texto|detalle|denominacion|rubro)$/i;
+// Claves que traen un IMPORTE (también cuando ARCA lo manda como texto: "59999.50").
+const CLAVE_MONTO = /importe|monto|saldo|valor|total|debito|credito|impuesto|percep|retenc/i;
+
+/** Número de un valor JSON: número, o texto numérico ("59999.50" / "59.999,50") en una clave de importe. */
+function numeroJson(v, clave) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v !== 'string' || !CLAVE_MONTO.test(String(clave ?? ''))) return null;
+  const t = v.trim();
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  return /,\d{1,2}$/.test(t) ? importeDe(t) : null;
+}
+
 /**
  * Valores numéricos de una respuesta JSON como conceptos: la ruta de claves en palabras
  * ("liquidacion.saldoAFavorAfip" -> "liquidacion saldo a favor afip") y el importe. Pura.
  * Sirve para leer la DJ de los datos que la aplicación de ARCA carga al abrirla.
+ * Si un objeto trae el nombre del concepto en un campo de texto (descripcion, concepto, nombre...),
+ * sus importes se nombran con ese texto: { descripcion: "Saldo de impuesto a favor de ARCA",
+ * importe: 5 } -> "... saldo de impuesto a favor de arca importe" (antes quedaba "... 3 importe").
  */
 export function conceptosDeJson(json, prefijo = '') {
   const out = [];
   // camelCase en palabras, incluida la mayúscula suelta: "saldoAFavorAfip" -> "saldo a favor afip".
   const palabras = (k) => String(k).replace(/([a-z\d])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/[_.]+/g, ' ').toLowerCase();
-  const visitar = (v, ruta) => {
-    if (typeof v === 'number' && Number.isFinite(v)) out.push({ concepto: ruta.trim(), importe: v, origen: 'json' });
-    else if (Array.isArray(v)) v.forEach((x, i) => visitar(x, `${ruta} ${i}`));
-    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) visitar(x, `${ruta} ${palabras(k)}`);
+  const visitar = (v, ruta, clave) => {
+    const n = numeroJson(v, clave);
+    if (n != null) out.push({ concepto: ruta.trim(), importe: n, origen: 'json' });
+    else if (Array.isArray(v)) v.forEach((x, i) => visitar(x, `${ruta} ${i}`, clave));
+    else if (v && typeof v === 'object') {
+      const etiqueta = Object.entries(v).find(([k, x]) => CLAVE_ETIQUETA.test(k) && typeof x === 'string' && /[A-Za-zÁÉÍÓÚáéíóú]{3}/.test(x))?.[1];
+      for (const [k, x] of Object.entries(v)) {
+        const nx = etiqueta && CLAVE_MONTO.test(k) ? numeroJson(x, k) : null;
+        if (nx != null) out.push({ concepto: `${ruta} ${etiqueta.replace(/\s+/g, ' ').trim()} ${palabras(k)}`.trim(), importe: nx, origen: 'json' });
+        else visitar(x, `${ruta} ${palabras(k)}`, k);
+      }
+    }
   };
-  visitar(json, prefijo);
+  visitar(json, prefijo, '');
   return out;
 }
 
@@ -66,19 +91,32 @@ export function importeDe(texto) {
 }
 
 /**
- * Conceptos con importe de un texto de pantalla: cada línea "Concepto ..... $ 1.234,56". Pura.
+ * Conceptos con importe de un texto de pantalla: cada línea "Concepto ..... $ 1.234,56", o el
+ * concepto en una línea y su importe solo en la siguiente (así salen las pantallas armadas con
+ * bloques: innerText pone etiqueta y valor en renglones distintos). Pura.
  * Devuelve [{ concepto, importe }] en el orden en que aparecen.
  */
 export function parsearConceptos(texto) {
   const out = [];
+  let etiqueta = null;
   for (const linea of String(texto ?? '').split(/\r?\n/)) {
     const l = linea.replace(/\s+/g, ' ').trim();
+    if (!l) continue;
     const m = l.match(/^(.*?[A-Za-zÁÉÍÓÚáéíóúÑñ].*?)[\s:]*(-?\$?\s?-?\(?[\d.]*\d,\d{2}\)?)$/);
-    if (!m) continue;
-    const importe = importeDe(m[2]);
-    const concepto = m[1].replace(/[\s:.$]+$/, '').trim();
-    if (importe == null || !concepto) continue;
-    out.push({ concepto, importe });
+    if (m) {
+      const importe = importeDe(m[2]);
+      const concepto = m[1].replace(/[\s:.$]+$/, '').trim();
+      if (importe != null && concepto) out.push({ concepto, importe });
+      etiqueta = null;
+      continue;
+    }
+    if (/^-?\$?\s?-?\(?[\d.]*\d,\d{2}\)?$/.test(l)) {
+      const importe = importeDe(l);
+      if (etiqueta && importe != null) out.push({ concepto: etiqueta, importe });
+      etiqueta = null;
+      continue;
+    }
+    etiqueta = /[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(l) && l.length <= 150 ? l.replace(/[\s:.$]+$/, '').trim() : null;
   }
   return out;
 }
@@ -108,6 +146,33 @@ export function identificarConceptosIva(conceptos) {
   }
   return out;
 }
+
+/**
+ * Interpreta y valida la DJ de un mes a partir del texto de la vista y las respuestas JSON. Pura.
+ * El IMPORTE DECLARADO es el saldo a pagar (saldo de impuesto a favor de ARCA): tiene que aparecer
+ * con su nombre y un único valor (si pantalla y JSON lo dan, tienen que coincidir). No se deduce de
+ * otros saldos ni se calcula: si no está o es ambiguo, la DJ queda como evidencia (obtenido).
+ */
+export function analizarDj(texto, jsons, mes) {
+  const [y, m] = mes.split('-');
+  const conceptos = [...parsearConceptos(texto), ...(jsons ?? []).flatMap((j) => conceptosDeJson(j.json, 'json'))];
+  const ident = identificarConceptosIva(conceptos);
+  const claves = Object.entries(ident).filter(([, v]) => v.importe != null).map(([k]) => k);
+  const delPeriodo = textoEsDelPeriodo(texto, mes);
+  const saldo = ident.saldoAPagar ?? null;
+  const declarado = saldo?.importe != null ? { importe: saldo.importe, concepto: saldo.concepto } : null;
+  const validado = delPeriodo && !!declarado;
+  const motivos = [];
+  if (!delPeriodo) motivos.push(`la vista abierta no menciona el período ${m}/${y}: no se puede asegurar que sea esa DJ`);
+  if (!conceptos.length) motivos.push('la vista no tiene conceptos con importe legibles (¿abrió un PDF?)');
+  else if (saldo?.ambiguo) motivos.push(`saldo a pagar AMBIGUO: ${saldo.ambiguo.length} conceptos con importes distintos (${[...new Set(saldo.ambiguo.map((a) => a.importe))].slice(0, 4).join(' / ')})`);
+  else if (!declarado) motivos.push('no se identificó el saldo a pagar (saldo de impuesto a favor de ARCA) por su nombre');
+  const calidad = { nivel: validado ? 'validado' : conceptos.length ? 'obtenido' : 'sin-datos', validado, apto: false, motivos };
+  return { conceptos, ident, claves, delPeriodo, declarado, calidad, motivos };
+}
+
+/** CSV de conceptos de la DJ (Concepto;Importe). */
+export const csvConceptosDj = (conceptos) => toCsv(conceptos, [{ header: 'Concepto', value: (c) => c.concepto }, { header: 'Importe', value: (c) => c.importe }]);
 
 /** Corre en el navegador: lista las DJ de la página (una tabla por DJ) con su fila y si tiene "Ver". */
 function listarDjsEnDocumento() {
@@ -282,22 +347,13 @@ export async function correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx = {
       // El texto de la vista tiene importes: queda SOLO local, en la carpeta de datos (no en la corrida).
       fs.writeFileSync(path.join(dirIntento, `vista-ddjj-iva-${mes}.txt`), texto, { mode: 0o600 });
       if (jsons.length) fs.writeFileSync(path.join(dirIntento, `datos-ddjj-iva-${mes}.json`), JSON.stringify(jsons, null, 2), { mode: 0o600 });
-      const conceptos = [...parsearConceptos(texto), ...jsons.flatMap((j) => conceptosDeJson(j.json, 'json'))];
+      const { conceptos, claves, delPeriodo, declarado, calidad, motivos } = analizarDj(texto, jsons, mes);
+      const validado = calidad.validado;
       const csvNombre = `ddjj-iva-${mes}.csv`;
-      fs.writeFileSync(path.join(dirIntento, csvNombre), toCsv(conceptos, [{ header: 'Concepto', value: (c) => c.concepto }, { header: 'Importe', value: (c) => c.importe }]), { mode: 0o600 });
-      const ident = identificarConceptosIva(conceptos);
-      const delPeriodo = textoEsDelPeriodo(texto, mes);
-      const claves = Object.entries(ident).filter(([, v]) => v.importe != null).map(([k]) => k);
-      // Validado: la vista es de ESE período y se identificó al menos un saldo. Si no, evidencia.
-      const validado = delPeriodo && conceptos.length > 0 && claves.some((k) => /saldo/i.test(k));
-      const motivos = [];
-      if (!delPeriodo) motivos.push(`la vista abierta no menciona el período ${m}/${y}: no se puede asegurar que sea esa DJ`);
-      if (!conceptos.length) motivos.push('la vista no tiene conceptos con importe legibles (¿abrió un PDF?)');
-      else if (!claves.some((k) => /saldo/i.test(k))) motivos.push('no se identificó ningún saldo (a pagar / técnico / libre disponibilidad) por su texto');
-      const calidad = { nivel: validado ? 'validado' : conceptos.length ? 'obtenido' : 'sin-datos', validado, apto: false, motivos };
+      fs.writeFileSync(path.join(dirIntento, csvNombre), csvConceptosDj(conceptos), { mode: 0o600 });
       const resultado = { id: servicio.id, estado: validado ? 'extraido' : 'parcial', filas: conceptos.length, archivos: [csvNombre], conFiltroPeriodo: true,
         rangoOk: delPeriodo, calidad, dj: { formulario: elegida.formulario, secuencia: elegida.secuencia, presentacion: elegida.presentacion },
-        conceptosIdentificados: claves, acuse: archivoAcuse ? path.basename(archivoAcuse) : null };
+        conceptosIdentificados: claves, declarado: declarado?.importe ?? null, acuse: archivoAcuse ? path.basename(archivoAcuse) : null };
       intentos.push({ id: servicio.id, dirIntento, clave, resultado });
       sub.push({ sub: mes, filas: conceptos.length, nivel: calidad.nivel, motivo: motivos.join('; ') || undefined, conceptosIdentificados: claves });
       log(`  DJ IVA ${m}/${y}: ${conceptos.length} conceptos con importe · identificados: ${claves.join(', ') || 'ninguno'} · ${calidad.nivel}`);
