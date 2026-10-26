@@ -88,6 +88,24 @@ export function resumenComprobantes(texto, mes) {
   return { comprobantes: n, notasCredito: nc, iva: r2(iva), netoGravado: r2(neto), total: r2(total), porAlicuota, porTipo };
 }
 
+const fechaDma = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—');
+
+/**
+ * Conceptos del débito fiscal que declara la DJ, distintos de cero, para explicar diferencias con el
+ * IVA de los comprobantes emitidos (ventas sin comprobante electrónico, restituciones, etc.). Pura.
+ * Se prefieren los rótulos de pantalla; si no hay, los del JSON. Sin duplicar importes iguales.
+ */
+export function composicionDebito(conceptos) {
+  // Fuera: saldos y el total de crédito (las rutas JSON "debito credito fiscal ..." agrupan ambos).
+  const deb = (conceptos ?? []).filter((c) => /debito/.test(norm(c.concepto)) && !/saldo|total (del )?credito fiscal/.test(norm(c.concepto)) && c.importe);
+  const pantalla = deb.filter((c) => !/^json\b/.test(c.concepto));
+  // Si la pantalla trae solo el total, no explica nada: se suman los rubros del JSON.
+  const base = pantalla.length > 1 ? pantalla : deb;
+  const vistos = new Set(); const out = [];
+  for (const c of base) { const k = `${norm(c.concepto)}|${c.importe}`; if (!vistos.has(k)) { vistos.add(k); out.push(c); } }
+  return out.slice(0, 30);
+}
+
 function textoComprobantes(dirFuente, archivo) {
   const f = path.join(dirFuente, archivo);
   if (/\.zip$/i.test(f)) return leerZipDesdeArchivo(f).filter((e) => /\.csv$/i.test(e.name)).map((e) => decodificar(e.data)).join('\n');
@@ -124,7 +142,7 @@ const fuenteTxt = (id, e) => `${id} (${e?.nivel ?? 'validado'}, ${e?.cuando ?? '
  * Arma el informe de IVA de `mes` ('aaaa-mm') con lo conservado en `datosDir`. Devuelve
  * { objeto, texto } (JSON + Markdown). No toca la red.
  */
-export function generarInformeIva(datosDir, mes) {
+export function generarInformeIva(datosDir, mes, { hoy = new Date().toISOString().slice(0, 10) } = {}) {
   const faltantes = []; const lineas = []; const avisos = [];
   const [y, m] = mes.split('-'); const etiqueta = `${m}/${y}`;
 
@@ -144,7 +162,7 @@ export function generarInformeIva(datosDir, mes) {
   if (ddjj) {
     const t = tablaDe(ddjj.archivos[0]?.texto ?? '', (f) => /concepto/i.test(norm(f[0] ?? '')));
     const conceptos = t.rows.map((f) => ({ concepto: f[0], importe: importeDe(f[1]) })).filter((c) => c.importe != null);
-    declarado = { conceptos, identificados: identificarConceptosIva(conceptos), fuente: fuenteTxt('portal-iva-ddjj', ddjj.entrada) };
+    declarado = { conceptos, identificados: identificarConceptosIva(conceptos), composicionDebito: composicionDebito(conceptos), fuente: fuenteTxt('portal-iva-ddjj', ddjj.entrada) };
   } else faltantes.push(`declarado: no hay detalle de la DJ de IVA ${etiqueta} conservado (fuente portal-iva-ddjj: correr con -Servicios portal-iva-ddjj y el mes)`);
 
   // 3. Presentación (Portal IVA y DJ de Cuentas Tributarias).
@@ -206,14 +224,30 @@ export function generarInformeIva(datosDir, mes) {
     }
   }
 
+  // Vencimiento de PAGO: el que registra Cuentas Tributarias para la deuda del período (o su grilla
+  // de vencimientos). Es el del régimen del contribuyente; no se aplica el calendario general.
+  const vencimientoPago = [...deudas, ...vencimientos].map((v) => fechaIso(v.vencimiento)).find(Boolean) ?? null;
+
   // 7. Conciliación (solo con cifras existentes).
   const id = declarado?.identificados ?? {};
   const saldoAPagar = id.saldoAPagar?.importe ?? null;
   let conciliacion;
   if (saldoAPagar == null) {
     conciliacion = { estado: 'no determinable', detalle: declarado ? 'la DJ conservada no tiene un "saldo a pagar" identificado sin ambigüedad' : 'falta el detalle de la DJ (importe declarado)' };
+  } else if (pagado == null && saldoAPagar === 0) {
+    conciliacion = { estado: 'sin saldo a pagar declarado', detalle: 'la DJ declara saldo a pagar 0' };
   } else if (pagado == null) {
-    conciliacion = { estado: saldoAPagar === 0 ? 'sin saldo a pagar declarado' : 'pago no verificado', detalle: saldoAPagar === 0 ? 'la DJ declara saldo a pagar 0' : 'no hay pagos imputados en las ventanas consultadas' };
+    // Sin pagos imputados. Si Cuentas Tributarias registra la deuda del período, eso acredita que está
+    // pendiente; su fecha es el vencimiento de PAGO del contribuyente (p. ej. IVA diferido a 90 días
+    // de MiPyMEs: septiembre vence en diciembre). No se usa el calendario general.
+    const deuda = r2(deudas.reduce((n, d) => n + (d.saldo ?? 0), 0));
+    if (deudas.length && deuda > 0) {
+      const vence = vencimientoPago;
+      const estado = !vence ? 'pendiente de pago' : vence < hoy ? 'pendiente de pago (vencido)' : 'pendiente de pago (no vencido)';
+      conciliacion = { estado, detalle: `declarado; sin pago registrado en las ventanas consultadas; Cuentas Tributarias registra la deuda por ${fmt(deuda)}${Math.abs(deuda - saldoAPagar) < 1 ? ' (igual a lo declarado)' : ` (distinta de lo declarado: ${fmt(saldoAPagar)})`}${vence ? `; vence el ${fechaDma(vence)} según Cuentas Tributarias` : ''}`, saldoPendiente: deuda };
+    } else {
+      conciliacion = { estado: 'pago no verificado', detalle: 'no hay pagos imputados en las ventanas consultadas ni deuda registrada que lo confirme' };
+    }
   } else {
     const dif = r2(saldoAPagar - pagado);
     conciliacion = Math.abs(dif) < 1 ? { estado: 'conciliado', detalle: 'saldo declarado = pagos imputados (Cuentas Tributarias)' }
@@ -229,7 +263,7 @@ export function generarInformeIva(datosDir, mes) {
   }
 
   const objeto = { periodo: mes, comprobantes: comp, declarado, presentaciones, pagos, pagado, ventanasPagos, retenciones, retencionesIva: retIva, otrasRetenciones: otrasRet,
-    vencimientos, deudas, conciliacion, avisos, faltantes };
+    vencimientos, deudas, vencimientoPago, conciliacion, avisos, faltantes };
 
   // Markdown.
   const md = [`# IVA ${etiqueta} · FiscalOS`, '', 'Armado con los datos conservados (out/datos). Cada cifra indica su fuente y nivel. Nada se completa a mano ni se estima.', ''];
@@ -251,6 +285,10 @@ export function generarInformeIva(datosDir, mes) {
   md.push('', '## Declarado (detalle de la DJ, Portal IVA)', '');
   if (declarado) {
     for (const [k, v] of Object.entries(declarado.identificados)) md.push(`- ${k}: ${v.ambiguo ? `AMBIGUO (${v.ambiguo.map((a) => `${a.concepto} ${fmt(a.importe)}`).join(' / ')})` : `${fmt(v.importe)} — "${v.concepto}"`}`);
+    if (declarado.composicionDebito.length) {
+      md.push('- composición del débito según la DJ (conceptos distintos de cero):');
+      for (const c of declarado.composicionDebito) md.push(`  - ${c.concepto}: ${fmt(c.importe)}`);
+    }
     md.push(`- conceptos leídos: ${declarado.conceptos.length} · ${declarado.fuente}`);
   } else md.push('- falta (ver faltantes)');
   md.push('', '## Presentación', '');
@@ -264,6 +302,7 @@ export function generarInformeIva(datosDir, mes) {
   md.push('  - Aplicables a la DJ según su régimen: se informan, no se descuentan automáticamente.');
   if (otrasRet.length) md.push(`- otras (no IVA): ${otrasRet.map((r) => `${r.codigo} ${fmt(r.importe)}`).join(' · ')}`);
   md.push('', '## Vencimiento y deuda registrada (Cuentas Tributarias)', '');
+  if (vencimientoPago) md.push(`- vencimiento de pago (según Cuentas Tributarias, régimen del contribuyente): ${fechaDma(vencimientoPago)}`);
   for (const v of vencimientos) md.push(`- vencimiento: ${v.vencimiento ?? '?'} (${v.concepto ?? ''})`);
   for (const d of deudas) md.push(`- deuda: saldo ${fmt(d.saldo)} · vence ${d.vencimiento ?? '?'} (${d.concepto ?? ''})`);
   if (!vencimientos.length && !deudas.length) md.push('- sin registros de IVA para el período');

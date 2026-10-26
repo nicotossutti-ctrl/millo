@@ -201,6 +201,29 @@ en `analisis-ddjj-iva-AAAA-MM.txt` (local) y, si queda validada, la conserva.
 
 Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 
+### FiscalOS V1: la aplicación
+
+`fiscalos.ps1 app` (o `npm run arca -- app`) abre FiscalOS en el navegador, en `http://127.0.0.1:4321`.
+Solo escucha en esta computadora y no abre ARCA: muestra lo conservado en `out/datos` y lo importado
+en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en el escritorio.
+
+- **Impuestos del mes** (por defecto, el mes anterior): IVA, Ingresos Brutos, Ganancias y autónomos
+  con declarado, estimado, pagos, saldo pendiente, vencimiento de presentación y de pago. Cada cifra
+  dice si está *verificada* (ARCA), *importada* (archivo tuyo), *estimada* (con sus supuestos) o
+  *faltante* (y cómo obtenerla). El vencimiento de pago del IVA es el que registra Cuentas
+  Tributarias para el régimen del contribuyente (p. ej. IVA diferido a 90 días); no se aplica el
+  calendario general.
+- **Rentabilidad**: facturación neta − costo de mercadería − comisiones, publicidad, logística y
+  gastos − Ingresos Brutos − provisión de Ganancias. El IVA **no** se resta: va en "caja fiscal".
+  Sin costo de mercadería no se muestra resultado.
+- **Obligaciones**: vencimientos y deudas registrados en Cuentas Tributarias.
+- **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
+  (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
+  importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
+- **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
+- Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
+- PFOS: no está conectado; el contrato para conectarlo está en `src/app/integraciones.js`.
+
 ### Windows: un solo script, sin Git
 
 `fiscalos.ps1` instala, actualiza, inicia sesión y ejecuta, sin necesitar Git:

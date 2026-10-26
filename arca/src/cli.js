@@ -13,6 +13,14 @@ import { ejecutarTodo } from './portal/orquestador.js';
 import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
 import { reprocesarDjIva } from './reprocesarDj.js';
+import { iniciarServidor } from './app/servidor.js';
+import { spawn } from 'node:child_process';
+
+/** Abre la URL en el navegador predeterminado (sin esperar). */
+function abrirNavegador(url) {
+  const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); } catch { /* sin navegador: queda la URL en consola */ }
+}
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -34,6 +42,11 @@ Comandos:
   estimar --anio 2026 --meses out/meses.csv [--proyeccion 60000000] [--out out/estimacion.csv]
                                 Provisión mensual de IIBB, autónomos y Ganancias; "ganancia real" por mes.
                                 meses.csv: Mes;Ventas netas;Gastos netos. Usa params/contribuyente.json
+
+Aplicación (interfaz en el navegador, local, sin abrir ARCA):
+  app [--puerto 4321] [--no-abrir]
+                                Panel fiscal por mes (IVA, IIBB, Ganancias, obligaciones, rentabilidad) con
+                                los datos conservados e importados; importación de CSV/Excel. Solo 127.0.0.1.
 
 Informes (sin abrir ARCA, con los datos conservados en out/datos):
   informe:iva --periodo AAAA-MM  IVA del mes: comprobantes, declarado (DJ), pagado, retenciones, presentación,
@@ -88,6 +101,8 @@ const { values: o, positionals } = parseArgs({
     rehacer: { type: 'boolean', default: false },
     servicios: { type: 'string' },
     periodo: { type: 'string' },
+    puerto: { type: 'string' },
+    'no-abrir': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -145,6 +160,16 @@ try {
     console.log(r.texto);
     console.error(`\nInforme guardado en ${r.archivo}`);
     process.exit(0);
+  }
+
+  if (cmd === 'app') {
+    const cfg = loadConfig({ requireAuth: false });
+    const puerto = Number(o.puerto ?? 4321);
+    if (!(puerto > 0 && puerto < 65536)) throw new Error('--puerto inválido');
+    const { url } = await iniciarServidor({ outDir: cfg.outDir ?? 'out', puerto });
+    console.error(`FiscalOS está abierto en ${url}  (dejá esta ventana abierta; Ctrl+C para cerrar)`);
+    if (!o['no-abrir']) abrirNavegador(url);
+    await new Promise(() => {}); // el servidor mantiene vivo el proceso hasta Ctrl+C
   }
 
   if (cmd === 'dj:iva') {

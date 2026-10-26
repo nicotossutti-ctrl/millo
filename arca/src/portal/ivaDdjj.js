@@ -135,14 +135,28 @@ const CLAVES = [
   ['retencionesPercepciones', /total.*(retenciones|percepciones)/],
 ];
 
-/** Identifica los conceptos clave. Devuelve { clave: { importe, concepto } | { ambiguo: [...] } }. Pura. */
+const esDeJson = (c) => c.origen === 'json' || /^json\b/.test(String(c.concepto ?? ''));
+
+/**
+ * Identifica los conceptos clave. Devuelve { clave: { importe, concepto, json } | { ambiguo: [...] } }. Pura.
+ * Manda la PANTALLA de la DJ (corrida 2026-10-26T20-56-15): sus rótulos son los totales que firma el
+ * contribuyente ("Total del crédito fiscal del período", "Total de retenciones, percepciones y pagos
+ * a cuenta neto de restituciones"), mientras que el JSON trae además subtotales con nombres parecidos
+ * (total de percepciones sin neto de restituciones, rutas "debito credito fiscal total debito fiscal").
+ * Si la pantalla da un único valor, ese es; los valores del JSON quedan como corroboración
+ * (json: 'coincide' | 'difiere' | null). Sin pantalla, se usa el JSON; ambiguo si da valores distintos.
+ */
 export function identificarConceptosIva(conceptos) {
   const out = {};
   for (const [clave, re, excluye] of CLAVES) {
     const hits = (conceptos ?? []).filter((c) => re.test(norm(c.concepto)) && !(excluye && excluye.test(norm(c.concepto))));
-    const distintos = [...new Set(hits.map((h) => h.importe))];
     if (!hits.length) continue;
-    out[clave] = distintos.length === 1 ? { importe: hits[0].importe, concepto: hits[0].concepto } : { ambiguo: hits };
+    const pantalla = hits.filter((h) => !esDeJson(h)); const json = hits.filter(esDeJson);
+    const base = pantalla.length ? pantalla : json;
+    const distintos = [...new Set(base.map((h) => h.importe))];
+    if (distintos.length !== 1) { out[clave] = { ambiguo: hits }; continue; }
+    const corrob = pantalla.length && json.length ? (json.some((j) => j.importe === distintos[0]) ? 'coincide' : 'difiere') : null;
+    out[clave] = { importe: base[0].importe, concepto: base[0].concepto, json: corrob, ...(corrob === 'difiere' ? { difiere: json } : {}) };
   }
   return out;
 }
@@ -160,11 +174,13 @@ export function analizarDj(texto, jsons, mes) {
   const claves = Object.entries(ident).filter(([, v]) => v.importe != null).map(([k]) => k);
   const delPeriodo = textoEsDelPeriodo(texto, mes);
   const saldo = ident.saldoAPagar ?? null;
-  const declarado = saldo?.importe != null ? { importe: saldo.importe, concepto: saldo.concepto } : null;
+  // El importe declarado es estricto: si la pantalla y el JSON dan valores distintos, no se valida.
+  const declarado = saldo?.importe != null && saldo.json !== 'difiere' ? { importe: saldo.importe, concepto: saldo.concepto } : null;
   const validado = delPeriodo && !!declarado;
   const motivos = [];
   if (!delPeriodo) motivos.push(`la vista abierta no menciona el período ${m}/${y}: no se puede asegurar que sea esa DJ`);
   if (!conceptos.length) motivos.push('la vista no tiene conceptos con importe legibles (¿abrió un PDF?)');
+  else if (saldo?.json === 'difiere') motivos.push(`saldo a pagar AMBIGUO: la pantalla dice ${saldo.importe} y los datos JSON ${[...new Set(saldo.difiere.map((a) => a.importe))].slice(0, 4).join(' / ')}`);
   else if (saldo?.ambiguo) motivos.push(`saldo a pagar AMBIGUO: ${saldo.ambiguo.length} conceptos con importes distintos (${[...new Set(saldo.ambiguo.map((a) => a.importe))].slice(0, 4).join(' / ')})`);
   else if (!declarado) motivos.push('no se identificó el saldo a pagar (saldo de impuesto a favor de ARCA) por su nombre');
   const calidad = { nivel: validado ? 'validado' : conceptos.length ? 'obtenido' : 'sin-datos', validado, apto: false, motivos };

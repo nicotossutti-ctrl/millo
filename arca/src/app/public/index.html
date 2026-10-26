@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FiscalOS</title>
+  <link rel="stylesheet" href="/estilos.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">
+      <strong>FiscalOS</strong>
+      <span class="sub">Panel fiscal mensual · datos locales</span>
+    </div>
+    <div class="mes">
+      <button id="mes-ant" class="icono" title="Mes anterior" aria-label="Mes anterior">‹</button>
+      <select id="mes" aria-label="Mes de facturación"></select>
+      <button id="mes-sig" class="icono" title="Mes siguiente" aria-label="Mes siguiente">›</button>
+    </div>
+  </header>
+
+  <nav class="pestanas" role="tablist">
+    <button role="tab" data-pestana="impuestos" class="activa">Impuestos del mes</button>
+    <button role="tab" data-pestana="rentabilidad">Rentabilidad</button>
+    <button role="tab" data-pestana="obligaciones">Obligaciones</button>
+    <button role="tab" data-pestana="importar">Importar archivo</button>
+    <button role="tab" data-pestana="simulador">Simulador</button>
+  </nav>
+
+  <p class="leyenda">
+    <span class="nivel verificado">verificado</span> leído de ARCA y validado
+    <span class="nivel importado">importado</span> de un archivo tuyo
+    <span class="nivel estimado">estimado</span> cálculo con supuestos
+    <span class="nivel faltante">faltante</span> no hay dato
+  </p>
+
+  <main>
+    <section id="impuestos" class="pestana activa"></section>
+    <section id="rentabilidad" class="pestana"></section>
+    <section id="obligaciones" class="pestana"></section>
+    <section id="importar" class="pestana"></section>
+    <section id="simulador" class="pestana"></section>
+  </main>
+
+  <footer>FiscalOS trabaja solo con lo que ya está en tu computadora (out/datos y out/importados). No abre ARCA ni envía datos a internet.</footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

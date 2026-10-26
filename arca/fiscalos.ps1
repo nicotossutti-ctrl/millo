@@ -8,9 +8,11 @@
 #   .\fiscalos.ps1 correr -Servicios cuentas-tributarias,ct-deudas   Prueba solo esas fuentes.
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
 #   .\fiscalos.ps1 informe-iva -Periodo 2026-09   Informe de IVA del mes con los datos ya conservados (no abre ARCA).
+#   .\fiscalos.ps1 app            Abre FiscalOS en el navegador (panel por mes, rentabilidad, importar archivos).
+#   .\fiscalos.ps1 acceso-directo Crea un acceso directo "FiscalOS" en el escritorio que abre la app.
 #   .\fiscalos.ps1 reprocesar-dj -Periodo 2026-09 Vuelve a leer la DJ de IVA del mes con la ultima captura ya bajada (no abre ARCA).
 param(
-  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj')]
+  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj','app','acceso-directo')]
   [string]$Accion = 'correr',
   [string]$Desde,
   [string]$Hasta,
@@ -107,6 +109,27 @@ function Reprocesar-Dj {
   try { Correr-Paso "DJ de IVA $Periodo (reinterpretacion local)" 'npm.cmd' @('run','arca','--','dj:iva','--periodo',$Periodo) } finally { Pop-Location }
 }
 
+function App {
+  Push-Location $Raiz
+  try {
+    Write-Host '>> FiscalOS se abre en el navegador. Dejá esta ventana abierta mientras lo usás; para cerrarlo, Ctrl+C.' -ForegroundColor Cyan
+    & npm.cmd run arca -- app
+  } finally { Pop-Location }
+}
+
+function Acceso-Directo {
+  $escritorio = [Environment]::GetFolderPath('Desktop')
+  $lnk = Join-Path $escritorio 'FiscalOS.lnk'
+  $shell = New-Object -ComObject WScript.Shell
+  $a = $shell.CreateShortcut($lnk)
+  $a.TargetPath = 'powershell.exe'
+  $a.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Raiz\fiscalos.ps1`" app"
+  $a.WorkingDirectory = $Raiz
+  $a.Description = 'FiscalOS: panel fiscal mensual'
+  $a.Save()
+  Write-Host "Acceso directo creado: $lnk" -ForegroundColor Green
+}
+
 function Abrir-Informe {
   $puntero = Join-Path $Raiz 'out\corridas\ultima.txt'
   if (Test-Path $puntero) {
@@ -137,4 +160,6 @@ switch ($Accion) {
   'abrir-informe' { Abrir-Informe }
   'informe-iva' { Informe-Iva }
   'reprocesar-dj' { Reprocesar-Dj }
+  'app'           { App }
+  'acceso-directo' { Acceso-Directo }
 }
