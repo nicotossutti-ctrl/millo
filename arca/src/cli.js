@@ -11,6 +11,7 @@ import { diagnosticar, inspeccionarPortal, limpiar, SERVICIOS } from './portal/d
 import { descargarMisComprobantes, diagnosticoMisComprobantes, pruebaConsulta } from './portal/misComprobantes.js';
 import { ejecutarTodo } from './portal/orquestador.js';
 import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
+import { escribirInformeIva } from './informeIva.js';
 
 const USO = `Uso: npm run arca -- <comando> [opciones]
 
@@ -30,6 +31,10 @@ Comandos:
   estimar --anio 2026 --meses out/meses.csv [--proyeccion 60000000] [--out out/estimacion.csv]
                                 Provisión mensual de IIBB, autónomos y Ganancias; "ganancia real" por mes.
                                 meses.csv: Mes;Ventas netas;Gastos netos. Usa params/contribuyente.json
+
+Informes (sin abrir ARCA, con los datos conservados en out/datos):
+  informe:iva --periodo AAAA-MM  IVA del mes: comprobantes, declarado (DJ), pagado, retenciones, presentación,
+                                vencimiento y deuda; conciliación solo con cifras existentes y validadas.
 
 Portal (sesión autenticada con navegador, sin certificado):
   portal:login [--visible]      Inicia sesión en el portal y guarda las cookies en .sesion/. Sin ARCA_CLAVE
@@ -77,6 +82,7 @@ const { values: o, positionals } = parseArgs({
     'sin-capturas': { type: 'boolean', default: false },
     rehacer: { type: 'boolean', default: false },
     servicios: { type: 'string' },
+    periodo: { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -122,6 +128,17 @@ try {
       console.log(`\nProyección anual neta: ${f(u.proyeccionAnual)}  Ganancias anual proyectado: ${f(u.impuestoAnualProyectado)}  Provisionado a la fecha: ${f(u.gananciasAcumulada)}`);
       console.error(`-> ${file}`);
     }
+    process.exit(0);
+  }
+
+  if (cmd === 'informe:iva') {
+    // No abre ARCA: usa solo lo conservado en out/datos.
+    const cfg = loadConfig({ requireAuth: false });
+    const mes = need('periodo');
+    if (!/^\d{4}-\d{2}$/.test(mes)) throw new Error('--periodo tiene que ser AAAA-MM (p. ej. 2026-09)');
+    const r = escribirInformeIva(cfg.outDir ?? 'out', mes);
+    console.log(r.texto);
+    console.error(`\nInforme guardado en ${r.archivo}`);
     process.exit(0);
   }
 

@@ -7,14 +7,16 @@
 #   .\fiscalos.ps1 correr -Rehacer    Vuelve a descargar periodos ya verificados.
 #   .\fiscalos.ps1 correr -Servicios cuentas-tributarias,ct-deudas   Prueba solo esas fuentes.
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
+#   .\fiscalos.ps1 informe-iva -Periodo 2026-09   Informe de IVA del mes con los datos ya conservados (no abre ARCA).
 param(
-  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe')]
+  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva')]
   [string]$Accion = 'correr',
   [string]$Desde,
   [string]$Hasta,
   [switch]$Rehacer,
   [switch]$Oculto,
-  [string]$Servicios
+  [string]$Servicios,
+  [string]$Periodo
 )
 $ErrorActionPreference = 'Stop'
 $Rama = 'claude/elegant-gauss-djpghk'
@@ -90,6 +92,14 @@ function Correr {
   Abrir-Informe
 }
 
+function Informe-Iva {
+  if (-not $Periodo) { Fallar 'Indicá el mes con -Periodo AAAA-MM (por ejemplo -Periodo 2026-09).' }
+  Push-Location $Raiz
+  try { Correr-Paso "Informe de IVA $Periodo" 'npm.cmd' @('run','arca','--','informe:iva','--periodo',$Periodo) } finally { Pop-Location }
+  $md = Join-Path $Raiz "out\informes\iva-$Periodo.md"
+  if (Test-Path $md) { Write-Host "`nInforme: $md" -ForegroundColor Green; notepad $md }
+}
+
 function Abrir-Informe {
   $puntero = Join-Path $Raiz 'out\corridas\ultima.txt'
   if (Test-Path $puntero) {
@@ -118,4 +128,5 @@ switch ($Accion) {
   'correr'        { Correr }
   'test'          { Test }
   'abrir-informe' { Abrir-Informe }
+  'informe-iva' { Informe-Iva }
 }

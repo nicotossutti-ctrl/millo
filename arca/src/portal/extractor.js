@@ -21,7 +21,8 @@ import { sanitizarTexto } from './diagnostico.js';
 import { toCsv } from '../csv.js';
 import { verificarFechas, resumenEstados } from './calidad.js';
 
-export const PROHIBIDO = /presentar|pagar|generar vep|\bvep\b|enviar|confirmar|eliminar|anular|modificar|dar de baja|adherir|solicitar plan/i;
+// "rectific": Portal IVA tiene un botón RECTIFICAR por cada DJ presentada (diagnóstico 2026-10-25).
+export const PROHIBIDO = /presentar|pagar|generar vep|\bvep\b|enviar|confirmar|eliminar|anular|modificar|rectific|dar de baja|adherir|solicitar plan/i;
 /** true si un control no debe tocarse por ser de trámite, pago, emisión o modificación. */
 export const esProhibido = (texto) => PROHIBIDO.test(texto ?? '');
 

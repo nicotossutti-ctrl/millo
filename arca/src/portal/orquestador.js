@@ -14,6 +14,7 @@ import { slug } from './servicios.js';
 import { evaluarCalidad, esGrillaAjena, estadoInforme } from './calidad.js';
 import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
 import { generarMatrizCobertura } from './coberturaHistorica.js';
+import { correrIvaDdjj } from './ivaDdjj.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
 
@@ -421,6 +422,7 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
     if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
     if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log, ctx);
     if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'iva-ddjj') return correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx);
     return correrGenerico(sesion, servicio, dir, periodo, log, ctx);
   });
   try {

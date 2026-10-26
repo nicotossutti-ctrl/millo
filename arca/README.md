@@ -184,6 +184,15 @@ cuáles solo tienen evidencia sin validar (no tapa huecos), cuáles faltan y qu�
 histórico completo). Con `FISCALOS_HISTORICO_DESDE=aaaa-mm` en `.env` los faltantes se cuentan
 desde esa fecha; si no, desde el primer mes validado.
 
+**Informe de IVA** (`informe:iva --periodo AAAA-MM`, o `fiscalos.ps1 informe-iva -Periodo AAAA-MM`). No
+abre ARCA: usa solo lo conservado. Muestra el IVA de los comprobantes emitidos (débito) y recibidos
+(IVA facturado por proveedores, que no es crédito computable), lo **declarado** (detalle de la DJ que
+la fuente `portal-iva-ddjj` lee de Portal IVA con "Ver declaración jurada"; también guarda el acuse),
+lo **pagado** (pagos de Cuentas Tributarias imputados a IVA del período), las retenciones de IVA,
+la presentación, el vencimiento y la deuda registrada. El saldo pendiente solo se calcula con cifras
+existentes; "conciliado" solo si el saldo declarado coincide con los pagos. Lo que falta se lista con
+cómo obtenerlo. El IVA de un mes se paga al mes siguiente: los pagos se consultan con esas fechas.
+
 Los errores guardados y mostrados se sanean: nunca exponen CUIT, importes, cookies ni tokens.
 
 ### Windows: un solo script, sin Git

@@ -152,6 +152,11 @@ export const SERVICIOS = [
   { id: 'portal-iva', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: 3, confirmado: false, extractor: 'generico',
     ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }, { hash: '#/declaraciones.anteriores' }],
     columnasEsperadas: ['Periodo', 'Formulario', 'Secuencia', 'Presentacion'] },
+  // Detalle (importes) de la DJ de IVA de cada mes del período: misma lista de Portal IVA, pero
+  // abre "Ver declaración jurada" de la DJ vigente del mes y lee sus conceptos; además descarga el
+  // acuse como comprobante local. Generar VEP y Rectificar están vetados. Ver ivaDdjj.js.
+  { id: 'portal-iva-ddjj', nombre: 'PORTAL IVA', terminos: ['PORTAL IVA'], fuente: '3-DJ', confirmado: false, extractor: 'iva-ddjj',
+    ruta: [{ selector: 'button[aria-label*="declaraciones.anteriores"]' }, { hash: '#/declaraciones.anteriores' }] },
   // Ganancias (GPH): la portada (diagnóstico 23-51-59) solo ofrece CREAR DJ (tarjetas; el CONTINUAR
   // lleva al F711 = presentación, VETADO). No expone consulta de DJ presentadas. No ruteamos a
   // ciegas: queda relevado. Sus DJ presentadas y pagos salen por Cuentas Tributarias (ct-ddjj/pagos).
