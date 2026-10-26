@@ -109,6 +109,8 @@ function datosDePrueba({ ddjj = true, pagos = 'octubre', deuda = 0 } = {}) {
   }
   if (ddjj) vig('portal-iva-ddjj', '2026-09-01_2026-09-30', 'ddjj-iva-2026-09.csv', ['Concepto', 'Importe'],
     [['Total Débito Fiscal', 2100], ['Total Crédito Fiscal', 1050], ['Saldo de impuesto a favor de ARCA', 1050]], { desde: '2026-09-01', hasta: '2026-09-30' });
+  vig('ct-ddjj', 'acumulado', 'ct-ddjj.csv', ['Fecha Operación', 'Est.', 'Formulario', 'Versión', 'Impuesto', 'Periodo', 'Descripción', 'Observaciones'],
+    [['16/10/2026 10:31', '0', '2051', '100', '30 - IVA', '20260900', 'Comprobante general', 'VALIDO']]);
   vig('portal-iva', 'acumulado', 'portal-iva.csv', ['Período Fiscal', 'Formulario', 'Secuencia', 'Presentación'], [['09/2026', '2051', 'DJ Original', '16/10/2026'], ['08/2026', '2051', 'DJ Original', '16/09/2026']]);
   if (pagos) {
     const clave = pagos === 'octubre' ? '2026-10-01_2026-10-25' : '2026-09-01_2026-09-30';
@@ -134,6 +136,7 @@ test('informe IVA: conciliado cuando el saldo declarado coincide con los pagos i
   assert.equal(objeto.conciliacion.estado, 'conciliado');
   assert.equal(objeto.retencionesIva, 50);
   assert.equal(objeto.presentaciones[0].presentacion, '16/10/2026');
+  assert.ok(objeto.presentaciones.some((p) => /ct-ddjj/.test(p.fuente) && p.formulario === '2051'), 'la DJ de Cuentas Tributarias con período AAAAMM00');
   assert.equal(objeto.vencimientos[0].vencimiento, '20/10/2026');
   assert.match(texto, /IVA facturado por proveedores \(no es crédito fiscal computable\)/);
   assert.match(texto, /\*\*CONCILIADO\*\*/);
@@ -152,4 +155,20 @@ test('informe IVA: sin detalle de DJ -> no determinable; sin pagos posteriores -
   const vacio = generarInformeIva(tmp(), '2026-09').objeto;
   assert.equal(vacio.conciliacion.estado, 'no determinable');
   assert.ok(vacio.faltantes.length >= 4);
+});
+
+test('periodoDe acepta el período de 8 dígitos de Cuentas Tributarias (AAAAMM00)', () => {
+  assert.equal(periodoDe('20260900'), '2026-09');
+  assert.equal(periodoDe('20261300'), null);
+});
+
+test('conceptosDeJson: la DJ leída de los datos que carga la app (claves camelCase en palabras)', async () => {
+  const { conceptosDeJson } = await import('../src/portal/ivaDdjj.js');
+  const json = { periodo: 202609, liquidacion: { totalDebitoFiscal: 250000, totalCreditoFiscal: 180000.5, saldoTecnicoAFavorAfip: 69999.5, saldoAFavorAfip: 59999.5 }, codigos: [1, 2] };
+  const c = conceptosDeJson(json, 'json');
+  assert.ok(c.find((x) => x.concepto === 'json liquidacion saldo a favor afip' && x.importe === 59999.5));
+  const id = identificarConceptosIva(c);
+  assert.equal(id.saldoAPagar.importe, 59999.5, 'saldoAFavorAfip, sin confundir con el saldo técnico');
+  assert.equal(id.saldoTecnicoAFavorArca.importe, 69999.5);
+  assert.equal(id.debitoFiscal.importe, 250000);
 });

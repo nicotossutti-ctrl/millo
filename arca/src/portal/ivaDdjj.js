@@ -32,7 +32,28 @@ export function periodoDe(texto) {
   if (m) return `${m[1]}-${m[2].padStart(2, '0')}`;
   m = s.match(/^(\d{4})(\d{2})$/);
   if (m) return `${m[1]}-${m[2]}`;
+  // Cuentas Tributarias informa el período con 8 dígitos: AAAAMM00 (CSV de DJ, corrida 2026-10-26).
+  m = s.match(/^(\d{4})(\d{2})\d{2}$/);
+  if (m && Number(m[2]) >= 1 && Number(m[2]) <= 12) return `${m[1]}-${m[2]}`;
   return null;
+}
+
+/**
+ * Valores numéricos de una respuesta JSON como conceptos: la ruta de claves en palabras
+ * ("liquidacion.saldoAFavorAfip" -> "liquidacion saldo a favor afip") y el importe. Pura.
+ * Sirve para leer la DJ de los datos que la aplicación de ARCA carga al abrirla.
+ */
+export function conceptosDeJson(json, prefijo = '') {
+  const out = [];
+  // camelCase en palabras, incluida la mayúscula suelta: "saldoAFavorAfip" -> "saldo a favor afip".
+  const palabras = (k) => String(k).replace(/([a-z\d])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/[_.]+/g, ' ').toLowerCase();
+  const visitar = (v, ruta) => {
+    if (typeof v === 'number' && Number.isFinite(v)) out.push({ concepto: ruta.trim(), importe: v, origen: 'json' });
+    else if (Array.isArray(v)) v.forEach((x, i) => visitar(x, `${ruta} ${i}`));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) visitar(x, `${ruta} ${palabras(k)}`);
+  };
+  visitar(json, prefijo);
+  return out;
 }
 
 /** "1.234.567,89" / "$ -1.234,50" / "1234,5" -> número; null si no es un importe. */
@@ -66,10 +87,11 @@ export function parsearConceptos(texto) {
 // una vez con importes distintos, queda AMBIGUO y no se usa para calcular.
 // El tercer elemento excluye: el saldo TÉCNICO a favor de ARCA no es el saldo a pagar.
 const CLAVES = [
-  ['saldoAPagar', /saldo.*(a favor de (arca|afip|la agencia|el fisco)|a pagar|impuesto a ingresar)/, /tecnico|libre disponibilidad/],
+  // "de" opcional: los nombres de campo de los JSON de ARCA vienen como "saldoAFavorAfip".
+  ['saldoAPagar', /saldo.*(a favor (de )?(la |el )?(arca|afip|agencia|fisco)|a pagar|impuesto a ingresar)/, /tecnico|libre disponibilidad/],
   ['saldoLibreDisponibilidad', /saldo.*libre disponibilidad/],
-  ['saldoTecnicoAFavorResponsable', /saldo tecnico.*a favor (del|de la) responsable/],
-  ['saldoTecnicoAFavorArca', /saldo tecnico.*a favor de (arca|afip|la agencia)/],
+  ['saldoTecnicoAFavorResponsable', /saldo tecnico.*a favor (del |de la )?(responsable|contribuyente)/],
+  ['saldoTecnicoAFavorArca', /saldo tecnico.*a favor (de )?(la )?(arca|afip|agencia|fisco)/],
   ['debitoFiscal', /total.*debito fiscal|debito fiscal total/],
   ['creditoFiscal', /total.*credito fiscal|credito fiscal total/],
   ['retencionesPercepciones', /total.*(retenciones|percepciones)/],
@@ -144,6 +166,22 @@ export function textoEsDelPeriodo(texto, mes) {
   return t.includes(`${m}/${y}`) || t.includes(`${y}${m}`) || t.includes(`${y}-${m}`) || t.includes(`${y}/${m}`);
 }
 
+/** Único botón que se usa para avanzar en la vista de la DJ: texto exacto CONTINUAR o SIGUIENTE. */
+async function botonContinuar(p) {
+  for (const f of p.frames()) {
+    const b = f.locator('button, [role=button], input[type=button], input[type=submit]').filter({ hasText: /^\s*(continuar|siguiente)\s*$/i });
+    const n = Math.min(await b.count().catch(() => 0), 5);
+    for (let i = 0; i < n; i++) {
+      const it = b.nth(i);
+      if (!(await it.isVisible().catch(() => false)) || !(await it.isEnabled().catch(() => false))) continue;
+      const txt = ((await it.innerText().catch(() => '')) || '').trim();
+      if (!/^(continuar|siguiente)$/i.test(txt) || esProhibido(txt)) continue;
+      return it;
+    }
+  }
+  return null;
+}
+
 async function textoDePagina(p) {
   const partes = [];
   for (const f of p.frames()) partes.push(await f.evaluate(() => document.body?.innerText ?? '').catch(() => ''));
@@ -202,8 +240,21 @@ export async function correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx = {
         }
       }
 
-      // Vista de la DJ: puede abrir pestaña nueva o mostrarse en la misma página (modal/ruta).
+      // Vista de la DJ (corrida 2026-10-26): abre la app F.2051 "IVA SIMPLE" en una pestaña nueva, en
+      // modo consulta de la DJ presentada, en el paso "Datos iniciales"; los importes están en los
+      // pasos siguientes. Se registran (solo lectura) las respuestas JSON que la app recibe de ARCA
+      // y se avanza paso a paso SOLO con "CONTINUAR", leyendo cada pantalla.
       const ctxNav = typeof p.context === 'function' ? p.context() : null;
+      const jsons = [];
+      const alResponder = async (resp) => {
+        try {
+          if (jsons.length >= 40) return;
+          const u = resp.url();
+          if (!/siapweb|afip\.gob\.ar|arca\.gob\.ar/.test(u) || !/json/i.test(resp.headers()['content-type'] ?? '')) return;
+          jsons.push({ url: u.split('?')[0], json: await resp.json() });
+        } catch { /* respuesta no JSON o ya liberada */ }
+      };
+      ctxNav?.on?.('response', alResponder);
       const [nueva] = await Promise.all([
         ctxNav?.waitForEvent?.('page', { timeout: 10000 }).catch(() => null) ?? Promise.resolve(null),
         ver.click(),
@@ -211,13 +262,27 @@ export async function correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx = {
       const vista = nueva ?? p;
       await vista.waitForLoadState?.('networkidle').catch(() => {});
       await vista.waitForTimeout?.(4000);
-      const texto = await textoDePagina(vista);
+      const pasos = [await textoDePagina(vista)];
+      for (let i = 0; i < 15; i++) {
+        const sig = await botonContinuar(vista);
+        if (!sig) break;
+        await sig.click().catch(() => {});
+        await vista.waitForLoadState?.('networkidle').catch(() => {});
+        await vista.waitForTimeout?.(2500);
+        const t = await textoDePagina(vista);
+        if (t === pasos.at(-1)) break; // no avanzó
+        pasos.push(t);
+      }
+      ctxNav?.off?.('response', alResponder);
+      log(`  vista de la DJ: ${pasos.length} paso(s) leídos, ${jsons.length} respuesta(s) JSON de ARCA`);
+      const texto = pasos.join('\n\n----- paso -----\n\n');
       const estructura = await relevarTodasLasPaginas(sesion, vista).catch(() => []);
       fs.mkdirSync(dirIntento, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(dir, `estructura-ddjj-${mes}.json`), JSON.stringify(estructura, null, 2), { mode: 0o600 });
       // El texto de la vista tiene importes: queda SOLO local, en la carpeta de datos (no en la corrida).
       fs.writeFileSync(path.join(dirIntento, `vista-ddjj-iva-${mes}.txt`), texto, { mode: 0o600 });
-      const conceptos = parsearConceptos(texto);
+      if (jsons.length) fs.writeFileSync(path.join(dirIntento, `datos-ddjj-iva-${mes}.json`), JSON.stringify(jsons, null, 2), { mode: 0o600 });
+      const conceptos = [...parsearConceptos(texto), ...jsons.flatMap((j) => conceptosDeJson(j.json, 'json'))];
       const csvNombre = `ddjj-iva-${mes}.csv`;
       fs.writeFileSync(path.join(dirIntento, csvNombre), toCsv(conceptos, [{ header: 'Concepto', value: (c) => c.concepto }, { header: 'Importe', value: (c) => c.importe }]), { mode: 0o600 });
       const ident = identificarConceptosIva(conceptos);
