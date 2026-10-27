@@ -54,16 +54,22 @@ export function armarMes({ mes, datos, comunes, textosArca, generado = new Date(
   const unidades = vendido.unidades;
 
   const lineas = {};
-  // Costo de la mercadería vendida, sin IVA (PALERMO responsable inscripto).
+  // Costo de la mercadería vendida, sin IVA (PALERMO responsable inscripto). Lo que no se pudo costear no es cero: el importe
+  // suma una estimación explícita de lo faltante (con su método a la vista) y solo puede ser completo con el 95 % de las
+  // unidades costeadas Y esa estimación calculada; si no, queda como referencia.
   {
+    const falt = vendido.faltante;
     const faltan = [];
     if (!ordenesCompletas) faltan.push(`ventas de ${diasOrdenes.faltan.length} día(s) sin recolección completa en PFOS${alCorte}`);
     if ((vendido.cobertura ?? 0) < MINIMOS.costo) faltan.push(`solo ${pct(vendido.cobertura)} de las unidades tiene costo (mínimo ${MINIMOS.costo} %)`);
+    if (falt.unidades && falt.estimado == null) faltan.push(`${falt.unidades} unidad(es) sin costo que no se pueden estimar (${falt.unidadesSinPrecio ? `${falt.unidadesSinPrecio} sin precio de venta` : 'no hay unidades costeadas para tomar la relación'})`);
     if (devueltas.sinCostear) faltan.push(`${devueltas.sinCostear} unidad(es) devuelta(s) sin costear`);
-    const estimado = vendido.unidadesListaPosterior > 0 || vendido.unidadesAutomaticas > 0 || (vendido.cobertura ?? 0) < 100;
+    const estimado = vendido.unidadesListaPosterior > 0 || vendido.unidadesAutomaticas > 0 || falt.unidades > 0;
     lineas['costo-mercaderia'] = {
-      importe: r2(vendido.total - devueltas.total), nivel: estimado ? 'estimado' : 'importado', completo: faltan.length === 0, faltan,
-      nota: [`${vendido.unidadesConCosto} de ${unidades} unidades con costo (${pct(vendido.cobertura)})`,
+      importe: r2(vendido.total + (falt.estimado ?? 0) - devueltas.total), nivel: estimado ? 'estimado' : 'importado', completo: faltan.length === 0, faltan,
+      conocido: vendido.total, estimadoFaltante: falt.estimado,
+      nota: [`${vendido.unidadesConCosto} de ${unidades} unidades con costo (${pct(vendido.cobertura)}): ${vendido.total}`,
+        falt.estimado ? `+ ${falt.estimado} ESTIMADO para ${falt.unidades} unidad(es) sin costo (${falt.metodo}; relación ${falt.relacionCostoVenta})` : null,
         vendido.unidadesListaPosterior ? `${vendido.unidadesListaPosterior} con la lista posterior a la venta` : null,
         vendido.unidadesAutomaticas ? `${vendido.unidadesAutomaticas} con las reglas de PFOS (sin confirmar uno por uno)` : null,
         vendido.unidadesParaRevision ? `${vendido.unidadesParaRevision} para revisión (presentación, cantidad, talle o precio ambiguos)` : null,
@@ -89,6 +95,7 @@ export function armarMes({ mes, datos, comunes, textosArca, generado = new Date(
       if (c.estado === 'completa') continue;
       if (c.estado === 'sin datos') faltan.push(`${nombre}: sin reporte del mes en «Conciliación» (${reporte})`);
       else if (c.descartadas) faltan.push(`${nombre}: un reporte cargado tiene filas descartadas al leer (revisarlo en «Conciliación»)`);
+      else if (c.estado === 'desconocida') faltan.push(`${nombre}: ${c.sinValidar} reporte(s) con la cobertura sin validar en PFOS: las fechas declaradas no alcanzan para darlo por completo (revisarlo en «Conciliación»)`);
       else faltan.push(`${nombre}: reporte que no cubre todo el mes${alCorte} (falta desde el ${fechaCorta(c.faltaDesde)}; ${reporte})`);
     }
     for (const [fuente, nombre] of [['flex_bonificacion', 'bonificaciones Flex'], ['flex_anulacion', 'anulaciones Flex'], ['flex_viaje', 'viajes de Luma'], ['full_cargo', 'cargos de Full']]) {

@@ -14,6 +14,7 @@ import { proponerMapeo, listaParaVenta, costoLinea } from '../src/pfos/costos.js
 import { enArgentina, cargosMes, vigentesConciliacion, coberturaReportes, corteDelMes, diasCubiertos, adsMes, viajesSinDuplicar, logisticaReportesMes } from '../src/pfos/calculo.js';
 import { clavesArca, verificarCuenta, titularidad } from '../src/pfos/cuenta.js';
 import { compararAlCorte } from '../src/pfos/comparar.js';
+import { armarMes } from '../src/pfos/mes.js';
 import { dirFotos } from '../src/pfos/fotos.js';
 import { obtenerPfos, integraciones } from '../src/app/integraciones.js';
 import { resultadoOperativo } from '../src/app/rentabilidad.js';
@@ -104,7 +105,7 @@ async function armarBase() {
   // «Conciliación»: bonificaciones Flex del mes completo; Luma solo de la primera quincena; facturas a clientes.
   const imp = async (user, format, desde, hasta, filas) => {
     const { rows: [{ id }] } = await db.query(`INSERT INTO pfos_fin_imports (user_id, format, format_version, transport, file_sha256, header_sha256, parts, freshness_at, freshness_origin,
-      range_from, range_to, range_axis, batches, status, created_at) VALUES ($1,$2,1,'navegador',$3,'h','[]','2026-10-20T10:00:00','contenido',$4,$5,'fecha',1,'cerrada',now()) RETURNING id`,
+      range_from, range_to, range_axis, batches, status, coverage, created_at) VALUES ($1,$2,1,'navegador',$3,'h','[]','2026-10-20T10:00:00','contenido',$4,$5,'fecha',1,'cerrada','completa',now()) RETURNING id`,
     [user, format, `${format}-${desde}-${user}`, desde, hasta]);
     let n = 0;
     for (const [source, key, data] of filas) {
@@ -168,7 +169,11 @@ conPg('PFOS de punta a punta: solo la cuenta propia, costo con lista posterior, 
   // Devolución recibida en septiembre: resta el costo de 1 unidad de la orden 1.
   assert.equal(sep.costo.devoluciones.total, 1425);
   const cmv = sep.lineas['costo-mercaderia'];
-  assert.equal(cmv.importe, 2660);
+  // Lo que no tiene costo (ZZ99, 1 u. a $ 1.000) no es cero: sus ventas × la relación costo/venta de lo costeado (4085 / 19000).
+  assert.equal(cmv.conocido, 4085);
+  assert.equal(cmv.estimadoFaltante, 215);
+  assert.equal(cmv.importe, 4085 + 215 - 1425);
+  assert.match(cmv.nota, /215 ESTIMADO para 1 unidad/);
   assert.equal(cmv.nivel, 'estimado');
   assert.equal(cmv.completo, false, '75 % de unidades con costo: no alcanza');
   assert.match(cmv.faltan.join(' '), /75 %/);
@@ -220,7 +225,7 @@ test('piezas: fecha argentina, propuesta de SKU, lista posterior, cargos por pag
   assert.deepEqual(v.porFuente.full_cargo, [{ monto: '2' }]);
   assert.equal(v.pendientes.full_cargo, 1);
   // Cobertura de reportes por rango declarado: dos quincenas seguidas cubren el mes.
-  const imps = [{ format: 'luma_viajes', status: 'cerrada', range_from: '2026-09-01', range_to: '2026-09-15' }, { format: 'luma_viajes', status: 'cerrada', range_from: '2026-09-16', range_to: '2026-09-30' }];
+  const imps = [{ format: 'luma_viajes', status: 'cerrada', coverage: 'completa', range_from: '2026-09-01', range_to: '2026-09-15' }, { format: 'luma_viajes', status: 'cerrada', coverage: 'completa', range_from: '2026-09-16', range_to: '2026-09-30' }];
   assert.equal(coberturaReportes(imps, ['luma_viajes'], '2026-09').estado, 'completa');
   assert.equal(coberturaReportes(imps.slice(0, 1), ['luma_viajes'], '2026-09').estado, 'parcial');
 });
@@ -396,10 +401,11 @@ test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores
   const it = (row, code, presentation, pairs, price, price_suggested, extra = {}) => ({ row, code, presentation, pairs, price, price_suggested, factor: 0.7125, ...extra });
   const items = [
     it(1, 'ME23C', 'PAR', 1, 1000, 4000), it(2, 'TE1C', 'PAR', 1, 1000, 4000), it(3, 'TE1C', 'TRIPACK', 3, 2700, 10000),
-    it(4, 'VINCHA01', 'PAR', 1, 500, 2000), it(5, 'MUÑEQUERA01', 'PAR', 1, 600, 2400), it(6, 'TE75C', 'PAR', 1, 900, 3600),
-    it(7, 'ME62C', 'PAR', 1, 1200, 5000), it(8, 'ME19C', 'PAR', 1, 1100, 4500),
-    it(9, 'MA01', 'A_CONFIRMAR', null, 800, 3000, { description: 'MANGUITAS DEPORTIVAS' }), it(10, 'PA01', 'A_CONFIRMAR', null, 900, 3500, { description: 'PANTORRILLERAS' }),
-    it(11, 'XX01', 'A_CONFIRMAR', null, 900, 3500, { description: 'ARTICULO NUEVO' }),
+    // Como en la lista real: vinchas, muñequeras, manguitas y pantorrilleras «A CONFIRMAR», sin descripción.
+    it(4, 'VINCHA01', 'A_CONFIRMAR', null, 500, 2000, { code_raw: 'ART. VINCHA01' }), it(5, 'MUÑEQUERA01', 'A_CONFIRMAR', null, 600, 2400, { code_raw: 'ART. MUÑEQUERA01' }),
+    it(6, 'TE75C', 'PAR', 1, 900, 3600), it(7, 'ME62C', 'PAR', 1, 1200, 5000), it(8, 'ME19C', 'PAR', 1, 1100, 4500),
+    it(9, 'MA01C', 'A_CONFIRMAR', null, 800, 3000, { code_raw: 'ART. MA01C' }), it(10, 'PA01C', 'A_CONFIRMAR', null, 900, 3500, { code_raw: 'ART. PA01C' }),
+    it(11, 'XX01', 'A_CONFIRMAR', null, 900, 3500, { description: 'MANGUITAS DE PRUEBA' }), it(20, 'ME40C', 'PAR', 1, 1000, 4000), it(21, 'ME40C', 'A_CONFIRMAR', null, 2500, 9000),
     it(12, 'DE20C', 'PAR', 1, 700, 3000), it(13, 'DE24C', 'PAR', 1, 700, 3000), it(14, 'DE30C', 'PAR', 1, 900, 3000),
     it(15, 'TR5', 'TRIPACK', 3, 2700, 10000), it(16, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(17, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'L-XL' }),
     it(18, 'IN09C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(19, 'IN09C', 'PAR', 1, 1200, 4000, { size: 'L-XL' }),
@@ -408,19 +414,29 @@ test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores
   const comp = (r) => r.components.map((c) => `${c.code}×${c.units}`).join(' + ');
   // Código sin la última letra y xN.
   assert.equal(comp(p('ME23-NEGRO-M-X2', 9000)), 'ME23C×2');
-  // Equivalencias confirmadas.
-  assert.equal(comp(p('VINCHA-ROSA', 2000)), 'VINCHA01×1');
+  // Equivalencias confirmadas: dicen qué artículo es, no su unidad. VINCHA01 y MUÑEQUERA01 figuran «A CONFIRMAR» y su
+  // unidad no está confirmada: quedan pendientes (sin costo), aunque la equivalencia se reconozca.
+  for (const [sku, cod] of [['VINCHA-ROSA', 'VINCHA01'], ['VINCHA01-ROSA-X2', 'VINCHA01'], ['MUÑE-NEGRO', 'MUÑEQUERA01']]) {
+    const r = p(sku, 2000);
+    assert.equal(r.estado, 'dudoso', sku); assert.equal(r.categoria, 'a confirmar en la lista', sku);
+    assert.match(r.motivo, new RegExp(`${cod}.*unidad no está confirmada`), sku); assert.deepEqual(r.components, []);
+  }
   assert.match(p('VINCHA-ROSA', 2000).reglas.join(), /equivalencia VINCHA = VINCHA01/);
-  assert.equal(comp(p('MUÑE-NEGRO', 2400)), 'MUÑEQUERA01×1');
   assert.equal(comp(p('TE172-NEGRO-M', 3600)), 'TE75C×1');
   // Colores con «+»: uno por color.
   assert.equal(comp(p('ME19-AERO+NEGRO-M', 9000)), 'ME19C×2');
   // Combos: la suma de sus partes (con «+» y pegados).
   assert.equal(comp(p('ME62+ME19-AERO+NEGRO-M', 9500)), 'ME62C×1 + ME19C×1');
-  assert.equal(comp(p('MA01PA01-NEGRO-M1-P1', 6500)), 'MA01×1 + PA01×1', 'manguitas y pantorrilleras «a confirmar», por par');
-  // Un «a confirmar» que no es manguita ni pantorrillera queda para revisión.
+  // Manguitas y pantorrilleras «A CONFIRMAR»: por par, reconocidas por CÓDIGO (la descripción real viene vacía).
+  assert.equal(comp(p('MA01PA01-NEGRO-M1-P1', 6500)), 'MA01C×1 + PA01C×1');
+  assert.equal(comp(p('MA01-NEGRO-M1-P1-X2', 6000)), 'MA01C×2');
+  assert.match(p('MA01-NEGRO-M1-P1-X2', 6000).reglas.join(), /manguitas o pantorrilleras/);
+  // Un «a confirmar» de otro código queda pendiente, aunque su descripción diga «manguitas».
   assert.equal(p('XX01-NEGRO', 3500).estado, 'dudoso');
   assert.equal(p('XX01-NEGRO', 3500).categoria, 'a confirmar en la lista');
+  // Un código con una fila por par y otra «a confirmar»: la venta puede ser la no confirmada; no se elige la otra.
+  assert.equal(p('ME40-NEGRO', 4000).estado, 'dudoso');
+  assert.equal(p('ME40C+ME19-NEGRO+AERO', 9000).estado, 'dudoso', 'tampoco dentro de un combo');
   // Par o tripack: el precio decide solo si la otra lectura queda claramente lejos.
   assert.equal(p('TE1-NEGRO-M', 4200).components[0].presentation, 'PAR');
   assert.equal(p('TE1-NEGRO-M', 10500).components[0].presentation, 'TRIPACK');
@@ -459,8 +475,8 @@ test('corte: el mes en curso se mide hasta ayer; los días futuros no son atrasa
   // Ads: sin días, sin datos (null); con 0 leído, es dato.
   assert.equal(adsMes([], '2026-10', '2026-10-26').total, null);
   assert.equal(adsMes([{ day: '2026-10-02', metrics: { cost: 0 } }], '2026-10', '2026-10-26').total, 0);
-  // Reportes: un rango que cubre hasta el corte alcanza; con filas descartadas, no.
-  const imp = [{ format: 'flex_nc', status: 'cerrada', range_from: '2026-10-01', range_to: '2026-10-26' }];
+  // Reportes: el rango declarado hasta el corte alcanza solo si PFOS validó la cobertura del archivo.
+  const imp = [{ format: 'flex_nc', status: 'cerrada', coverage: 'completa', range_from: '2026-10-01', range_to: '2026-10-26' }];
   assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10', '2026-10-26').estado, 'completa');
   assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10').faltaDesde, '2026-10-27');
   assert.equal(coberturaReportes([{ ...imp[0], coverage: 'parcial' }], ['flex_nc'], '2026-10', '2026-10-26').estado, 'parcial');
@@ -530,4 +546,53 @@ conPg('octubre en curso: rentabilidad operativa provisoria al corte, conciliaci�
   assert.equal(c.actual.ordenes, 2);
   assert.equal(c.actual.ads, null);
   assert.equal(compararAlCorte(oct, { mes: '2026-09' }).motivo.includes('detalle por día'), true);
+});
+
+test('reportes: completa, parcial y desconocida; las fechas declaradas del mes entero no alcanzan sin cobertura validada', () => {
+  const r = (coverage, desde = '2026-09-01', hasta = '2026-09-30') => ({ format: 'ml_cargos_full', status: 'cerrada', coverage, range_from: desde, range_to: hasta });
+  const est = (imps) => coberturaReportes(imps, ['ml_cargos_full'], '2026-09');
+  assert.equal(est([r('completa')]).estado, 'completa');
+  assert.equal(est([r('parcial')]).estado, 'parcial', 'filas descartadas al leer');
+  assert.equal(est([r('desconocida')]).estado, 'desconocida', 'mes entero declarado, cobertura sin validar');
+  assert.equal(est([r(null)]).estado, 'desconocida', 'sin dato de cobertura');
+  assert.equal(est([r('completa', '2026-09-01', '2026-09-15'), r('desconocida', '2026-09-16', '2026-09-30')]).estado, 'desconocida');
+  assert.equal(est([r('completa', '2026-09-01', '2026-09-15'), r('parcial', '2026-09-16', '2026-09-30')]).estado, 'parcial');
+  assert.equal(est([r('desconocida', '2026-09-01', '2026-09-15')]).estado, 'parcial', 'faltan días: parcial');
+  assert.equal(est([]).estado, 'sin datos');
+  // En la foto: Full con cobertura sin validar deja la logística incompleta, dicho.
+  const datos = { ordenes: [], ordenesDevueltas: [], devoluciones: [], cobros: new Map(), facturas: [], ads: [], alcances: [], conciliacion: [] };
+  const comunes = { listas: [], itemsPorLista: new Map(), mapeos: new Map(),
+    importaciones: ['flex_nc', 'flex_nd', 'luma_viajes'].map((format) => ({ ...r('completa'), format })).concat([r('desconocida')]) };
+  const f = armarMes({ mes: '2026-09', datos, comunes, textosArca: [], generado: GENERADO });
+  assert.equal(f.lineas.logistica.completo, false);
+  assert.match(f.lineas.logistica.faltan.join(' '), /cargos de Full: 1 reporte\(s\) con la cobertura sin validar/);
+});
+
+test('costo con el 95 % de las unidades: lo que falta no es cero; se estima a la vista o no se da por completo', () => {
+  const items = [{ row: 1, code: 'ME23C', presentation: 'PAR', pairs: 1, price: 1000, price_suggested: 4000, factor: 0.7 }];
+  const comunes = { listas: [{ id: '1', valid_from: '2026-01-01' }], itemsPorLista: new Map([['1', items]]), mapeos: new Map(), importaciones: [] };
+  const o = (id, sku, q, precio) => ({ key: id, data: { id, status: 'paid', date_created: '2026-09-10T10:00:00.000-03:00', total_amount: q * (precio ?? 0),
+    order_items: [{ item: { id: 'MLA1', seller_sku: sku }, quantity: q, ...(precio == null ? {} : { unit_price: precio }) }], payments: [] } });
+  const alcances = Array.from({ length: 30 }, (_, i) => ({ source: 'orders', status: 'completa', scope: `hist|2026-09-${String(i + 1).padStart(2, '0')}` }));
+  const datos = (ordenes) => ({ ordenes, ordenesDevueltas: [], devoluciones: [], cobros: new Map(), facturas: [], ads: [], alcances, conciliacion: [] });
+  // 19 unidades costeadas (19 × 700 = 13.300, vendidas a 4.000 c/u) y 1 sin costo vendida a 5.000: 95 %.
+  const base = [o('1', 'ME23-NEGRO', 19, 4000)];
+  const f = armarMes({ mes: '2026-09', datos: datos([...base, o('2', 'ZZ99', 1, 5000)]), comunes, textosArca: [], generado: GENERADO });
+  const l = f.lineas['costo-mercaderia'];
+  assert.equal(f.costo.cobertura, 95);
+  assert.equal(l.conocido, 13300);
+  assert.equal(l.estimadoFaltante, 875, '5.000 × (13.300 / 76.000)');
+  assert.equal(l.importe, 14175, 'el importe incluye lo estimado: nunca el costeado solo');
+  assert.equal(l.nivel, 'estimado');
+  assert.match(l.nota, /875 ESTIMADO para 1 unidad\(es\) sin costo \(ventas de las unidades sin costo × \(costo ÷ ventas de las unidades con costo\)/);
+  assert.equal(l.completo, true, 'con el 95 % costeado y lo demás estimado a la vista');
+  // Si lo que falta no tiene precio, no se puede estimar: el costo no se da por completo.
+  const g = armarMes({ mes: '2026-09', datos: datos([...base, o('2', 'ZZ99', 1, null)]), comunes, textosArca: [], generado: GENERADO });
+  assert.equal(g.lineas['costo-mercaderia'].estimadoFaltante, null);
+  assert.equal(g.lineas['costo-mercaderia'].completo, false);
+  assert.match(g.lineas['costo-mercaderia'].faltan.join(' '), /1 unidad\(es\) sin costo que no se pueden estimar \(1 sin precio de venta\)/);
+  // Todo costeado: sin estimación.
+  const h = armarMes({ mes: '2026-09', datos: datos(base), comunes, textosArca: [], generado: GENERADO });
+  assert.equal(h.lineas['costo-mercaderia'].estimadoFaltante, 0);
+  assert.equal(h.lineas['costo-mercaderia'].importe, 13300);
 });

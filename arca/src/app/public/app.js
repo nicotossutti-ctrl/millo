@@ -381,14 +381,15 @@ function bloquePfos(p) {
   const cob = x.cobertura;
   const corte = x.mesCerrado === false && x.corte ? ` (al corte del ${fecha(x.corte)})` : '';
   const esperados = (c) => c.diasEsperados ?? c.diasMes;
-  const rep = (r) => (r.estado === 'completa' ? 'completo' : r.estado === 'parcial'
+  const rep = (r) => (r.estado === 'completa' ? 'completo' : r.estado === 'desconocida' ? `cobertura sin validar en PFOS (${r.sinValidar} archivo/s): no se da por completo`
+    : r.estado === 'parcial'
     ? `parcial (${r.rangos.map((g) => `${fecha(g.desde)}–${fecha(g.hasta)}`).join(', ')}${r.faltaDesde ? `; falta desde el ${fecha(r.faltaDesde)}` : ''}${r.descartadas ? '; con filas descartadas' : ''})` : 'sin reporte del mes en «Conciliación»');
   const motivos = Object.entries(x.costo.motivos ?? {}).sort((a, b) => b[1] - a[1]);
   const reglas = Object.entries(x.costo.porRegla ?? {}).sort((a, b) => b[1] - a[1]);
   const filas = [
     ['Ventas (órdenes)', `${cob.ordenes.dias} de ${esperados(cob.ordenes)} días completos en PFOS${corte} · ${x.ventas.ordenes} órdenes, ${x.ventas.unidades} unidades`],
     ['Cobros de Mercado Pago', `${cob.cobrosDeVentas ?? '—'}% de las ventas con su cobro`],
-    ['Costo de la mercadería', `${x.costo.unidadesConCosto} de ${x.costo.unidades} unidades con costo (${x.costo.cobertura ?? '—'}%)${x.costo.unidadesListaPosterior ? ` · ${x.costo.unidadesListaPosterior} con la lista posterior a la venta` : ''}${x.costo.unidadesParaRevision ? ` · ${x.costo.unidadesParaRevision} para revisión` : ''}`],
+    ['Costo de la mercadería', `${x.costo.unidadesConCosto} de ${x.costo.unidades} unidades con costo (${x.costo.cobertura ?? '—'}%)${x.costo.unidadesListaPosterior ? ` · ${x.costo.unidadesListaPosterior} con la lista posterior a la venta` : ''}${x.costo.unidadesParaRevision ? ` · ${x.costo.unidadesParaRevision} para revisión` : ''}${x.costo.faltante?.unidades ? ` · lo sin costo, ${x.costo.faltante.estimado == null ? 'sin poder estimar' : `estimado en ${fmt(x.costo.faltante.estimado)} (sus ventas × la relación costo/venta de lo costeado)`}` : ''}`],
     ['Publicidad (Mercado Ads)', cob.ads.dias ? `${cob.ads.dias} de ${esperados(cob.ads)} días${corte}` : 'sin datos (no es cero): la vista de Ads no devolvió días del mes'],
     ['Flex: bonificaciones', rep(cob.reportes.flexBonif)], ['Flex: anulaciones', rep(cob.reportes.flexAnul)], ['Flex: viajes de Luma', rep(cob.reportes.luma)], ['Full', rep(cob.reportes.full)],
   ];

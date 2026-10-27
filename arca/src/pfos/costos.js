@@ -58,10 +58,18 @@ export function parseSku(sku) {
 
 /**
  * Equivalencias confirmadas por Nicolás (PFOS, docs/rentabilidad-DISENO.md 3.7, regla 1): cada grupo son nombres del mismo
- * artículo de la lista. Las manguitas y pantorrilleras «A CONFIRMAR» de la lista van por par (misma regla).
+ * artículo de la lista. Una equivalencia dice QUÉ artículo es, no cuántas unidades de la lista lleva la venta.
  */
 export const EQUIVALENCIAS = [['VINCHA', 'VINCHA01'], ['MUÑE', 'MUÑEQUERA01'], ['TE172', 'TE75C'], ['DE160A', 'DE160C']];
-const A_CONFIRMAR_POR_PAR = /MANGUIT|PANTORRILL/i;
+
+/**
+ * Artículos «A CONFIRMAR» de la lista cuya unidad SÍ está confirmada: manguitas y pantorrilleras, por par (regla 1 de la
+ * 3.7). Se reconocen por CÓDIGO, no por la descripción (en la lista real viene vacía). Los códigos son los que PFOS tiene
+ * confirmados como esas familias (AUTOMATIZACION_ML_REGLAS_FIJAS.md: manguitas MA01C/MA10C/MA20C/MA21C/MA26C; familia
+ * «Pantorrilleras SOX» PA01C/PA10C/PA21C/PA26C/FUPA01C/FUPA02C/HOCKEY01). Cualquier otro «A CONFIRMAR» (por ejemplo
+ * VINCHA01 o MUÑEQUERA01: su unidad no está confirmada) queda pendiente, sin costo, hasta confirmarlo en PFOS.
+ */
+export const A_CONFIRMAR_POR_PAR = new Set(['MA01C', 'MA10C', 'MA20C', 'MA21C', 'MA26C', 'PA01C', 'PA10C', 'PA21C', 'PA26C', 'FUPA01C', 'FUPA02C', 'HOCKEY01']);
 const PACKS = new Set(['TRIPACK', 'BIPACK', 'PACK_SEMANAL', 'COMBO']);
 
 /** Índice de la lista por código (sin espacios, en mayúsculas). */
@@ -110,14 +118,14 @@ export function resolverCodigo(t, codes) {
   return null;
 }
 
-/** Presentaciones utilizables de un código: [{ presentacion, pares, filas }]. «A CONFIRMAR» solo si es manguita o pantorrillera (por par). */
+/** Presentaciones utilizables de un código: [{ presentacion, pares, filas }]. «A CONFIRMAR» solo si su código es de manguita o pantorrillera (por par). */
 function presentaciones(rows) {
   const g = new Map(); const sinUsar = [];
   for (const r of rows) {
     let pares = null;
     if (r.presentation === 'PAR') pares = 1;
     else if (PACKS.has(r.presentation)) pares = Number.isInteger(r.pairs) && r.pairs > 0 ? r.pairs : null;
-    else if (r.presentation === 'A_CONFIRMAR' && A_CONFIRMAR_POR_PAR.test(`${r.description ?? ''} ${r.code_raw ?? ''}`)) pares = 1;
+    else if (r.presentation === 'A_CONFIRMAR' && A_CONFIRMAR_POR_PAR.has(keyOf(r.code))) pares = 1;
     if (pares == null) { sinUsar.push(r.presentation); continue; }
     const k = `${r.presentation}|${pares}`;
     if (!g.has(k)) g.set(k, { presentacion: r.presentation, pares, filas: [] });
@@ -210,6 +218,7 @@ export function proponerMapeo({ sku, unitPrice = null, variation = null }, items
     // Combo: un par de cada parte (o un color por parte): la suma de sus partes.
     const porParte = partes.map((k) => ({ k, ...lecturasParte(k, 1, true) }));
     for (const x of porParte) {
+      if (x.sinUsar.length) return out('dudoso', 'a confirmar en la lista', `${x.k} figura en la lista como ${x.sinUsar.join(', ')} y su unidad no está confirmada: queda pendiente hasta confirmarlo en PFOS`, { reglas });
       const pares = x.lecturas.filter((l) => l.pairs === 1);
       if (!pares.length) {
         if (x.motivoTalle) return out('dudoso', 'talle', x.motivoTalle);
@@ -222,12 +231,13 @@ export function proponerMapeo({ sku, unitPrice = null, variation = null }, items
   } else {
     const explicito = N != null || C != null;
     const r = lecturasParte(partes[0], N ?? C ?? 1, explicito);
-    if (!r.lecturas.length) {
-      if (r.motivoTalle) return out('dudoso', 'talle', r.motivoTalle);
-      return out('dudoso', 'a confirmar en la lista', `${partes[0]} figura en la lista como ${r.sinUsar.join(', ') || 'una presentación sin pares'}: necesita la composición confirmada en PFOS`);
+    // Una fila de la lista sin unidad confirmada («A CONFIRMAR» que no es manguita ni pantorrillera, o un paquete sin pares)
+    // puede ser justo lo que se vendió: no se elige otra fila en su lugar.
+    if (!r.lecturas.length || r.sinUsar.length) {
+      if (r.motivoTalle && !r.sinUsar.length) return out('dudoso', 'talle', r.motivoTalle);
+      return out('dudoso', 'a confirmar en la lista', `${partes[0]} figura en la lista como ${r.sinUsar.join(', ') || 'una presentación sin pares'} y su unidad no está confirmada: queda pendiente hasta confirmarlo en PFOS (Costos de la mercadería)`, { reglas });
     }
     opciones = r.lecturas.map((l) => [l]);
-    if (r.sinUsar.length && !isNum(unitPrice)) return out('dudoso', 'a confirmar en la lista', `${partes[0]} también figura como ${r.sinUsar.join(', ')} y la venta no tiene precio para decidir`);
   }
 
   // Elección por precio (regla 6): la lectura con el precio de venta más parecido al sugerido de la lista; las otras, si dan

@@ -1,7 +1,8 @@
 -- FiscalOS ← PFOS: CORRECCIÓN PUNTUAL 1. No reinstala nada: reemplaza dos vistas del esquema «fiscalos».
 --   a) fiscalos.ads_diario: la publicidad (Mercado Ads) volvía vacía.
---   b) fiscalos.costos_items: suma la descripción del artículo de la lista de costos (para reconocer las manguitas y
---      pantorrilleras «A CONFIRMAR», que van por par según la regla de PFOS).
+--   b) fiscalos.costos_items: suma la descripción y el código como figura en la lista de costos (informativos: las reglas de
+--      costo reconocen los artículos por código).
+-- Estado: ya aplicada en la base real el 27/10 (revisión de la PR #2). Queda para instalaciones que no la tengan.
 --
 -- Qué pasó: al pegar docs/pfos-acceso.sql en el SQL Editor, la «ñ» de 'campaña' llegó con otra codificación y la vista
 -- quedó filtrando level = 'campaÃ±a'. Ninguna fila de PFOS tiene ese nivel, así que la vista devolvía 0 filas y la

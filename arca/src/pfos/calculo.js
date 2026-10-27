@@ -100,6 +100,7 @@ export function costearLinea({ sku, cantidad, precio, variacion, dia }, { listas
 /** Costo de la mercadería vendida en el mes (sin devoluciones). */
 export function costoVendidoMes(ordenesMes, ctx) {
   let total = 0; let unidades = 0; let conCosto = 0; let confirmadas = 0; let automaticas = 0; let posteriores = 0; let revision = 0;
+  let ventasConCosto = 0; let ventasSinCosto = 0; let sinPrecio = 0;
   const sinCosto = new Map(); const porDia = {}; const porRegla = {}; const motivos = {};
   for (const o of ordenesMes) {
     const d = (porDia[o.dia] ??= { unidades: 0, conCosto: 0, costo: 0 });
@@ -114,16 +115,27 @@ export function costoVendidoMes(ordenesMes, ctx) {
         s.unidades += cantidad; sinCosto.set(k, s);
         motivos[s.categoria] = (motivos[s.categoria] ?? 0) + cantidad;
         if (c.revision) revision += cantidad;
+        const pu = num(it.unit_price);
+        if (pu == null) sinPrecio += cantidad; else ventasSinCosto += pu * cantidad;
         continue;
       }
       total += c.valor; conCosto += cantidad; d.conCosto += cantidad; d.costo = r2(d.costo + c.valor);
+      ventasConCosto += (num(it.unit_price) ?? 0) * cantidad;
       if (c.origen === 'confirmado') confirmadas += cantidad; else automaticas += cantidad;
       if (c.posterior) posteriores += cantidad;
       for (const g of c.reglas ?? []) { const k = g.replace(/^x\d+$/, 'xN').replace(/^\d+ colores.*/, 'colores con «+»'); porRegla[k] = (porRegla[k] ?? 0) + cantidad; }
     }
   }
+  // Lo que falta costear NO es cero: se estima con sus propias ventas × la relación costo / venta de lo costeado. Si alguna
+  // línea sin costo no tiene precio, no se puede estimar (queda null y el costo no se da por completo).
+  const sinCostoU = unidades - conCosto;
+  const relacion = ventasConCosto > 0 ? total / ventasConCosto : null;
+  const estimadoFaltante = !sinCostoU ? 0 : sinPrecio || relacion == null ? null : r2(ventasSinCosto * relacion);
   return {
     total: r2(total), unidades, unidadesConCosto: conCosto, cobertura: unidades ? r2((conCosto / unidades) * 100) : null,
+    faltante: { unidades: sinCostoU, ventasConIva: r2(ventasSinCosto), unidadesSinPrecio: sinPrecio, estimado: estimadoFaltante,
+      relacionCostoVenta: relacion == null ? null : Math.round(relacion * 10000) / 10000,
+      metodo: 'ventas de las unidades sin costo × (costo ÷ ventas de las unidades con costo) del mismo mes' },
     unidadesConfirmadas: confirmadas, unidadesAutomaticas: automaticas, unidadesListaPosterior: posteriores, unidadesParaRevision: revision,
     sinCosto: [...sinCosto.values()].sort((a, b) => b.unidades - a.unidades), motivos, porRegla, porDia,
   };
@@ -302,9 +314,11 @@ export function logisticaReportesMes(vigentes, mes, corte = finDelMes(mes)) {
 }
 
 /**
- * ¿Las importaciones cerradas de un formato cubren el mes hasta el corte? Mira el rango declarado al cargar (desde/hasta) y
- * la cobertura que PFOS le dio a cada archivo (una importación con filas descartadas al leer es «parcial»). Devuelve
- * { estado: 'completa' | 'parcial' | 'sin datos', rangos, cubreHasta, faltaDesde, descartadas }.
+ * ¿Las importaciones cerradas de un formato cubren el mes hasta el corte? El rango declarado al cargar (desde/hasta) no
+ * alcanza: cada archivo tiene que tener la cobertura que PFOS VALIDÓ al cerrarlo. Un archivo con filas descartadas
+ * («parcial») deja el mes parcial; uno con cobertura sin validar («desconocida» o sin dato) lo deja «desconocida», aunque
+ * sus fechas declaren el mes entero. Devuelve { estado: 'completa' | 'parcial' | 'desconocida' | 'sin datos', rangos,
+ * cubreHasta, faltaDesde, descartadas, sinValidar }.
  */
 export function coberturaReportes(importaciones, formatos, mes, corte = finDelMes(mes)) {
   const ini = `${mes}-01`; const fin = corte ?? finDelMes(mes);
@@ -312,19 +326,21 @@ export function coberturaReportes(importaciones, formatos, mes, corte = finDelMe
     .map((i) => {
       const hasta = String(i.range_to).slice(0, 10);
       const h = i.range_to_exclusive ? sumarDias(hasta, -1) : hasta;
-      return { desde: String(i.range_from).slice(0, 10), hasta: h, parcial: i.coverage === 'parcial' };
+      return { desde: String(i.range_from).slice(0, 10), hasta: h, cobertura: i.coverage ?? 'desconocida' };
     })
     .filter((r) => r.desde <= fin && r.hasta >= ini).sort((a, b) => a.desde.localeCompare(b.desde));
-  if (!rangos.length) return { estado: 'sin datos', rangos, cubreHasta: null, faltaDesde: ini, descartadas: 0 };
+  if (!rangos.length) return { estado: 'sin datos', rangos, cubreHasta: null, faltaDesde: ini, descartadas: 0, sinValidar: 0 };
   let cubierto = ini; let hueco = null;
   for (const r of rangos) {
     if (r.desde > cubierto) { hueco = cubierto; break; }
     const sig = sumarDias(r.hasta, 1);
     if (sig > cubierto) cubierto = sig;
   }
-  const descartadas = rangos.filter((r) => r.parcial).length;
-  const completa = !hueco && cubierto > fin && !descartadas;
-  return { estado: completa ? 'completa' : 'parcial', rangos, cubreHasta: sumarDias(cubierto, -1), faltaDesde: completa ? null : hueco ?? (cubierto > fin ? null : cubierto), descartadas };
+  const descartadas = rangos.filter((r) => r.cobertura === 'parcial').length;
+  const sinValidar = rangos.filter((r) => r.cobertura !== 'completa' && r.cobertura !== 'parcial').length;
+  const cubreFechas = !hueco && cubierto > fin;
+  const estado = !cubreFechas || descartadas ? 'parcial' : sinValidar ? 'desconocida' : 'completa';
+  return { estado, rangos, cubreHasta: sumarDias(cubierto, -1), faltaDesde: cubreFechas ? null : hueco ?? cubierto, descartadas, sinValidar };
 }
 
 /**

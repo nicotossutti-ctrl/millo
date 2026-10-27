@@ -41,7 +41,6 @@ export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas 
   log(`Listas de costos: ${comunes.listas.map((l) => `${l.supplier} desde ${l.valid_from}`).join(', ') || 'ninguna'} · SKU con decisión en PFOS: ${comunes.mapeos.size}`);
   if (!comunes.ads?.filas) log('AVISO: la vista fiscalos.ads_diario no devuelve ninguna fila: la publicidad queda «sin datos» (no 0). Si PFOS tiene Mercado Ads, correr docs/pfos-correccion-1.sql.');
   else log(`Mercado Ads: ${comunes.ads.filas} filas, del ${comunes.ads.desde} al ${comunes.ads.hasta}`);
-  if (!comunes.conDescripcion) log('Aviso: la lista de costos llega sin descripción (docs/pfos-correccion-1.sql): las manguitas y pantorrilleras «A CONFIRMAR» quedan para revisión.');
   const datosDir = path.join(outDir, 'datos');
   const fotos = [];
   for (const mes of meses) {

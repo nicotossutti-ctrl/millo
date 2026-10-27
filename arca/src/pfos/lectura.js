@@ -138,14 +138,9 @@ export async function leerMes(db, mes) {
 export async function leerComunes(db) {
   const listas = await q(db, 'SELECT id::text AS id, supplier, valid_from::text AS valid_from, valid_to::text AS valid_to, cash_pct, items FROM fiscalos.costos_listas');
   const itemsPorLista = new Map();
-  // La descripción del artículo (para las manguitas y pantorrilleras «A CONFIRMAR», que van por par) llega con
-  // docs/pfos-correccion-1.sql; sin ella, esas filas quedan para revisión.
-  const [{ desc }] = await q(db, `SELECT count(*)::int AS desc FROM information_schema.columns WHERE table_schema = 'fiscalos' AND table_name = 'costos_items' AND column_name = 'description'`);
-  const extra = desc ? ', description, code_raw' : '';
-  for (const r of await q(db, `SELECT list_id::text AS list_id, row_no, code, size_label, presentation, pairs, price, price_suggested, factor${extra} FROM fiscalos.costos_items`)) {
+  for (const r of await q(db, 'SELECT list_id::text AS list_id, row_no, code, size_label, presentation, pairs, price, price_suggested, factor FROM fiscalos.costos_items')) {
     const it = { row: r.row_no, code: r.code, size: r.size_label, presentation: r.presentation, pairs: r.pairs == null ? null : Number(r.pairs), price: Number(r.price),
-      price_suggested: r.price_suggested == null ? null : Number(r.price_suggested), factor: r.factor == null ? null : Number(r.factor),
-      description: r.description ?? null, code_raw: r.code_raw ?? null };
+      price_suggested: r.price_suggested == null ? null : Number(r.price_suggested), factor: r.factor == null ? null : Number(r.factor) };
     if (!itemsPorLista.has(r.list_id)) itemsPorLista.set(r.list_id, []);
     itemsPorLista.get(r.list_id).push(it);
   }
@@ -163,5 +158,5 @@ export async function leerComunes(db) {
   const importaciones = await q(db, `SELECT format, status, range_from::text AS range_from, range_to::text AS range_to, range_to_exclusive, coverage FROM fiscalos.importaciones`);
   // Mercado Ads: si la vista no devuelve ninguna fila, la publicidad queda faltante y se avisa (no se toma como 0).
   const [ads] = await q(db, 'SELECT count(*)::int AS filas, min(day)::text AS desde, max(day)::text AS hasta FROM fiscalos.ads_diario');
-  return { listas, itemsPorLista, mapeos, importaciones, ads, conDescripcion: !!desc };
+  return { listas, itemsPorLista, mapeos, importaciones, ads };
 }
