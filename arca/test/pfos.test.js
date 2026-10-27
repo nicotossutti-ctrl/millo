@@ -414,14 +414,15 @@ test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores
   const comp = (r) => r.components.map((c) => `${c.code}×${c.units}`).join(' + ');
   // Código sin la última letra y xN.
   assert.equal(comp(p('ME23-NEGRO-M-X2', 9000)), 'ME23C×2');
-  // Equivalencias confirmadas: dicen qué artículo es, no su unidad. VINCHA01 y MUÑEQUERA01 figuran «A CONFIRMAR» y su
-  // unidad no está confirmada: quedan pendientes (sin costo), aunque la equivalencia se reconozca.
-  for (const [sku, cod] of [['VINCHA-ROSA', 'VINCHA01'], ['VINCHA01-ROSA-X2', 'VINCHA01'], ['MUÑE-NEGRO', 'MUÑEQUERA01']]) {
-    const r = p(sku, 2000);
-    assert.equal(r.estado, 'dudoso', sku); assert.equal(r.categoria, 'a confirmar en la lista', sku);
-    assert.match(r.motivo, new RegExp(`${cod}.*unidad no está confirmada`), sku); assert.deepEqual(r.components, []);
-  }
-  assert.match(p('VINCHA-ROSA', 2000).reglas.join(), /equivalencia VINCHA = VINCHA01/);
+  // Equivalencias confirmadas, con la unidad confirmada de cada «A CONFIRMAR» (Nicolás, 28/10): vincha por unidad,
+  // muñequera por par, al precio de la lista.
+  assert.equal(comp(p('VINCHA-ROSA', 2000)), 'VINCHA01×1');
+  assert.equal(p('VINCHA-ROSA', 2000).motivo, '1 unidad(es) de VINCHA01');
+  assert.match(p('VINCHA-ROSA', 2000).reglas.join(), /equivalencia VINCHA = VINCHA01.*VINCHA01 «a confirmar»: por unidad/);
+  assert.equal(comp(p('VINCHA01-ROSA-X2', 4000)), 'VINCHA01×2');
+  assert.equal(comp(p('MUÑE-NEGRO', 2400)), 'MUÑEQUERA01×1');
+  assert.equal(p('MUÑE-NEGRO', 2400).motivo, '1 par(es) de MUÑEQUERA01');
+  assert.equal(costoLinea({ cantidad: 3, componentes: p('VINCHA-ROSA', 2000).components, items }).valor, 3 * 500 * 0.7125);
   assert.equal(comp(p('TE172-NEGRO-M', 3600)), 'TE75C×1');
   // Colores con «+»: uno por color.
   assert.equal(comp(p('ME19-AERO+NEGRO-M', 9000)), 'ME19C×2');
@@ -430,7 +431,7 @@ test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores
   // Manguitas y pantorrilleras «A CONFIRMAR»: por par, reconocidas por CÓDIGO (la descripción real viene vacía).
   assert.equal(comp(p('MA01PA01-NEGRO-M1-P1', 6500)), 'MA01C×1 + PA01C×1');
   assert.equal(comp(p('MA01-NEGRO-M1-P1-X2', 6000)), 'MA01C×2');
-  assert.match(p('MA01-NEGRO-M1-P1-X2', 6000).reglas.join(), /manguitas o pantorrilleras/);
+  assert.match(p('MA01-NEGRO-M1-P1-X2', 6000).reglas.join(), /MA01C «a confirmar»: por par/);
   // Un «a confirmar» de otro código queda pendiente, aunque su descripción diga «manguitas».
   assert.equal(p('XX01-NEGRO', 3500).estado, 'dudoso');
   assert.equal(p('XX01-NEGRO', 3500).categoria, 'a confirmar en la lista');

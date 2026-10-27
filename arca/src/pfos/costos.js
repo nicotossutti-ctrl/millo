@@ -63,13 +63,18 @@ export function parseSku(sku) {
 export const EQUIVALENCIAS = [['VINCHA', 'VINCHA01'], ['MUÑE', 'MUÑEQUERA01'], ['TE172', 'TE75C'], ['DE160A', 'DE160C']];
 
 /**
- * Artículos «A CONFIRMAR» de la lista cuya unidad SÍ está confirmada: manguitas y pantorrilleras, por par (regla 1 de la
- * 3.7). Se reconocen por CÓDIGO, no por la descripción (en la lista real viene vacía). Los códigos son los que PFOS tiene
- * confirmados como esas familias (AUTOMATIZACION_ML_REGLAS_FIJAS.md: manguitas MA01C/MA10C/MA20C/MA21C/MA26C; familia
- * «Pantorrilleras SOX» PA01C/PA10C/PA21C/PA26C/FUPA01C/FUPA02C/HOCKEY01). Cualquier otro «A CONFIRMAR» (por ejemplo
- * VINCHA01 o MUÑEQUERA01: su unidad no está confirmada) queda pendiente, sin costo, hasta confirmarlo en PFOS.
+ * Artículos «A CONFIRMAR» de la lista cuya unidad SÍ está confirmada, por CÓDIGO (en la lista real la descripción viene
+ * vacía). El precio es el de la lista; cada unidad vendida lleva una unidad de la lista:
+ *  - manguitas y pantorrilleras, por par (regla 1 de la 3.7 de PFOS). Los códigos son los que PFOS tiene confirmados como
+ *    esas familias (AUTOMATIZACION_ML_REGLAS_FIJAS.md: manguitas MA01C/MA10C/MA20C/MA21C/MA26C; familia «Pantorrilleras
+ *    SOX» PA01C/PA10C/PA21C/PA26C/FUPA01C/FUPA02C/HOCKEY01);
+ *  - VINCHA01, por unidad, y MUÑEQUERA01, por par (Nicolás, 28/10/2026).
+ * Cualquier otro «A CONFIRMAR» queda pendiente, sin costo, hasta confirmarlo.
  */
-export const A_CONFIRMAR_POR_PAR = new Set(['MA01C', 'MA10C', 'MA20C', 'MA21C', 'MA26C', 'PA01C', 'PA10C', 'PA21C', 'PA26C', 'FUPA01C', 'FUPA02C', 'HOCKEY01']);
+export const UNIDAD_CONFIRMADA = new Map([
+  ...['MA01C', 'MA10C', 'MA20C', 'MA21C', 'MA26C', 'PA01C', 'PA10C', 'PA21C', 'PA26C', 'FUPA01C', 'FUPA02C', 'HOCKEY01'].map((c) => [c, 'par']),
+  ['VINCHA01', 'unidad'], ['MUÑEQUERA01', 'par'],
+]);
 const PACKS = new Set(['TRIPACK', 'BIPACK', 'PACK_SEMANAL', 'COMBO']);
 
 /** Índice de la lista por código (sin espacios, en mayúsculas). */
@@ -118,14 +123,14 @@ export function resolverCodigo(t, codes) {
   return null;
 }
 
-/** Presentaciones utilizables de un código: [{ presentacion, pares, filas }]. «A CONFIRMAR» solo si su código es de manguita o pantorrillera (por par). */
+/** Presentaciones utilizables de un código: [{ presentacion, pares, filas }]. «A CONFIRMAR» solo si su código tiene la unidad confirmada (una por unidad vendida). */
 function presentaciones(rows) {
   const g = new Map(); const sinUsar = [];
   for (const r of rows) {
     let pares = null;
     if (r.presentation === 'PAR') pares = 1;
     else if (PACKS.has(r.presentation)) pares = Number.isInteger(r.pairs) && r.pairs > 0 ? r.pairs : null;
-    else if (r.presentation === 'A_CONFIRMAR' && A_CONFIRMAR_POR_PAR.has(keyOf(r.code))) pares = 1;
+    else if (r.presentation === 'A_CONFIRMAR' && UNIDAD_CONFIRMADA.has(keyOf(r.code))) pares = 1;
     if (pares == null) { sinUsar.push(r.presentation); continue; }
     const k = `${r.presentation}|${pares}`;
     if (!g.has(k)) g.set(k, { presentacion: r.presentation, pares, filas: [] });
@@ -275,8 +280,9 @@ export function proponerMapeo({ sku, unitPrice = null, variation = null }, items
     return { ...out('dudoso', 'precio no coincide', `el precio de venta no coincide con ${elegida.pares} par(es) de ${partes.join(' + ')} (relación ${elegida.ratio} con el sugerido)`),
       components: limpiar(elegida.comps), ratio: elegida.ratio, reglas };
   }
-  if (elegida.comps.some((c) => c.presentation === 'A_CONFIRMAR')) reglas.push('manguitas o pantorrilleras «a confirmar», por par');
-  const desc = elegida.comps.map((c) => `${c.units} ${c.presentation === 'PAR' || c.presentation === 'A_CONFIRMAR' ? 'par(es)' : c.presentation.toLowerCase()} de ${c.code}`).join(' + ');
+  for (const c of elegida.comps.filter((x) => x.presentation === 'A_CONFIRMAR')) reglas.push(`${keyOf(c.code)} «a confirmar»: por ${UNIDAD_CONFIRMADA.get(keyOf(c.code))} (confirmado)`);
+  const unidad = (c) => (c.presentation === 'PAR' ? 'par(es)' : c.presentation === 'A_CONFIRMAR' ? (UNIDAD_CONFIRMADA.get(keyOf(c.code)) === 'unidad' ? 'unidad(es)' : 'par(es)') : c.presentation.toLowerCase());
+  const desc = elegida.comps.map((c) => `${c.units} ${unidad(c)} de ${c.code}`).join(' + ');
   return { estado: 'automático', categoria: null, motivo: desc, components: limpiar(elegida.comps), ratio: elegida.ratio, reglas };
 }
 

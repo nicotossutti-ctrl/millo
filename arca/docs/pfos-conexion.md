@@ -138,8 +138,8 @@ pedir confirmación uno por uno para los casos evidentes:
 1. **Equivalencias confirmadas:** VINCHA = VINCHA01, MUÑE = MUÑEQUERA01, TE172 = TE75C, DE160A = DE160C. Dicen qué
    artículo es, no cuántas unidades de la lista lleva la venta. **Manguitas y pantorrilleras «A CONFIRMAR», por par**,
    reconocidas por código (MA01C, MA10C, MA20C, MA21C, MA26C; PA01C, PA10C, PA21C, PA26C, FUPA01C, FUPA02C, HOCKEY01, las
-   familias que PFOS tiene confirmadas). **VINCHA01 y MUÑEQUERA01 figuran «A CONFIRMAR» y su unidad no está confirmada:
-   quedan pendientes** (sin costo, listadas) hasta confirmarlas en PFOS → Costos de la mercadería.
+   familias que PFOS tiene confirmadas). **VINCHA01, por unidad, y MUÑEQUERA01, por par** (Nicolás, 28/10), al precio de
+   la lista. Cualquier otro «A CONFIRMAR» queda pendiente (sin costo, listado) hasta confirmarlo.
 2. **Código de la lista** sin la última letra (ME23 = ME23C) o completo.
 3. **X2, X3, X6** multiplican.
 4. **Colores con «+»** en el mismo código: uno por color.

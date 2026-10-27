@@ -10,6 +10,7 @@ import { armarMes } from './mes.js';
 import { textoComprobantes } from '../app/rentabilidad.js';
 import { dirFotos, leerFotos } from './fotos.js';
 import { titularidad } from './cuenta.js';
+import { UNIDAD_CONFIRMADA } from './costos.js';
 
 function escribir(f, contenido) {
   fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
@@ -39,6 +40,9 @@ export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas 
   log(`Cuenta de las vistas: ${cuenta} (la configurada en FISCALOS_PFOS_CUENTA)`);
   const comunes = await leerComunes(db);
   log(`Listas de costos: ${comunes.listas.map((l) => `${l.supplier} desde ${l.valid_from}`).join(', ') || 'ninguna'} · SKU con decisión en PFOS: ${comunes.mapeos.size}`);
+  const pendientes = [...new Set([...comunes.itemsPorLista.values()].flat().filter((it) => it.presentation === 'A_CONFIRMAR')
+    .map((it) => String(it.code).toUpperCase().replace(/\s+/g, '')).filter((c) => !UNIDAD_CONFIRMADA.has(c)))].sort();
+  log(pendientes.length ? `Artículos «A CONFIRMAR» de la lista sin unidad confirmada (quedan sin costo): ${pendientes.join(', ')}` : 'Todos los artículos «A CONFIRMAR» de la lista tienen su unidad confirmada.');
   if (!comunes.ads?.filas) log('AVISO: la vista fiscalos.ads_diario no devuelve ninguna fila: la publicidad queda «sin datos» (no 0). Si PFOS tiene Mercado Ads, correr docs/pfos-correccion-1.sql.');
   else log(`Mercado Ads: ${comunes.ads.filas} filas, del ${comunes.ads.desde} al ${comunes.ads.hasta}`);
   const datosDir = path.join(outDir, 'datos');
