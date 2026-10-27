@@ -7,6 +7,7 @@
  *  - es miembro de otro rol (p. ej. neon_superuser, pg_read_all_data): heredaría permisos;
  *  - es dueño de alguna tabla o vista (sería la credencial del dueño);
  *  - puede escribir (INSERT/UPDATE/DELETE/TRUNCATE) en cualquier tabla o vista;
+ *  - puede crear objetos: esquemas en la base o tablas, vistas o funciones en algún esquema;
  *  - puede leer directamente alguna tabla de PFOS (en «public»): solo tiene que ver las vistas;
  *  - le falta alguna vista.
  * Además, la sesión se pone en «solo lectura» y cada fila leída tiene que ser de la cuenta configurada.
@@ -14,11 +15,28 @@
 
 export const VISTAS = ['ordenes', 'cobros_mp', 'devoluciones', 'facturas_clientes', 'cobertura', 'ads_diario', 'conciliacion', 'importaciones',
   'costos_listas', 'costos_items', 'costos_sku', 'costos_sku_componentes'];
-const CON_CUENTA = ['ordenes', 'cobros_mp', 'devoluciones', 'facturas_clientes', 'cobertura', 'ads_diario', 'conciliacion'];
+const CON_CUENTA = ['ordenes', 'cobros_mp', 'devoluciones', 'facturas_clientes', 'cobertura', 'ads_diario', 'conciliacion', 'importaciones', 'costos_sku', 'costos_sku_componentes'];
 
-/** Abre la conexión (cliente pg). La cadena va en arca/.env (FISCALOS_PFOS_URL), nunca en el repositorio. */
-export async function conectar(url) {
-  if (!url) throw new Error('falta FISCALOS_PFOS_URL en arca\\.env (la cadena del rol de solo lectura fiscalos_lectura)');
+/**
+ * Cadena de conexión desde arca\.env. Preferido: FISCALOS_PFOS_HOST + FISCALOS_PFOS_BASE + FISCALOS_PFOS_CLAVE (la arma
+ * FiscalOS, con el usuario fijo fiscalos_lectura y la clave codificada para URL). Alternativa: FISCALOS_PFOS_URL completa.
+ * El usuario de la URL tiene que ser fiscalos_lectura: nunca el dueño.
+ */
+export function urlDesdeEntorno(env = process.env) {
+  if (env.FISCALOS_PFOS_HOST && env.FISCALOS_PFOS_BASE && env.FISCALOS_PFOS_CLAVE) {
+    return `postgresql://fiscalos_lectura:${encodeURIComponent(env.FISCALOS_PFOS_CLAVE)}@${env.FISCALOS_PFOS_HOST}/${encodeURIComponent(env.FISCALOS_PFOS_BASE)}?sslmode=require`;
+  }
+  if (env.FISCALOS_PFOS_URL) {
+    const u = new URL(env.FISCALOS_PFOS_URL);
+    if (decodeURIComponent(u.username) !== 'fiscalos_lectura') throw new Error(`FISCALOS_PFOS_URL usa el usuario «${decodeURIComponent(u.username)}»: tiene que ser fiscalos_lectura (nunca el dueño de la base)`);
+    return env.FISCALOS_PFOS_URL;
+  }
+  return null;
+}
+
+/** Abre la conexión (cliente pg). La cadena sale de arca\.env, nunca del repositorio. */
+export async function conectar(url = urlDesdeEntorno()) {
+  if (!url) throw new Error('falta la conexión con PFOS en arca\\.env: FISCALOS_PFOS_HOST y FISCALOS_PFOS_BASE (con la clave de «fiscalos.ps1 pfos-clave»), o FISCALOS_PFOS_URL');
   let pg;
   try { pg = (await import('pg')).default; } catch { throw new Error('falta el módulo pg: corré fiscalos.ps1 actualizar'); }
   const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 15000, statement_timeout: 60000, application_name: 'fiscalos' });
@@ -44,6 +62,11 @@ export async function controlarRol(db) {
       AND (has_table_privilege(c.oid, 'INSERT') OR has_table_privilege(c.oid, 'UPDATE') OR has_table_privilege(c.oid, 'DELETE') OR has_table_privilege(c.oid, 'TRUNCATE'))
     LIMIT 5`);
   if (escritura.length) throw new Error(`el rol ${rol.nombre} puede escribir en ${escritura.map((e) => e.rel).join(', ')}: tiene que ser solo de lectura`);
+  const crea = await q(db, `SELECT n.nspname FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast%'
+    AND has_schema_privilege(n.oid, 'CREATE')`);
+  if (crea.length) throw new Error(`el rol ${rol.nombre} puede crear objetos en ${crea.map((c) => c.nspname).join(', ')}: tiene que poder solo leer`);
+  const [{ base }] = await q(db, `SELECT has_database_privilege(current_database(), 'CREATE') AS base`);
+  if (base) throw new Error(`el rol ${rol.nombre} puede crear esquemas en la base: tiene que poder solo leer`);
   const directas = await q(db, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m') AND has_table_privilege(c.oid, 'SELECT') LIMIT 5`);
   if (directas.length) throw new Error(`el rol ${rol.nombre} puede leer tablas de PFOS directamente (${directas.map((d) => d.relname).join(', ')}): solo tiene que ver las vistas de «fiscalos»`);
@@ -59,13 +82,14 @@ export async function controlarRol(db) {
   return rol.nombre;
 }
 
-/** Comprueba que todas las vistas con cuenta tengan UNA sola cuenta y que sea la configurada. Devuelve el user_id. */
-export async function controlarCuenta(db, esperada = null) {
+/** Comprueba que todas las vistas con cuenta tengan UNA sola cuenta y que sea la configurada (obligatoria). Devuelve el user_id. */
+export async function controlarCuenta(db, esperada) {
+  if (!/^\d{6,12}$/.test(String(esperada ?? ''))) throw new Error('falta FISCALOS_PFOS_CUENTA (el user_id de Mercado Libre de la cuenta de tu CUIT): sin ella no se lee nada');
   const cuentas = new Set();
   for (const v of CON_CUENTA) for (const r of await q(db, `SELECT DISTINCT user_id::text AS u FROM fiscalos.${v}`)) cuentas.add(r.u);
   if (cuentas.size > 1) throw new Error(`las vistas de «fiscalos» devuelven ${cuentas.size} cuentas: tienen que filtrar una sola (revisar docs/pfos-acceso.sql)`);
   const [cuenta] = [...cuentas];
-  if (esperada && cuenta && cuenta !== String(esperada)) throw new Error(`las vistas son de la cuenta ${cuenta} y FiscalOS espera ${esperada} (FISCALOS_PFOS_CUENTA)`);
+  if (cuenta && cuenta !== String(esperada)) throw new Error(`las vistas son de la cuenta ${cuenta} y FiscalOS espera ${esperada} (FISCALOS_PFOS_CUENTA)`);
   if (!cuenta) throw new Error('las vistas de «fiscalos» no devuelven datos de ninguna cuenta');
   return cuenta;
 }

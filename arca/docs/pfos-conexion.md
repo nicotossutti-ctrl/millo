@@ -37,39 +37,71 @@ cobertura real de septiembre y octubre la mide `fiscalos.ps1 pfos` la primera ve
 
 ## 4. Separación de cuentas (solo PALERMO)
 
-1. **En la base:** el rol de FiscalOS solo puede leer las vistas del esquema `fiscalos`, que filtran por el `user_id` de
-   PALERMO (`docs/pfos-acceso.sql`). Para ese rol, las filas de la otra cuenta no existen. Tampoco puede leer las tablas de
-   PFOS, ni `ml_accounts` (donde están los tokens).
-2. **En FiscalOS:** cada vista tiene que traer una sola cuenta, la configurada en `FISCALOS_PFOS_CUENTA`.
-3. **Por identificadores:** las facturas a clientes de la cuenta tienen que estar en tus comprobantes emitidos de ARCA,
-   con el mismo punto de venta y número o el mismo CAE. El punto de venta y el número solo existen dentro de un CUIT, y el
-   CAE lo otorga ARCA a ese CUIT. Si coinciden menos del 95 %, FiscalOS **no usa** los datos de ese mes.
+1. **En la base.** El rol de FiscalOS solo puede leer las vistas del esquema `fiscalos`, que filtran por el `user_id` de
+   PALERMO (`docs/pfos-acceso.sql`):
+   - las vistas tienen `security_barrier`: el filtro por cuenta se aplica antes que cualquier condición de una consulta;
+   - para ese rol, las filas de la otra cuenta no existen;
+   - tampoco puede leer las tablas de PFOS ni `ml_accounts` (los tokens).
+2. **En FiscalOS, la configuración:**
+   - `FISCALOS_PFOS_CUENTA` es **obligatoria**: sin ella no se abre ninguna conexión;
+   - `FISCALOS_PFOS_EXCLUIDAS` (la otra cuenta) nunca se acepta como cuenta;
+   - cada vista tiene que traer una sola cuenta, la configurada.
+3. **Por CAE.** Las facturas a clientes de la cuenta, del reporte de comprobantes cargado en «Conciliación» de PFOS, tienen
+   que estar en **tus comprobantes emitidos de ARCA** con el **mismo CAE** y el mismo punto de venta y número:
+   - hacen falta al menos 20 CAE en el mes, y que coincida el 95 %;
+   - punto de venta + número solos **nunca** validan, porque se repiten entre CUIT distintos;
+   - sin evidencia suficiente, el mes queda «cuenta no verificada» y sus datos no se usan.
 
 ## 5. Seguridad del acceso
 
-- **Rol propio, mínimo.** `fiscalos_lectura` solo tiene `SELECT` sobre las vistas, con la sesión en solo lectura. Se crea
-  con SQL, **no** desde la consola de Neon: los roles de la consola heredan `neon_superuser`.
+- **Rol propio, mínimo.** `fiscalos_lectura`:
+  - solo tiene `SELECT` sobre las vistas, con la sesión en solo lectura;
+  - se crea con SQL, **no** desde la consola de Neon (los roles de la consola heredan `neon_superuser`).
 - **Controles antes de leer.** Si el rol no cumple con algo de esto, FiscalOS no lee nada:
   - no es superusuario;
   - no hereda permisos de otro rol;
   - no es dueño de ningún objeto;
   - no puede escribir en ninguna tabla;
+  - **no puede crear** objetos en ningún esquema ni esquemas en la base;
   - no puede leer tablas de PFOS directamente.
-- **La clave** la genera Nicolás en su PC y va solo en `arca\.env` (`FISCALOS_PFOS_URL`), que nunca se sube. No pasa por
-  el chat.
-- **Nada público.** FiscalOS guarda una foto por mes en `out/pfos/` (local, ignorado por git). La app sigue escuchando
-  solo en 127.0.0.1.
+- **Objetos temporales.** PostgreSQL deja crearlos a todos los roles (privilegio TEMP de PUBLIC). Duran lo que dura la
+  sesión y no tocan datos de PFOS. Quitarlo afectaría a todos los roles de la base, así que se deja como está.
+- **Clave.**
+  - La genera `fiscalos.ps1 pfos-clave` con el generador criptográfico de Node (`crypto.randomBytes`, 256 bits, 64
+    caracteres hexadecimales). Solo usa 0-9 y a-f, así que no hay que codificarla para la URL.
+  - Queda **solo** en `arca\.env` (`FISCALOS_PFOS_CLAVE`).
+  - El SQL lleva el **verificador SCRAM-SHA-256** (la clave cifrada, como la guarda PostgreSQL): la clave real no aparece
+    en el SQL ni en el historial de Neon.
+- **URL.** FiscalOS la arma desde `FISCALOS_PFOS_HOST`, `FISCALOS_PFOS_BASE` y la clave, con el usuario fijo
+  `fiscalos_lectura`:
+  - forma: `postgresql://fiscalos_lectura:<clave>@<host>/<base>?sslmode=require`;
+  - si se usa `FISCALOS_PFOS_URL` a mano, la clave va codificada para URL (`encodeURIComponent`);
+  - FiscalOS rechaza una URL con otro usuario (por ejemplo, el dueño).
+- **Nada público.** Las fotos por mes quedan en `out/pfos/` (local, fuera de git). La app escucha solo en 127.0.0.1.
 
-## 6. Pasos (cuando Nicolás lo apruebe)
+## 6. Instalación (cuando Nicolás lo apruebe)
 
-1. Revisar `docs/pfos-acceso.sql`, completar `<ID_CUENTA>` y `<CLAVE>`, y correrlo en el SQL Editor de Neon (como dueño).
-2. En `arca\.env`:
-   - `FISCALOS_PFOS_URL=postgresql://fiscalos_lectura:<CLAVE>@<host>/<base>?sslmode=require`;
-   - `FISCALOS_PFOS_CUENTA=<ID_CUENTA>`.
-3. `fiscalos.ps1 actualizar` y después `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`. La consola muestra:
-   - si la cuenta quedó verificada;
-   - cada concepto, con su cobertura;
+1. **Proyecto correcto.** En Neon, abrir el proyecto de **PFOS Mercado Libre**: es la base con `pfos_money_records`, **no**
+   «PFOS TASKS».
+2. **Comprobación previa (solo lectura).** Abrir `docs/pfos-comprobacion.sql` y reemplazar `<ID_CUENTA>` (PALERMO) y
+   `<ID_EXCLUIDA>` (la otra cuenta). Correrlo en el SQL Editor:
+   - devuelve 15 filas;
+   - si alguna da `ok = false`, **parar** y mandar el resultado;
+   - si la consulta falla con «relation "pfos_money_records" does not exist», es la base equivocada.
+3. **Clave.** En la PC: `fiscalos.ps1 actualizar` y después `fiscalos.ps1 pfos-clave`:
+   - guarda la clave en `arca\.env`;
+   - imprime el verificador (`SCRAM-SHA-256$4096:…`).
+4. **Acceso.** Abrir `docs/pfos-acceso.sql`, reemplazar `<ID_CUENTA>` y `<VERIFICADOR>`, y correrlo **como dueño**:
+   - si Neon rechaza el verificador, correr `fiscalos.ps1 pfos-clave -Nueva -Texto`, usar esa clave en su lugar y después
+     borrar ese SQL del historial;
+   - al final del archivo están las comprobaciones (todas `false`) y cómo deshacer.
+5. **Configuración.** En `arca\.env` (ver `.env.example`):
+   - `FISCALOS_PFOS_HOST`: el host del proyecto, de la cadena de conexión de Neon;
+   - `FISCALOS_PFOS_BASE`;
+   - `FISCALOS_PFOS_CUENTA` (PALERMO);
+   - `FISCALOS_PFOS_EXCLUIDAS` (la otra cuenta).
+6. **Prueba.** `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`. La consola dice:
+   - qué rol se usó y que pasó los controles;
+   - si la cuenta quedó verificada por CAE en cada mes;
+   - cada concepto con su cobertura;
    - las unidades sin costo.
-4. Abrir la app: **Rentabilidad** muestra:
-   - la comparación septiembre / octubre;
-   - el recuadro de PFOS, con la cobertura de cada fuente.

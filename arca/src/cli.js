@@ -14,6 +14,7 @@ import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
 import { reprocesarDjIva } from './reprocesarDj.js';
 import { actualizarPfos } from './pfos/actualizar.js';
+import { generarClave, verificadorScram, guardarClaveEnEnv } from './pfos/clave.js';
 import { iniciarServidor } from './app/servidor.js';
 import { spawn } from 'node:child_process';
 
@@ -52,6 +53,9 @@ Aplicación (interfaz en el navegador, local, sin abrir ARCA):
 Informes (sin abrir ARCA, con los datos conservados en out/datos):
   informe:iva --periodo AAAA-MM  IVA del mes: comprobantes, declarado (DJ), pagado, retenciones, presentación,
                                 vencimiento y deuda; conciliación solo con cifras existentes y validadas.
+  pfos:clave [--nueva] [--texto]
+                                Genera la clave del rol de solo lectura de PFOS (criptográfica), la guarda en .env y
+                                muestra su verificador SCRAM para el SQL de acceso. La clave real no se muestra.
   pfos:actualizar --periodo AAAA-MM[,AAAA-MM]
                                 Lee PFOS en solo lectura (solo la cuenta del contribuyente, verificada contra tus
                                 comprobantes emitidos de ARCA) y guarda la foto del mes para Rentabilidad.
@@ -103,6 +107,8 @@ const { values: o, positionals } = parseArgs({
     visible: { type: 'boolean', default: false },
     'sin-capturas': { type: 'boolean', default: false },
     rehacer: { type: 'boolean', default: false },
+    nueva: { type: 'boolean', default: false },
+    texto: { type: 'boolean', default: false },
     servicios: { type: 'string' },
     periodo: { type: 'string' },
     puerto: { type: 'string' },
@@ -174,6 +180,28 @@ try {
     console.error(`FiscalOS está abierto en ${url}  (dejá esta ventana abierta; Ctrl+C para cerrar)`);
     if (!o['no-abrir']) abrirNavegador(url);
     await new Promise(() => {}); // el servidor mantiene vivo el proceso hasta Ctrl+C
+  }
+
+  if (cmd === 'pfos:clave') {
+    // Genera la clave del rol fiscalos_lectura con el generador criptográfico, la guarda SOLO en .env y muestra el
+    // verificador SCRAM (la clave cifrada) para docs/pfos-acceso.sql. La clave real nunca se imprime.
+    const env = path.resolve('.env');
+    const previo = fs.existsSync(env) ? fs.readFileSync(env, 'utf8') : '';
+    if (/^FISCALOS_PFOS_CLAVE=/m.test(previo) && !o.nueva) {
+      throw new Error('ya hay una FISCALOS_PFOS_CLAVE en .env. Si el rol todavía no se creó o querés cambiarla, corré con --nueva (después hay que actualizar la clave del rol en Neon con el verificador nuevo)');
+    }
+    const clave = generarClave();
+    guardarClaveEnEnv(env, clave);
+    if (o.texto) {
+      // Solo si Neon rechaza la clave cifrada: la clave real, una vez, para pegarla en el SQL en lugar de <VERIFICADOR>.
+      console.log(clave);
+      console.error(`\nClave guardada en ${env}. Arriba está la clave REAL (solo porque pediste --texto): pegala en el SQL y después borrá ese SQL del historial del SQL Editor de Neon.`);
+    } else {
+      console.log(verificadorScram(clave));
+      console.error(`\nClave nueva guardada en ${env} (FISCALOS_PFOS_CLAVE). No se muestra ni se sube a GitHub.`);
+      console.error('Arriba está el VERIFICADOR (la clave cifrada): pegalo en docs/pfos-acceso.sql en lugar de <VERIFICADOR>.');
+    }
+    process.exit(0);
   }
 
   if (cmd === 'pfos:actualizar') {

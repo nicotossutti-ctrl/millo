@@ -8,19 +8,22 @@
 #   .\fiscalos.ps1 correr -Servicios cuentas-tributarias,ct-deudas   Prueba solo esas fuentes.
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
 #   .\fiscalos.ps1 informe-iva -Periodo 2026-09   Informe de IVA del mes con los datos ya conservados (no abre ARCA).
+#   .\fiscalos.ps1 pfos-clave     Genera la clave del acceso de solo lectura a PFOS (queda en .env) y muestra su verificador.
 #   .\fiscalos.ps1 pfos -Periodo 2026-09,2026-10   Lee PFOS (solo lectura) y guarda la rentabilidad de esos meses.
 #   .\fiscalos.ps1 app            Abre FiscalOS en el navegador (panel por mes, rentabilidad, importar archivos).
 #   .\fiscalos.ps1 acceso-directo Crea un acceso directo "FiscalOS" en el escritorio que abre la app.
 #   .\fiscalos.ps1 reprocesar-dj -Periodo 2026-09 Vuelve a leer la DJ de IVA del mes con la ultima captura ya bajada (no abre ARCA).
 param(
-  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj','app','acceso-directo','pfos')]
+  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj','app','acceso-directo','pfos','pfos-clave')]
   [string]$Accion = 'correr',
   [string]$Desde,
   [string]$Hasta,
   [switch]$Rehacer,
   [switch]$Oculto,
   [string]$Servicios,
-  [string]$Periodo
+  [string]$Periodo,
+  [switch]$Nueva,
+  [switch]$Texto
 )
 $ErrorActionPreference = 'Stop'
 $Rama = 'claude/elegant-gauss-djpghk'
@@ -116,6 +119,14 @@ function Pfos {
   try { Correr-Paso "PFOS: rentabilidad de $Periodo (solo lectura)" 'npm.cmd' @('run','arca','--','pfos:actualizar','--periodo',$Periodo) } finally { Pop-Location }
 }
 
+function Pfos-Clave {
+  Push-Location $Raiz
+  $a = @('run','--silent','arca','--','pfos:clave')
+  if ($Nueva) { $a += '--nueva' }
+  if ($Texto) { $a += '--texto' }
+  try { Correr-Paso 'PFOS: clave del acceso de solo lectura' 'npm.cmd' $a } finally { Pop-Location }
+}
+
 function App {
   Push-Location $Raiz
   try {
@@ -169,5 +180,6 @@ switch ($Accion) {
   'reprocesar-dj' { Reprocesar-Dj }
   'app'           { App }
   'pfos'          { Pfos }
+  'pfos-clave'    { Pfos-Clave }
   'acceso-directo' { Acceso-Directo }
 }

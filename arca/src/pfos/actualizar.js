@@ -18,14 +18,24 @@ function escribir(f, contenido) {
 }
 
 /**
+ * La cuenta es OBLIGATORIA y no puede ser una excluida (FISCALOS_PFOS_EXCLUIDAS: la otra cuenta, de otro CUIT). Sin esto
+ * no se abre ninguna conexión.
+ */
+export function controlarConfiguracion(cuentaEsperada, excluidas = []) {
+  if (!/^\d{6,12}$/.test(String(cuentaEsperada ?? ''))) throw new Error('falta FISCALOS_PFOS_CUENTA en arca\\.env (el user_id de Mercado Libre de la cuenta de tu CUIT): sin ella no se lee nada');
+  if (excluidas.map(String).includes(String(cuentaEsperada))) throw new Error(`FISCALOS_PFOS_CUENTA (${cuentaEsperada}) está en FISCALOS_PFOS_EXCLUIDAS: esa cuenta es de otro CUIT y no se lee`);
+}
+
+/**
  * Con una conexión ya abierta (o una función de consulta compatible con pg), controla el rol y la cuenta, lee y arma los
  * meses pedidos. Devuelve las fotos (no escribe). `cuentaEsperada`: FISCALOS_PFOS_CUENTA.
  */
-export async function fotosDesde(db, { meses, outDir, cuentaEsperada = null, log = () => {} }) {
+export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas = [], log = () => {} }) {
+  controlarConfiguracion(cuentaEsperada, excluidas);
   const rol = await controlarRol(db);
   log(`Rol de solo lectura comprobado: ${rol}`);
   const cuenta = await controlarCuenta(db, cuentaEsperada);
-  log(`Cuenta de las vistas: ${cuenta}${cuentaEsperada ? ' (la configurada)' : ' (configurá FISCALOS_PFOS_CUENTA para fijarla)'}`);
+  log(`Cuenta de las vistas: ${cuenta} (la configurada en FISCALOS_PFOS_CUENTA)`);
   const comunes = await leerComunes(db);
   log(`Listas de costos: ${comunes.listas.map((l) => `${l.supplier} desde ${l.valid_from}`).join(', ') || 'ninguna'} · SKU con decisión en PFOS: ${comunes.mapeos.size}`);
   const datosDir = path.join(outDir, 'datos');
@@ -42,11 +52,13 @@ export async function fotosDesde(db, { meses, outDir, cuentaEsperada = null, log
   return fotos;
 }
 
-/** Comando completo: conecta con FISCALOS_PFOS_URL, arma las fotos y las guarda. */
-export async function actualizarPfos({ outDir, meses, url = process.env.FISCALOS_PFOS_URL, cuentaEsperada = process.env.FISCALOS_PFOS_CUENTA ?? null, log = console.error }) {
-  const db = await conectar(url);
+/** Comando completo: controla la configuración, conecta (arca\\.env), arma las fotos y las guarda. */
+export async function actualizarPfos({ outDir, meses, cuentaEsperada = process.env.FISCALOS_PFOS_CUENTA,
+  excluidas = String(process.env.FISCALOS_PFOS_EXCLUIDAS ?? '').split(/[,\s]+/).filter(Boolean), log = console.error }) {
+  controlarConfiguracion(cuentaEsperada, excluidas); // antes de conectar
+  const db = await conectar();
   try {
-    const fotos = await fotosDesde(db, { meses, outDir, cuentaEsperada, log });
+    const fotos = await fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas, log });
     for (const f of fotos) escribir(path.join(dirFotos(outDir), `${f.mes}.json`), JSON.stringify(f, null, 2));
     return fotos;
   } finally {

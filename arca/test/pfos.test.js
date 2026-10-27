@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,12 +13,15 @@ import { controlarRol } from '../src/pfos/lectura.js';
 import { proponerMapeo, listaParaVenta } from '../src/pfos/costos.js';
 import { enArgentina, cargosMes, vigentesConciliacion, coberturaReportes } from '../src/pfos/calculo.js';
 import { clavesArca, verificarCuenta } from '../src/pfos/cuenta.js';
+import { verificadorScram, generarClave, scramClaves } from '../src/pfos/clave.js';
+import { controlarConfiguracion } from '../src/pfos/actualizar.js';
+import { urlDesdeEntorno } from '../src/pfos/lectura.js';
 
 let PGlite = null;
 try { ({ PGlite } = await import('@electric-sql/pglite')); } catch { /* sin PGlite: las pruebas de base se saltean */ }
 const conPg = PGlite ? test : test.skip;
 const RAIZ = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const PROPIA = 111; const OTRA = 222; // cuentas de prueba (no son ids reales)
+const PROPIA = 111111; const OTRA = 222222; // cuentas de prueba (no son ids reales)
 
 // Estructura de PFOS (solo las tablas que usan las vistas, tal como las crea PFOS).
 const DDL = `
@@ -115,7 +119,7 @@ async function armarBase() {
   await db.query(`INSERT INTO pfos_cost_sku_map VALUES ($1,'TE251C',1,null,'confirmado','manual',1,null,now())`, [PROPIA]);
   await db.query(`INSERT INTO pfos_cost_sku_components VALUES ($1,'TE251C',1,0,'TE251C','PAR',null,11,1,1)`, [PROPIA]);
   // El acceso de solo lectura, tal cual el archivo (con la cuenta y una clave de prueba).
-  const acceso = fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-acceso.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(PROPIA)).replace(/<CLAVE>/g, 'clave-de-prueba');
+  const acceso = fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-acceso.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(PROPIA)).replace(/<VERIFICADOR>/g, verificadorScram('clave-de-prueba'));
   await db.exec(acceso);
   return db;
 }
@@ -212,8 +216,81 @@ test('piezas: fecha argentina, propuesta de SKU, lista posterior, cargos por pag
   const imps = [{ format: 'luma_viajes', status: 'cerrada', range_from: '2026-09-01', range_to: '2026-09-15' }, { format: 'luma_viajes', status: 'cerrada', range_from: '2026-09-16', range_to: '2026-09-30' }];
   assert.equal(coberturaReportes(imps, ['luma_viajes'], '2026-09').estado, 'completa');
   assert.equal(coberturaReportes(imps.slice(0, 1), ['luma_viajes'], '2026-09').estado, 'parcial');
-  // Cuenta: sin coincidencias suficientes, no se verifica.
-  const arca = clavesArca(['"Fecha de Emisión";"Tipo de Comprobante";"Punto de Venta";"Número Desde";"Número Hasta"\r\n"2026-09-01";"6";"5";"1";"30"']);
-  assert.equal(verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 5, numero: i + 1 })), arca).verificada, true);
-  assert.equal(verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 9, numero: i + 1 })), arca).verificada, false);
+});
+
+test('titularidad por CAE: punto de venta + número solos nunca validan; CAE con otro número tampoco', () => {
+  const cab = '"Fecha de Emisión";"Tipo de Comprobante";"Punto de Venta";"Número Desde";"Número Hasta";"Cód. Autorización"';
+  const filas = Array.from({ length: 30 }, (_, i) => `"2026-09-01";"6";"5";"${i + 1}";"${i + 1}";"7600000000${String(i).padStart(4, '0')}"`);
+  const arca = clavesArca([[cab, ...filas].join('\r\n')]);
+  const cae = (i) => `7600000000${String(i).padStart(4, '0')}`;
+  // Mismo punto de venta y número que tus emitidos, pero sin CAE: puede ser otro CUIT con la misma numeración.
+  const sinCae = verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 5, numero: i + 1 })), arca);
+  assert.equal(sinCae.verificada, false);
+  assert.equal(sinCae.soloNumeroEnArca, 30);
+  assert.match(sinCae.motivo, /solos no alcanzan/);
+  // CAE de tus emitidos con el mismo número: verificada.
+  const ok = verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 5, numero: i + 1, cae: cae(i) })), arca);
+  assert.equal(ok.verificada, true); assert.equal(ok.encontrados, 30);
+  // CAE que existe pero atado a otro número: no cuenta como coincidencia.
+  assert.equal(verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 9, numero: i + 1, cae: cae(i) })), arca).verificada, false);
+  // Pocos CAE: no alcanza aunque coincidan todos.
+  assert.equal(verificarCuenta(Array.from({ length: 5 }, (_, i) => ({ pv: 5, numero: i + 1, cae: cae(i) })), arca).verificada, false);
+});
+
+test('configuración: la cuenta es obligatoria y no puede ser una excluida; la URL no puede ser del dueño', () => {
+  assert.throws(() => controlarConfiguracion(undefined), /falta FISCALOS_PFOS_CUENTA/);
+  assert.throws(() => controlarConfiguracion('abc'), /falta FISCALOS_PFOS_CUENTA/);
+  assert.throws(() => controlarConfiguracion('222222', ['222222']), /otro CUIT/);
+  assert.doesNotThrow(() => controlarConfiguracion('111111', ['222222']));
+  assert.throws(() => urlDesdeEntorno({ FISCALOS_PFOS_URL: 'postgresql://neondb_owner:x@h/db' }), /tiene que ser fiscalos_lectura/);
+  const u = urlDesdeEntorno({ FISCALOS_PFOS_HOST: 'ep-x.aws.neon.tech', FISCALOS_PFOS_BASE: 'neondb', FISCALOS_PFOS_CLAVE: 'a/b@c:d' });
+  assert.equal(new URL(u).username, 'fiscalos_lectura');
+  assert.equal(decodeURIComponent(new URL(u).password), 'a/b@c:d', 'la clave se codifica para la URL');
+});
+
+test('clave: aleatoria criptográfica y verificador SCRAM-SHA-256 correcto (vector del RFC 7677)', () => {
+  const c = generarClave();
+  assert.match(c, /^[0-9a-f]{64}$/);
+  assert.notEqual(c, generarClave());
+  // RFC 7677: usuario «user», clave «pencil», sal y 4096 iteraciones; la prueba del cliente y la firma del servidor.
+  const { claveCliente, claveGuardada, claveServidor } = scramClaves('pencil', Buffer.from('W22ZaJ0SNY7soEsUEjb6gQ==', 'base64'), 4096);
+  const auth = 'n=user,r=rOprNGfwEbeRWgbNEkqO,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096,c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0';
+  const hmac = (k, m) => crypto.createHmac('sha256', k).update(m).digest();
+  const firmaCliente = hmac(claveGuardada, auth);
+  const prueba = Buffer.from(claveCliente.map((b, i) => b ^ firmaCliente[i]));
+  assert.equal(prueba.toString('base64'), 'dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=');
+  assert.equal(hmac(claveServidor, auth).toString('base64'), '6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=');
+  assert.match(verificadorScram(c), /^SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
+});
+
+conPg('comprobación previa: corre como una sola consulta de lectura y da ok en una base de PFOS', async () => {
+  const db = await armarBase();
+  // Antes del acceso: se corre sobre una base sin «fiscalos» (se arma de nuevo sin el SQL de acceso).
+  const limpia = new PGlite(); await limpia.exec(DDL);
+  await limpia.query(`INSERT INTO ml_accounts VALUES ($1,'A','t',now()), ($2,'B','t',now())`, [PROPIA, OTRA]);
+  const sql = fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-comprobacion.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(PROPIA)).replace(/<ID_EXCLUIDA>/g, String(OTRA));
+  const { rows } = await limpia.query(sql);
+  const por = Object.fromEntries(rows.map((r) => [r.orden, r]));
+  assert.equal(rows.length, 15);
+  for (const n of [2, 3, 4, 5, 13, 15]) assert.equal(por[n].ok, true, `${por[n].control}: ${por[n].detalle}`);
+  assert.equal(por[6].ok, false, 'sin ventas cargadas lo dice');
+  // En la base con datos y con el acceso ya instalado: ventas sí, y avisa que el esquema y el rol ya existen.
+  const { rows: r2 } = await db.query(sql);
+  const p2 = Object.fromEntries(r2.map((r) => [r.orden, r]));
+  assert.equal(p2[6].ok, true); assert.match(p2[6].detalle, /^4 \/ 1 órdenes/, 'las 4 de septiembre (con la cancelada) y 1 de octubre, solo de la cuenta');
+  assert.equal(p2[10].ok, true, p2[10].detalle);
+  assert.equal(p2[15].ok, false);
+  // Una base equivocada (sin las tablas de PFOS) no pasa: la consulta falla al no encontrarlas.
+  await assert.rejects(new PGlite().query(sql), /pfos_money_records|does not exist/);
+});
+
+conPg('el rol no puede crear objetos: con CREATE en un esquema, FiscalOS no lee', async () => {
+  const db = await armarBase();
+  await db.exec(`CREATE ROLE crea LOGIN NOSUPERUSER; GRANT USAGE ON SCHEMA fiscalos TO crea; GRANT SELECT ON ALL TABLES IN SCHEMA fiscalos TO crea;
+    GRANT CREATE ON SCHEMA fiscalos TO crea; SET ROLE crea`);
+  await assert.rejects(controlarRol(comoPg(db)), /puede crear objetos en fiscalos/);
+  // Crear esquemas en la base (PGlite no permite otorgarlo): conexión simulada con todo en orden salvo eso.
+  const fake = { query: async (sql) => ({ rows: /FROM pg_roles WHERE rolname = current_user/.test(sql) ? [{ nombre: 'x', rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false }]
+    : /AS propias/.test(sql) ? [{ propias: 0 }] : /has_database_privilege/.test(sql) ? [{ base: true }] : [] }) };
+  await assert.rejects(controlarRol(fake), /puede crear esquemas en la base/);
 });

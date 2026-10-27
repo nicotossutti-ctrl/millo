@@ -238,7 +238,10 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **PFOS** (Mercado Libre, solo la cuenta del CUIT del contribuyente): `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`
   lee PFOS en **solo lectura** y guarda una foto por mes en `out/pfos/`, con costo de lo vendido, cargos de ML,
   logística, publicidad, cobertura de cada fuente y la cuenta verificada contra tus comprobantes emitidos de ARCA.
-  Acceso y seguridad: `docs/pfos-acceso.sql`; qué aporta y qué falta: `docs/pfos-conexion.md`.
+  Instalación y seguridad (`docs/pfos-conexion.md`, sección 6): comprobación previa de solo lectura
+  (`docs/pfos-comprobacion.sql`), clave criptográfica con `fiscalos.ps1 pfos-clave` (queda solo en `.env`; el SQL lleva
+  el verificador SCRAM) y acceso (`docs/pfos-acceso.sql`). La cuenta es obligatoria (`FISCALOS_PFOS_CUENTA`) y se
+  verifica por CAE contra tus comprobantes emitidos de ARCA.
 - **Comparación de meses** (arriba de Rentabilidad): facturación, costo, margen, gastos, impuestos atribuibles,
   resultado, IVA y pagos de impuestos, con el estado de cada cifra; la variación se marca si alguna es parcial o estimada.
 
