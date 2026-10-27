@@ -241,7 +241,10 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   Instalación y seguridad (`docs/pfos-conexion.md`, sección 6): comprobación previa de solo lectura
   (`docs/pfos-comprobacion.sql`), clave criptográfica con `fiscalos.ps1 pfos-clave` (queda solo en `.env`; el SQL lleva
   el verificador SCRAM) y acceso (`docs/pfos-acceso.sql`). La cuenta es obligatoria (`FISCALOS_PFOS_CUENTA`) y se
-  verifica por CAE contra tus comprobantes emitidos de ARCA.
+  verifica por CAE contra tus comprobantes emitidos de ARCA. Sobre una instalación ya hecha, `docs/pfos-correccion-1.sql`
+  corrige la vista de Mercado Ads y suma la descripción de la lista de costos (sección 7 de `docs/pfos-conexion.md`).
+  El mes en curso se mide **al corte** (hasta ayer) y, sin comprobantes emitidos todavía, muestra una rentabilidad
+  operativa **provisoria** apoyada en la cuenta verificada por CAE en otro mes; su conciliación fiscal queda pendiente.
 - **Comparación de meses** (arriba de Rentabilidad): facturación, costo, margen, gastos, impuestos atribuibles,
   resultado, IVA y pagos de impuestos, con el estado de cada cifra; la variación se marca si alguna es parcial o estimada.
 

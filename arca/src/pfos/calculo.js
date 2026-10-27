@@ -39,17 +39,38 @@ export function diaReporte(v) {
 }
 
 export const diasDelMes = (mes) => { const [y, m] = mes.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+export const finDelMes = (mes) => `${mes}-${String(diasDelMes(mes)).padStart(2, '0')}`;
+const sumarDias = (dia, n) => new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const ANULADAS = new Set(['cancelled', 'invalid']);
 
-/** Órdenes (data de PFOS) del mes por su fecha de creación en hora de Argentina, separando las canceladas. */
-export function ordenesDelMes(ordenes, mes) {
-  const vigentes = []; const canceladas = [];
+/**
+ * Corte del mes: el último día que PFOS ya puede tener completo. Un mes terminado, su último día; el mes en curso, AYER
+ * (hora de Argentina) respecto de cuándo se generó la foto. Los días posteriores al corte no son «atrasados»: todavía no
+ * pasaron. null si el mes todavía no empezó.
+ */
+export function corteDelMes(mes, generado = new Date().toISOString()) {
+  const hoy = enArgentina(generado)?.dia ?? new Date().toISOString().slice(0, 10);
+  const fin = finDelMes(mes); const ayer = sumarDias(hoy, -1);
+  const corte = ayer < fin ? ayer : fin;
+  return corte < `${mes}-01` ? null : corte;
+}
+
+/** Días del mes hasta el corte (inclusive): ['AAAA-MM-01', …]. */
+export const diasHasta = (mes, corte) => (corte ? Array.from({ length: Number(corte.slice(8, 10)) }, (_, i) => `${mes}-${String(i + 1).padStart(2, '0')}`) : []);
+
+/**
+ * Órdenes (data de PFOS) del mes por su fecha de creación en hora de Argentina, separando las canceladas. Con corte, las
+ * de días posteriores (hoy, en el mes en curso) quedan afuera y se cuentan aparte: el mes se mide entero hasta el corte.
+ */
+export function ordenesDelMes(ordenes, mes, corte = finDelMes(mes)) {
+  const vigentes = []; const canceladas = []; let posteriores = 0;
   for (const o of ordenes) {
     const f = enArgentina(o.data?.date_created);
     if (f?.mes !== mes) continue;
+    if (corte && f.dia > corte) { posteriores++; continue; }
     (ANULADAS.has(o.data?.status) ? canceladas : vigentes).push({ ...o, dia: f.dia });
   }
-  return { vigentes, canceladas };
+  return { vigentes, canceladas, posteriores };
 }
 
 const skuDe = (it) => it?.item?.seller_sku || it?.item?.seller_custom_field || null;
@@ -64,43 +85,47 @@ export function costearLinea({ sku, cantidad, precio, variacion, dia }, { listas
   if (!lista) return { valor: null, motivo: 'no hay ninguna lista de costos cargada en PFOS' };
   const items = itemsPorLista.get(String(lista.id)) ?? [];
   const decision = sku ? mapeoVigente(mapeos.get(sku) ?? [], dia) : null;
-  if (decision?.status === 'excluido') return { valor: null, motivo: 'SKU excluido en PFOS', posterior };
-  let componentes; let origen;
+  if (decision?.status === 'excluido') return { valor: null, motivo: 'SKU excluido en PFOS', categoria: 'excluido en PFOS', posterior };
+  let componentes; let origen; let reglas = [];
   if (decision?.status === 'confirmado' && decision.components?.length) { componentes = decision.components; origen = 'confirmado'; }
   else {
     const p = proponerMapeo({ sku, unitPrice: precio, variation: variacion }, items);
-    if (p.estado !== 'automático') return { valor: null, motivo: p.motivo, posterior };
-    componentes = p.components; origen = 'automático';
+    if (p.estado !== 'automático') return { valor: null, motivo: p.motivo, categoria: p.categoria, revision: p.estado === 'dudoso', posterior };
+    componentes = p.components; origen = 'automático'; reglas = p.reglas;
   }
   const c = costoLinea({ cantidad, componentes, items });
-  return c.valor == null ? { valor: null, motivo: c.motivo, posterior } : { valor: c.valor, porUnidad: c.porUnidad, origen, posterior };
+  return c.valor == null ? { valor: null, motivo: c.motivo, categoria: 'fila de la lista', posterior } : { valor: c.valor, porUnidad: c.porUnidad, origen, reglas, posterior };
 }
 
 /** Costo de la mercadería vendida en el mes (sin devoluciones). */
 export function costoVendidoMes(ordenesMes, ctx) {
-  let total = 0; let unidades = 0; let conCosto = 0; let confirmadas = 0; let automaticas = 0; let posteriores = 0;
-  const sinCosto = new Map();
+  let total = 0; let unidades = 0; let conCosto = 0; let confirmadas = 0; let automaticas = 0; let posteriores = 0; let revision = 0;
+  const sinCosto = new Map(); const porDia = {}; const porRegla = {}; const motivos = {};
   for (const o of ordenesMes) {
+    const d = (porDia[o.dia] ??= { unidades: 0, conCosto: 0, costo: 0 });
     for (const it of o.data?.order_items ?? []) {
       const cantidad = num(it.quantity) ?? 0;
-      unidades += cantidad;
+      unidades += cantidad; d.unidades += cantidad;
       const sku = skuDe(it);
       const c = costearLinea({ sku, cantidad, precio: num(it.unit_price), variacion: variacionDe(it), dia: o.dia }, ctx);
       if (c.valor == null) {
         const k = sku || '(sin SKU)';
-        const s = sinCosto.get(k) ?? { sku: k, unidades: 0, motivo: c.motivo };
+        const s = sinCosto.get(k) ?? { sku: k, unidades: 0, motivo: c.motivo, categoria: c.categoria ?? 'otro', revision: !!c.revision };
         s.unidades += cantidad; sinCosto.set(k, s);
+        motivos[s.categoria] = (motivos[s.categoria] ?? 0) + cantidad;
+        if (c.revision) revision += cantidad;
         continue;
       }
-      total += c.valor; conCosto += cantidad;
+      total += c.valor; conCosto += cantidad; d.conCosto += cantidad; d.costo = r2(d.costo + c.valor);
       if (c.origen === 'confirmado') confirmadas += cantidad; else automaticas += cantidad;
       if (c.posterior) posteriores += cantidad;
+      for (const g of c.reglas ?? []) { const k = g.replace(/^x\d+$/, 'xN').replace(/^\d+ colores.*/, 'colores con «+»'); porRegla[k] = (porRegla[k] ?? 0) + cantidad; }
     }
   }
   return {
     total: r2(total), unidades, unidadesConCosto: conCosto, cobertura: unidades ? r2((conCosto / unidades) * 100) : null,
-    unidadesConfirmadas: confirmadas, unidadesAutomaticas: automaticas, unidadesListaPosterior: posteriores,
-    sinCosto: [...sinCosto.values()].sort((a, b) => b.unidades - a.unidades),
+    unidadesConfirmadas: confirmadas, unidadesAutomaticas: automaticas, unidadesListaPosterior: posteriores, unidadesParaRevision: revision,
+    sinCosto: [...sinCosto.values()].sort((a, b) => b.unidades - a.unidades), motivos, porRegla, porDia,
   };
 }
 
@@ -149,7 +174,7 @@ export function claseCargo(c) {
 export function cargosMes(ordenesMes, cobrosPorId) {
   const suma = { comision: 0, cuotas: 0, cupon: 0, envio: 0, retencion: 0, otro: 0 };
   const otros = {}; const vistos = new Set();
-  let conPago = 0; let pagosFaltantes = 0;
+  let conPago = 0; let pagosFaltantes = 0; const porDia = {};
   for (const o of ordenesMes) {
     const ids = (o.data?.payments ?? []).filter((p) => !['rejected', 'cancelled'].includes(p?.status)).map((p) => String(p.id));
     if (!ids.length) continue;
@@ -165,6 +190,7 @@ export function cargosMes(ordenesMes, cobrosPorId) {
         const v = (num(c?.amounts?.original) ?? 0) - (num(c?.amounts?.refunded) ?? 0);
         const k = claseCargo(c);
         suma[k] += v;
+        if (o.dia && k !== 'retencion' && k !== 'otro') { const d = (porDia[o.dia] ??= { comision: 0, envio: 0 }); const kk = k === 'envio' ? 'envio' : 'comision'; d[kk] = r2(d[kk] + v); }
         if (k === 'otro') otros[c.name ?? c.type ?? '?'] = r2((otros[c.name ?? c.type ?? '?'] ?? 0) + v);
       }
     }
@@ -174,22 +200,28 @@ export function cargosMes(ordenesMes, cobrosPorId) {
   return {
     ...Object.fromEntries(Object.entries(suma).map(([k, v]) => [k, r2(v)])), otros,
     pagos: vistos.size, ordenesConPago: conPago, ordenesConPagoEsperado: conPagos, pagosFaltantes,
-    cobertura: conPagos ? r2((conPago / conPagos) * 100) : null,
+    cobertura: conPagos ? r2((conPago / conPagos) * 100) : null, porDia,
   };
 }
 
-/** Inversión de Mercado Ads del mes (nivel campaña, por día). */
-export function adsMes(filas, mes) {
-  const dias = new Set(); let total = 0;
+/**
+ * Inversión de Mercado Ads del mes hasta el corte (nivel campaña, por día). Sin ningún día leído, el total es null (sin
+ * datos), NUNCA 0: un día con inversión 0 leída sí cuenta como dato. diasEsperados: los días hasta el corte.
+ */
+export function adsMes(filas, mes, corte = finDelMes(mes)) {
+  const porDia = {}; let total = 0;
   for (const f of filas) {
     const dia = String(f.day instanceof Date ? f.day.toISOString() : f.day).slice(0, 10);
-    if (dia.slice(0, 7) !== mes) continue;
+    if (dia.slice(0, 7) !== mes || (corte && dia > corte)) continue;
     const m = typeof f.metrics === 'string' ? JSON.parse(f.metrics) : f.metrics;
     const c = num(m?.cost);
     if (c == null) continue;
-    total += c; dias.add(dia);
+    total += c; porDia[dia] = r2((porDia[dia] ?? 0) + c);
   }
-  return { total: r2(total), dias: dias.size, diasMes: diasDelMes(mes) };
+  const esperados = diasHasta(mes, corte);
+  const dias = Object.keys(porDia).length;
+  return { total: dias ? r2(total) : null, dias, diasEsperados: esperados.length, diasMes: diasDelMes(mes), corte,
+    faltan: esperados.filter((d) => !(d in porDia)), porDia };
 }
 
 /**
@@ -231,56 +263,81 @@ export function vigentesConciliacion(filas) {
   return { porFuente, conflictos, pendientes, provisionales };
 }
 
-/** Flex (bonificaciones y anulaciones de ML, viajes de Luma) y cargos de Full del mes, por su fecha. Con IVA según el reporte. */
-export function logisticaReportesMes(vigentes, mes) {
-  const sumar = (fuente, campoFecha, campoImporte, filtro = () => true) => {
-    let total = 0; let n = 0; let sinFecha = 0;
-    for (const d of vigentes.porFuente[fuente] ?? []) {
+/**
+ * Viajes de Luma sin contar dos veces: PFOS guarda las dos planillas (la quincenal, con número de viaje, y la de detalle,
+ * con la referencia y la fecha del último estado) como identidades distintas. Si una venta (referencia) está en la quincenal,
+ * se usan esos viajes; la de detalle solo suma las referencias que la quincenal no tiene.
+ */
+export function viajesSinDuplicar(viajes) {
+  const conId = viajes.filter((d) => d.id_viaje != null && d.id_viaje !== '');
+  const refs = new Set(conId.map((d) => String(d.referencia ?? '')).filter(Boolean));
+  const resto = viajes.filter((d) => !(d.id_viaje != null && d.id_viaje !== ''));
+  const nuevos = resto.filter((d) => !d.referencia || !refs.has(String(d.referencia)));
+  return { viajes: [...conId, ...nuevos], repetidos: resto.length - nuevos.length };
+}
+
+/**
+ * Flex (bonificaciones y anulaciones de ML, viajes de Luma) y cargos de Full del mes hasta el corte, por su fecha. Con IVA
+ * según el reporte. Cada uno, con su total por día (para comparar períodos equivalentes).
+ */
+export function logisticaReportesMes(vigentes, mes, corte = finDelMes(mes)) {
+  const sumar = (filas, campoFecha, campoImporte) => {
+    let total = 0; let n = 0; let sinFecha = 0; const porDia = {};
+    for (const d of filas) {
       const dia = diaReporte(typeof campoFecha === 'function' ? campoFecha(d) : d[campoFecha]);
       if (!dia) { sinFecha++; continue; }
-      if (dia.slice(0, 7) !== mes || !filtro(d)) continue;
-      total += num(d[campoImporte]) ?? 0; n++;
+      if (dia.slice(0, 7) !== mes || (corte && dia > corte)) continue;
+      const v = num(d[campoImporte]) ?? 0;
+      total += v; n++; porDia[dia] = r2((porDia[dia] ?? 0) + v);
     }
-    return { total: r2(total), n, sinFecha };
+    return { total: r2(total), n, sinFecha, porDia };
   };
+  const luma = viajesSinDuplicar(vigentes.porFuente.flex_viaje ?? []);
   return {
-    bonificacionFlex: sumar('flex_bonificacion', 'fecha', 'valor'),
-    anulacionFlex: sumar('flex_anulacion', 'fecha', 'valor'),
-    cadete: sumar('flex_viaje', (d) => d.fecha_creacion || d.fecha_estado, 'precio'),
-    full: sumar('full_cargo', 'fecha_cargo', 'monto'),
+    bonificacionFlex: sumar(vigentes.porFuente.flex_bonificacion ?? [], 'fecha', 'valor'),
+    anulacionFlex: sumar(vigentes.porFuente.flex_anulacion ?? [], 'fecha', 'valor'),
+    cadete: { ...sumar(luma.viajes, (d) => d.fecha_creacion || d.fecha_estado, 'precio'), repetidos: luma.repetidos },
+    full: sumar(vigentes.porFuente.full_cargo ?? [], 'fecha_cargo', 'monto'),
   };
 }
 
 /**
- * ¿Las importaciones cerradas de un formato cubren el mes completo? Mira el rango declarado al cargar (desde/hasta).
- * Devuelve 'completa' | 'parcial' | 'sin datos', con los rangos.
+ * ¿Las importaciones cerradas de un formato cubren el mes hasta el corte? Mira el rango declarado al cargar (desde/hasta) y
+ * la cobertura que PFOS le dio a cada archivo (una importación con filas descartadas al leer es «parcial»). Devuelve
+ * { estado: 'completa' | 'parcial' | 'sin datos', rangos, cubreHasta, faltaDesde, descartadas }.
  */
-export function coberturaReportes(importaciones, formatos, mes) {
-  const ini = `${mes}-01`; const fin = `${mes}-${String(diasDelMes(mes)).padStart(2, '0')}`;
+export function coberturaReportes(importaciones, formatos, mes, corte = finDelMes(mes)) {
+  const ini = `${mes}-01`; const fin = corte ?? finDelMes(mes);
   const rangos = importaciones.filter((i) => formatos.includes(i.format) && ['cerrada', 'reemplazando'].includes(i.status) && i.range_from && i.range_to)
     .map((i) => {
       const hasta = String(i.range_to).slice(0, 10);
-      const h = i.range_to_exclusive ? new Date(Date.parse(`${hasta}T00:00:00Z`) - 86400000).toISOString().slice(0, 10) : hasta;
-      return { desde: String(i.range_from).slice(0, 10), hasta: h };
+      const h = i.range_to_exclusive ? sumarDias(hasta, -1) : hasta;
+      return { desde: String(i.range_from).slice(0, 10), hasta: h, parcial: i.coverage === 'parcial' };
     })
     .filter((r) => r.desde <= fin && r.hasta >= ini).sort((a, b) => a.desde.localeCompare(b.desde));
-  if (!rangos.length) return { estado: 'sin datos', rangos };
-  let cubierto = ini; let hueco = false;
+  if (!rangos.length) return { estado: 'sin datos', rangos, cubreHasta: null, faltaDesde: ini, descartadas: 0 };
+  let cubierto = ini; let hueco = null;
   for (const r of rangos) {
-    if (r.desde > cubierto) { hueco = true; break; }
-    const sig = new Date(Date.parse(`${r.hasta}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    if (r.desde > cubierto) { hueco = cubierto; break; }
+    const sig = sumarDias(r.hasta, 1);
     if (sig > cubierto) cubierto = sig;
   }
-  return { estado: !hueco && cubierto > fin ? 'completa' : 'parcial', rangos };
+  const descartadas = rangos.filter((r) => r.parcial).length;
+  const completa = !hueco && cubierto > fin && !descartadas;
+  return { estado: completa ? 'completa' : 'parcial', rangos, cubreHasta: sumarDias(cubierto, -1), faltaDesde: completa ? null : hueco ?? (cubierto > fin ? null : cubierto), descartadas };
 }
 
-/** Días del mes con la recolección de una fuente completa en PFOS (alcances «hist|día» con estado «completa»). */
-export function diasCubiertos(alcances, fuente, mes) {
+/**
+ * Días del mes con la recolección de una fuente completa en PFOS (alcances «hist|día» con estado «completa»), hasta el
+ * corte: los días que todavía no pasaron no son «faltantes». diasEsperados = días hasta el corte.
+ */
+export function diasCubiertos(alcances, fuente, mes, corte = finDelMes(mes)) {
   const dias = new Set();
   for (const a of alcances) {
     if (a.source !== fuente || a.status !== 'completa') continue;
     const m = String(a.scope).match(/^hist\|(\d{4}-\d{2}-\d{2})$/);
-    if (m && m[1].slice(0, 7) === mes) dias.add(m[1]);
+    if (m && m[1].slice(0, 7) === mes && (!corte || m[1] <= corte)) dias.add(m[1]);
   }
-  return { dias: dias.size, diasMes: diasDelMes(mes), faltan: Array.from({ length: diasDelMes(mes) }, (_, i) => `${mes}-${String(i + 1).padStart(2, '0')}`).filter((d) => !dias.has(d)) };
+  const esperados = diasHasta(mes, corte);
+  return { dias: dias.size, diasEsperados: esperados.length, diasMes: diasDelMes(mes), corte, faltan: esperados.filter((d) => !dias.has(d)) };
 }

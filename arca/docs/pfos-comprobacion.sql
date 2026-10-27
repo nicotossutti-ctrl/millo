@@ -35,7 +35,7 @@ columnas(t, c) AS (VALUES
   ('pfos_cost_lists', 'cash_pct'), ('pfos_cost_lists', 'items'), ('pfos_cost_lists', 'loaded_at'),
   ('pfos_cost_items', 'list_id'), ('pfos_cost_items', 'row_no'), ('pfos_cost_items', 'code'), ('pfos_cost_items', 'size_label'),
   ('pfos_cost_items', 'presentation'), ('pfos_cost_items', 'pairs'), ('pfos_cost_items', 'price'), ('pfos_cost_items', 'price_suggested'),
-  ('pfos_cost_items', 'discount_pct'), ('pfos_cost_items', 'factor'),
+  ('pfos_cost_items', 'discount_pct'), ('pfos_cost_items', 'factor'), ('pfos_cost_items', 'description'), ('pfos_cost_items', 'code_raw'),
   ('pfos_cost_sku_map', 'user_id'), ('pfos_cost_sku_map', 'seller_sku'), ('pfos_cost_sku_map', 'version'), ('pfos_cost_sku_map', 'valid_from'),
   ('pfos_cost_sku_map', 'status'), ('pfos_cost_sku_map', 'list_id'),
   ('pfos_cost_sku_components', 'user_id'), ('pfos_cost_sku_components', 'seller_sku'), ('pfos_cost_sku_components', 'version'),
@@ -80,9 +80,9 @@ controles(orden, control, bloquea, ok, detalle) AS (
             count(*) FILTER (WHERE source = 'mp_payments' AND status = 'completa' AND scope LIKE 'hist|2026-09-%') || '/30 · ' ||
             count(*) FILTER (WHERE source = 'mp_payments' AND status = 'completa' AND scope LIKE 'hist|2026-10-%') || '/31' FROM alc)
   UNION ALL SELECT 9, 'Mercado Ads por campaña (nivel «campaña»)', false,
-    (SELECT count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day < DATE '2026-10-01') = 30 AND count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day >= DATE '2026-10-01') = 31 FROM ads),
-    (SELECT 'días sept ' || count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day < DATE '2026-10-01') || '/30 · oct ' ||
-            count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day >= DATE '2026-10-01') || '/31 · niveles: ' || coalesce(string_agg(DISTINCT level, ', '), 'ninguno') FROM ads)
+    (SELECT count(DISTINCT day) FILTER (WHERE level = U&'campa\00F1a' AND day < DATE '2026-10-01') = 30 AND count(DISTINCT day) FILTER (WHERE level = U&'campa\00F1a' AND day >= DATE '2026-10-01') = 31 FROM ads),
+    (SELECT 'días sept ' || count(DISTINCT day) FILTER (WHERE level = U&'campa\00F1a' AND day < DATE '2026-10-01') || '/30 · oct ' ||
+            count(DISTINCT day) FILTER (WHERE level = U&'campa\00F1a' AND day >= DATE '2026-10-01') || '/31 · niveles: ' || coalesce(string_agg(DISTINCT level, ', '), 'ninguno') FROM ads)
   -- FiscalOS exige al menos 20 CAE DISTINTOS por mes para dar la cuenta por verificada en ese mes.
   UNION ALL SELECT 10, 'facturas distintas con CAE en «Conciliación»: septiembre (mínimo 20)', false,
     (SELECT count(DISTINCT cae) >= 20 FROM cbte WHERE mes = '2026-09'),

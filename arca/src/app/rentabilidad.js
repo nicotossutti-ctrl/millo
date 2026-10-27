@@ -30,6 +30,7 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const pesos = (n) => `$ ${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const col = (headers, re) => headers.findIndex((h) => re.test(norm(h)));
+const fechaCorta = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : '—');
 const finDeMes = (mes) => { const [y, m] = mes.split('-'); return new Date(Date.UTC(+y, +m, 0)).toISOString().slice(0, 10); };
 const NOTAS_CREDITO = new Set([3, 8, 13, 53, 113, 203, 208, 213]);
 
@@ -169,8 +170,24 @@ export function resultadoOperativo(outDir, mes) {
   const datosDir = path.join(outDir, 'datos');
   const em = comprobantesMes(datosDir, 'comprobantes-emitidos', 'emitidos', mes);
   const origenes = origenesDelMes(outDir, mes);
-  const ventas = { clave: 'ventas', nombre: 'Facturación neta de IVA', signo: 1,
-    cifra: em ? cifra(em.netoGravado, 'verificado', em.fuente, `${em.comprobantes} comprobantes emitidos (${em.notasCredito} notas de crédito restando)`) : faltante('faltan los comprobantes emitidos del mes (Mis Comprobantes)') };
+  const pv = origenes.pfos.ventas;
+  let provisional = null;
+  if (em) {
+    // Con la facturación del mes completo de ARCA, una foto de PFOS tomada antes de que termine el mes no se mezcla: sus
+    // cifras son de menos días. Queda como referencia hasta volver a correr PFOS con el mes cerrado.
+    for (const l of Object.values(origenes.pfos)) {
+      if (l.mesCerrado === false) { l.completo = false; l.faltan = [...(l.faltan ?? []), `datos de PFOS al ${fechaCorta(l.alCorte)}: volvé a correr «fiscalos.ps1 pfos» con el mes cerrado`]; }
+    }
+  } else if (pv && pv.totalConIva != null && pv.ordenes > 0) {
+    // Mes sin comprobantes emitidos todavía (el mes en curso): rentabilidad operativa PROVISORIA con las ventas de PFOS, al
+    // mismo corte que sus costos. La conciliación fiscal del mes sigue pendiente y no entra en Ganancias.
+    provisional = { alCorte: pv.alCorte, mesCerrado: pv.mesCerrado, cuentaProvisoria: !!pv.provisoria,
+      nota: `Rentabilidad operativa provisoria${pv.mesCerrado ? '' : ` al ${fechaCorta(pv.alCorte)}`}: ventas y costos de Mercado Libre según PFOS. Conciliación fiscal del mes: pendiente (faltan los comprobantes emitidos de ARCA).` };
+  }
+  const ventas = { clave: 'ventas', nombre: provisional ? 'Ventas de Mercado Libre netas de IVA (provisorio)' : 'Facturación neta de IVA', signo: 1,
+    cifra: em ? cifra(em.netoGravado, 'verificado', em.fuente, `${em.comprobantes} comprobantes emitidos (${em.notasCredito} notas de crédito restando)`)
+      : provisional ? cifra(pv.totalConIva / 1.21, 'estimado', `PFOS: ${pv.ordenes} órdenes${pv.mesCerrado ? '' : ` hasta el ${fechaCorta(pv.alCorte)}`}`, `con IVA ${pesos(pv.totalConIva)}, ÷ 1,21; provisorio hasta tener los comprobantes emitidos del mes`)
+      : faltante('faltan los comprobantes emitidos del mes (Mis Comprobantes)') };
   const lineas = LINEAS.map((l) => {
     const cands = candidatos(origenes, l.clave, { valorAbsoluto: l.signo < 0 });
     const usada = cands.find((c) => !c.referencia) ?? null;
@@ -202,7 +219,7 @@ export function resultadoOperativo(outDir, mes) {
   const margen = subtotal('Margen bruto', ventas, [L['otros-ingresos'].cifra.valor != null ? L['otros-ingresos'] : null, L['costo-mercaderia']].filter(Boolean));
   const operativo = subtotal('Resultado operativo', ventas, lineas.filter((l) => !l.opcional || l.cifra.valor != null));
   return {
-    mes, ventas, lineas, margen, operativo, avisos,
+    mes, ventas, lineas, margen, operativo, avisos, provisional,
     margenPct: margen.estado !== 'parcial' && ventas.cifra.valor ? r2((margen.valor / ventas.cifra.valor) * 100) : null,
     proveedores: origenes.proveedores, recibidosFuente: origenes.recibidosFuente,
     referencia: {

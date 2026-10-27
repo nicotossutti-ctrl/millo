@@ -20,6 +20,7 @@ import { estimar, alicuotaIIBB } from '../estimacion.js';
 import { importadoDelMes, mesesImportados, CONCEPTOS } from './importar.js';
 import { manualesDelMes, listarManuales } from './manuales.js';
 import { resultadoOperativo, rentabilidadMes } from './rentabilidad.js';
+import { leerFotos } from '../pfos/fotos.js';
 import { integraciones } from './integraciones.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -46,7 +47,7 @@ function vigentes(datosDir, id) {
   }));
 }
 
-/** Meses con datos (comprobantes, DJ, pagos, importaciones) más el mes anterior a hoy; del más nuevo al más viejo. */
+/** Meses con datos (comprobantes, DJ, pagos, importaciones, fotos de PFOS) más el mes anterior a hoy; del más nuevo al más viejo. */
 export function mesesDisponibles(outDir, hoy) {
   const datosDir = path.join(outDir, 'datos');
   const s = new Set([mesAnterior(hoy)]);
@@ -64,6 +65,7 @@ export function mesesDisponibles(outDir, hoy) {
   for (const id of ['portal-iva-ddjj', 'mis-retenciones']) for (const v of Object.values(leerVigente(datosDir, id))) if (v.desde) s.add(v.desde.slice(0, 7));
   for (const m of mesesImportados(outDir)) s.add(m);
   for (const c of listarManuales(outDir)) s.add(c.mes);
+  for (const f of leerFotos(outDir)) s.add(f.mes); // el mes en curso, con su rentabilidad provisoria
   return [...s].filter((m) => m <= hoy.slice(0, 7)).sort().reverse();
 }
 
@@ -264,7 +266,8 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     for (let i = 1; i <= Number(mes.slice(5)); i++) {
       const m = `${anio}-${String(i).padStart(2, '0')}`;
       const op = resultadoOperativo(outDir, m);
-      if (op.ventas.cifra.valor == null) { sinDatos.push(m); continue; }
+      // Un mes provisorio (ventas de PFOS, sin los comprobantes emitidos de ARCA) no entra: Ganancias es fiscal.
+      if (op.ventas.cifra.valor == null || op.provisional) { sinDatos.push(m); continue; }
       const cmv = op.lineas.find((l) => l.clave === 'costo-mercaderia');
       if (cmv.cifra.valor == null) { sinCmv.push(m); continue; }
       if (op.operativo.faltan.length) conGastosFaltantes.push(m);
@@ -340,7 +343,7 @@ export function comparacionMeses(outDir, meses, opciones = {}) {
     const ivaCifra = p.iva.declarado.valor != null ? p.iva.declarado : p.iva.estimado;
     return {
       mes,
-      facturacion: fila(r.ventas.cifra.valor, 'completo', r.ventas.cifra.nivel),
+      facturacion: fila(r.ventas.cifra.valor, r.provisional ? 'con estimaciones' : 'completo', r.ventas.cifra.nivel),
       costo: fila(L['costo-mercaderia'].cifra.valor, L['costo-mercaderia'].cifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', L['costo-mercaderia'].cifra.nivel),
       costoFuente: L['costo-mercaderia'].origen,
       margen: { ...fila(r.margen.estado === 'parcial' ? null : r.margen.valor, r.margen.estado), pct: r.margenPct },
@@ -350,7 +353,8 @@ export function comparacionMeses(outDir, meses, opciones = {}) {
       iva: fila(ivaCifra.valor, ivaCifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', ivaCifra.nivel),
       // Completo solo si alguna consulta conservada de pagos de Cuentas Tributarias cubre el mes entero.
       pagosImpuestos: fila(r.pagos.propios, Object.values(leerVigente(path.join(outDir, 'datos'), 'ct-pagos')).some((v) => (v.desde ?? '9') <= `${mes}-01` && (v.hasta ?? '') >= finDeMes(mes)) ? 'completo' : 'parcial'),
-      pfos: p.integraciones.pfos.conectado ? (p.integraciones.pfos.verificada ? 'verificada' : 'sin verificar') : 'sin datos',
+      pfos: p.integraciones.pfos.conectado ? (p.integraciones.pfos.verificada ? 'verificada' : p.integraciones.pfos.provisoria ? 'provisoria (conciliación fiscal pendiente)' : 'sin verificar') : 'sin datos',
+      provisional: r.provisional ? (r.provisional.mesCerrado ? 'provisorio' : `provisorio al ${r.provisional.alCorte.split('-').reverse().join('/')}`) : null,
     };
   });
   return { meses, columnas };

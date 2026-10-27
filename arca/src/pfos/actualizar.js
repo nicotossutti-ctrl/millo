@@ -8,7 +8,8 @@ import path from 'node:path';
 import { conectar, controlarRol, controlarCuenta, leerComunes, leerMes } from './lectura.js';
 import { armarMes } from './mes.js';
 import { textoComprobantes } from '../app/rentabilidad.js';
-import { dirFotos } from './fotos.js';
+import { dirFotos, leerFotos } from './fotos.js';
+import { titularidad } from './cuenta.js';
 
 function escribir(f, contenido) {
   fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
@@ -30,7 +31,7 @@ export function controlarConfiguracion(cuentaEsperada, excluidas = []) {
  * Con una conexión ya abierta (o una función de consulta compatible con pg), controla el rol y la cuenta, lee y arma los
  * meses pedidos. Devuelve las fotos (no escribe). `cuentaEsperada`: FISCALOS_PFOS_CUENTA.
  */
-export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas = [], log = () => {} }) {
+export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas = [], log = () => {}, generado = new Date().toISOString() }) {
   controlarConfiguracion(cuentaEsperada, excluidas);
   const rol = await controlarRol(db);
   log(`Rol de solo lectura comprobado: ${rol}`);
@@ -38,16 +39,29 @@ export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas 
   log(`Cuenta de las vistas: ${cuenta} (la configurada en FISCALOS_PFOS_CUENTA)`);
   const comunes = await leerComunes(db);
   log(`Listas de costos: ${comunes.listas.map((l) => `${l.supplier} desde ${l.valid_from}`).join(', ') || 'ninguna'} · SKU con decisión en PFOS: ${comunes.mapeos.size}`);
+  if (!comunes.ads?.filas) log('AVISO: la vista fiscalos.ads_diario no devuelve ninguna fila: la publicidad queda «sin datos» (no 0). Si PFOS tiene Mercado Ads, correr docs/pfos-correccion-1.sql.');
+  else log(`Mercado Ads: ${comunes.ads.filas} filas, del ${comunes.ads.desde} al ${comunes.ads.hasta}`);
+  if (!comunes.conDescripcion) log('Aviso: la lista de costos llega sin descripción (docs/pfos-correccion-1.sql): las manguitas y pantorrilleras «A CONFIRMAR» quedan para revisión.');
   const datosDir = path.join(outDir, 'datos');
   const fotos = [];
   for (const mes of meses) {
     log(`Leyendo ${mes}…`);
     const datos = await leerMes(db, mes);
     const arca = textoComprobantes(datosDir, 'comprobantes-emitidos', 'emitidos', mes);
-    const foto = armarMes({ mes, datos, comunes, textosArca: arca ? [arca.texto] : [] });
+    const foto = armarMes({ mes, datos, comunes, textosArca: arca ? [arca.texto] : [], generado });
     foto.rol = rol; foto.cuentaPfos = cuenta;
     fotos.push(foto);
-    log(`  ${mes}: ${foto.ventas.ordenes} órdenes · costo ${foto.lineas['costo-mercaderia'].importe} (${foto.costo.cobertura ?? '—'} % de unidades) · cuenta ${foto.cuenta.verificada ? 'verificada' : `NO verificada: ${foto.cuenta.motivo}`}`);
+  }
+  // Titularidad: un mes sin evidencia propia (el mes en curso) puede apoyarse en otro mes verificado por CAE con la misma
+  // cuenta: rentabilidad operativa provisoria, conciliación fiscal pendiente.
+  const otras = [...fotos, ...leerFotos(outDir).filter((f) => !fotos.some((x) => x.mes === f.mes))];
+  for (const foto of fotos) {
+    const t = titularidad(foto, otras);
+    const pub = foto.lineas.publicidad;
+    log(`  ${foto.mes}${foto.mesCerrado ? '' : ` (al corte del ${foto.corte ?? '—'})`}: ${foto.ventas.ordenes} órdenes · costo ${foto.lineas['costo-mercaderia'].importe} (${foto.costo.cobertura ?? '—'} % de unidades; ${foto.costo.unidadesParaRevision ?? 0} u. para revisión) · publicidad ${pub.importe == null ? 'SIN DATOS' : `${pub.importe} (${foto.ads.dias}/${foto.ads.diasEsperados} días)`}`);
+    log(`     cuenta: ${foto.cuenta.verificada ? 'verificada por CAE' : t.provisoria ? `provisoria — ${t.motivo}` : `NO verificada: ${foto.cuenta.motivo}`}`);
+    const motivos = Object.entries(foto.costo.motivos ?? {}).sort((a, b) => b[1] - a[1]);
+    if (motivos.length) log(`     sin costo, por motivo: ${motivos.map(([k, n]) => `${k} ${n} u.`).join(' · ')}`);
   }
   return fotos;
 }

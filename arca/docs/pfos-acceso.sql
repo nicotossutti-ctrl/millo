@@ -39,7 +39,7 @@ CREATE VIEW fiscalos.cobertura WITH (security_barrier = true) AS
   WHERE user_id = <ID_CUENTA> AND source IN ('orders', 'mp_payments', 'claim_returns', 'invoices');
 CREATE VIEW fiscalos.ads_diario WITH (security_barrier = true) AS
   SELECT user_id, day, level, key, campaign_id, metrics, quality FROM public.pfos_hist_ads_daily
-  WHERE user_id = <ID_CUENTA> AND level = 'campaña';
+  WHERE user_id = <ID_CUENTA> AND level = U&'campa\00F1a';   -- 'campaña' escrito solo con ASCII
 CREATE VIEW fiscalos.conciliacion WITH (security_barrier = true) AS
   SELECT o.user_id, o.source, o.identity_key, o.identity_status, o.data_sha, o.defining_sha,
          i.id AS import_id, i.status AS import_status, i.freshness_at, i.freshness_origin, pl.data
@@ -55,7 +55,7 @@ CREATE VIEW fiscalos.importaciones WITH (security_barrier = true) AS
 CREATE VIEW fiscalos.costos_listas WITH (security_barrier = true) AS
   SELECT id, supplier, valid_from, valid_to, cash_pct, items, loaded_at FROM public.pfos_cost_lists;
 CREATE VIEW fiscalos.costos_items WITH (security_barrier = true) AS
-  SELECT list_id, row_no, code, size_label, presentation, pairs, price, price_suggested, discount_pct, factor FROM public.pfos_cost_items;
+  SELECT list_id, row_no, code, size_label, presentation, pairs, price, price_suggested, discount_pct, factor, description, code_raw FROM public.pfos_cost_items;
 CREATE VIEW fiscalos.costos_sku WITH (security_barrier = true) AS
   SELECT user_id, seller_sku, version, valid_from, status, list_id FROM public.pfos_cost_sku_map WHERE user_id = <ID_CUENTA>;
 CREATE VIEW fiscalos.costos_sku_componentes WITH (security_barrier = true) AS

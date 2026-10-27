@@ -10,9 +10,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fotosDesde } from '../src/pfos/actualizar.js';
 import { controlarRol } from '../src/pfos/lectura.js';
-import { proponerMapeo, listaParaVenta } from '../src/pfos/costos.js';
-import { enArgentina, cargosMes, vigentesConciliacion, coberturaReportes } from '../src/pfos/calculo.js';
-import { clavesArca, verificarCuenta } from '../src/pfos/cuenta.js';
+import { proponerMapeo, listaParaVenta, costoLinea } from '../src/pfos/costos.js';
+import { enArgentina, cargosMes, vigentesConciliacion, coberturaReportes, corteDelMes, diasCubiertos, adsMes, viajesSinDuplicar, logisticaReportesMes } from '../src/pfos/calculo.js';
+import { clavesArca, verificarCuenta, titularidad } from '../src/pfos/cuenta.js';
+import { compararAlCorte } from '../src/pfos/comparar.js';
+import { dirFotos } from '../src/pfos/fotos.js';
+import { obtenerPfos, integraciones } from '../src/app/integraciones.js';
+import { resultadoOperativo } from '../src/app/rentabilidad.js';
 import { verificadorScram, generarClave, scramClaves } from '../src/pfos/clave.js';
 import { controlarConfiguracion } from '../src/pfos/actualizar.js';
 import { urlDesdeEntorno } from '../src/pfos/lectura.js';
@@ -22,6 +26,8 @@ try { ({ PGlite } = await import('@electric-sql/pglite')); } catch { /* sin PGli
 const conPg = PGlite ? test : test.skip;
 const RAIZ = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PROPIA = 111111; const OTRA = 222222; // cuentas de prueba (no son ids reales)
+// Fecha fija de generación de las fotos (no el reloj real): octubre queda «en curso», con corte el 26/10.
+const GENERADO = '2026-10-27T15:00:00-03:00';
 
 // Estructura de PFOS (solo las tablas que usan las vistas, tal como las crea PFOS).
 const DDL = `
@@ -141,7 +147,7 @@ function outConArca() {
 conPg('PFOS de punta a punta: solo la cuenta propia, costo con lista posterior, cargos netos, devoluciones y cobertura', async () => {
   const db = await armarBase();
   await db.exec('SET ROLE fiscalos_lectura');
-  const [sep, oct] = await fotosDesde(comoPg(db), { meses: ['2026-09', '2026-10'], outDir: outConArca(), cuentaEsperada: String(PROPIA) });
+  const [sep, oct] = await fotosDesde(comoPg(db), { meses: ['2026-09', '2026-10'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
   // Cuenta verificada por identificadores (punto de venta + número / CAE en los emitidos de ARCA).
   assert.equal(sep.cuenta.verificada, true);
   assert.equal(sep.cuenta.encontrados, 25);
@@ -158,6 +164,7 @@ conPg('PFOS de punta a punta: solo la cuenta propia, costo con lista posterior, 
   assert.equal(sep.costo.unidadesListaPosterior, 3);
   assert.equal(sep.costo.unidadesAutomaticas, 1);
   assert.deepEqual(sep.costo.sinCosto.map((x) => x.sku), ['ZZ99']);
+  assert.deepEqual(sep.costo.motivos, { 'código fuera de la lista': 1 });
   // Devolución recibida en septiembre: resta el costo de 1 unidad de la orden 1.
   assert.equal(sep.costo.devoluciones.total, 1425);
   const cmv = sep.lineas['costo-mercaderia'];
@@ -321,4 +328,206 @@ conPg('el rol no puede crear objetos: con CREATE en un esquema, FiscalOS no lee'
   const fake = { query: async (sql) => ({ rows: /FROM pg_roles WHERE rolname = current_user/.test(sql) ? [{ nombre: 'x', rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false }]
     : /AS propias/.test(sql) ? [{ propias: 0 }] : /has_database_privilege/.test(sql) ? [{ base: true }] : [] }) };
   await assert.rejects(controlarRol(fake), /puede crear esquemas en la base/);
+});
+
+// ---------------- Corrección 1: Ads y descripción de la lista ----------------
+
+const correccion = (cuenta) => fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-correccion-1.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(cuenta));
+const sinComentariosSql = (sql) => sql.replace(/--.*$/gm, '');
+
+conPg('Ads: la vista con la «ñ» mal codificada no devuelve filas (publicidad faltante, nunca 0); la corrección puntual la arregla sin tocar PFOS ni permisos', async () => {
+  const db = await armarBase();
+  const antes = (await db.query('SELECT count(*)::int AS n, sum((metrics->>\'cost\')::numeric)::text AS s FROM public.pfos_hist_ads_daily')).rows[0];
+  // La vista como quedó en la base real: 'campaña' pegado con otra codificación.
+  await db.exec(`CREATE OR REPLACE VIEW fiscalos.ads_diario WITH (security_barrier = true) AS
+    SELECT user_id, day, level, key, campaign_id, metrics, quality FROM public.pfos_hist_ads_daily WHERE user_id = ${PROPIA} AND level = 'campaÃ±a'`);
+  await db.exec('SET ROLE fiscalos_lectura');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM fiscalos.ads_diario')).rows[0].n, 0);
+  const [mal] = await fotosDesde(comoPg(db), { meses: ['2026-09'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
+  assert.equal(mal.lineas.publicidad.importe, null, 'sin días leídos: sin datos, no $ 0');
+  assert.equal(mal.lineas.publicidad.nivel, 'faltante');
+  assert.equal(mal.lineas.publicidad.completo, false);
+  assert.match(mal.lineas.publicidad.faltan.join(' '), /sin datos de Mercado Ads.*pfos-correccion-1\.sql/);
+  // FiscalOS dejó su sesión en solo lectura: el dueño vuelve a la suya para correr la corrección.
+  await db.exec('RESET ROLE; SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE');
+  // Con la cuenta equivocada (la otra), la corrección se frena y no cambia nada.
+  await assert.rejects(db.exec(correccion(OTRA)), /no es la de las vistas/);
+  await db.exec('ROLLBACK').catch(() => {});
+  assert.match((await db.query("SELECT pg_get_viewdef('fiscalos.ads_diario'::regclass) AS d")).rows[0].d, /campaÃ±a/);
+  // La corrección real.
+  await db.exec(correccion(PROPIA));
+  assert.match((await db.query("SELECT pg_get_viewdef('fiscalos.ads_diario'::regclass) AS d")).rows[0].d, /'campaña'/);
+  await db.exec('SET ROLE fiscalos_lectura');
+  assert.equal(await controlarRol(comoPg(db)), 'fiscalos_lectura', 'el rol sigue mínimo y con permiso de lectura');
+  const { rows: [r] } = await db.query(`SELECT count(DISTINCT day)::int AS dias, count(*)::int AS filas, count(DISTINCT user_id)::int AS cuentas FROM fiscalos.ads_diario
+    WHERE day >= '2026-09-01' AND day < '2026-10-01'`);
+  assert.deepEqual(r, { dias: 30, filas: 30, cuentas: 1 }, 'solo nivel campaña y solo la cuenta propia');
+  assert.ok((await db.query('SELECT description FROM fiscalos.costos_items LIMIT 1')).rows.length, 'la descripción de la lista ya se puede leer');
+  const [bien] = await fotosDesde(comoPg(db), { meses: ['2026-09'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
+  assert.equal(bien.lineas.publicidad.importe, 3000);
+  assert.equal(bien.lineas.publicidad.completo, true);
+  await db.exec('RESET ROLE');
+  // Nada de PFOS cambió; el rol no ganó acceso a las tablas.
+  assert.deepEqual((await db.query('SELECT count(*)::int AS n, sum((metrics->>\'cost\')::numeric)::text AS s FROM public.pfos_hist_ads_daily')).rows[0], antes);
+  for (const t of ['public.pfos_hist_ads_daily', 'public.pfos_cost_items']) {
+    assert.equal((await db.query(`SELECT has_table_privilege('fiscalos_lectura', '${t}', 'SELECT') AS x`)).rows[0].x, false);
+  }
+});
+
+test('los SQL no dependen de la codificación del archivo: el código (sin comentarios) es ASCII y la «ñ» va como U&', () => {
+  for (const f of ['pfos-acceso.sql', 'pfos-correccion-1.sql']) {
+    const codigo = sinComentariosSql(fs.readFileSync(path.join(RAIZ, 'docs', f), 'utf8'));
+    assert.doesNotMatch(codigo, /[^\x00-\x7F]/, `${f}: hay caracteres no ASCII fuera de los comentarios`);
+  }
+  for (const f of ['pfos-acceso.sql', 'pfos-correccion-1.sql', 'pfos-comprobacion.sql']) {
+    const codigo = sinComentariosSql(fs.readFileSync(path.join(RAIZ, 'docs', f), 'utf8'));
+    assert.doesNotMatch(codigo, /level\s*=\s*'[^']*[^\x00-\x7F]/, `${f}: un filtro de nivel con caracteres no ASCII`);
+    assert.match(codigo, /level = U&'campa\\00F1a'/);
+  }
+  // La corrección solo reemplaza las dos vistas: nada de tablas, roles ni permisos.
+  const c = sinComentariosSql(fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-correccion-1.sql'), 'utf8'));
+  assert.deepEqual(c.match(/CREATE OR REPLACE VIEW fiscalos\.\w+/g), ['CREATE OR REPLACE VIEW fiscalos.ads_diario', 'CREATE OR REPLACE VIEW fiscalos.costos_items']);
+  assert.doesNotMatch(c, /\b(GRANT|REVOKE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|CREATE (TABLE|ROLE|SCHEMA))\b/i);
+});
+
+// ---------------- Costo de la mercadería: reglas de PFOS (3.7) ----------------
+
+test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores, combos, par o tripack por precio, discontinuados, «a confirmar»)', () => {
+  const it = (row, code, presentation, pairs, price, price_suggested, extra = {}) => ({ row, code, presentation, pairs, price, price_suggested, factor: 0.7125, ...extra });
+  const items = [
+    it(1, 'ME23C', 'PAR', 1, 1000, 4000), it(2, 'TE1C', 'PAR', 1, 1000, 4000), it(3, 'TE1C', 'TRIPACK', 3, 2700, 10000),
+    it(4, 'VINCHA01', 'PAR', 1, 500, 2000), it(5, 'MUÑEQUERA01', 'PAR', 1, 600, 2400), it(6, 'TE75C', 'PAR', 1, 900, 3600),
+    it(7, 'ME62C', 'PAR', 1, 1200, 5000), it(8, 'ME19C', 'PAR', 1, 1100, 4500),
+    it(9, 'MA01', 'A_CONFIRMAR', null, 800, 3000, { description: 'MANGUITAS DEPORTIVAS' }), it(10, 'PA01', 'A_CONFIRMAR', null, 900, 3500, { description: 'PANTORRILLERAS' }),
+    it(11, 'XX01', 'A_CONFIRMAR', null, 900, 3500, { description: 'ARTICULO NUEVO' }),
+    it(12, 'DE20C', 'PAR', 1, 700, 3000), it(13, 'DE24C', 'PAR', 1, 700, 3000), it(14, 'DE30C', 'PAR', 1, 900, 3000),
+    it(15, 'TR5', 'TRIPACK', 3, 2700, 10000), it(16, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(17, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'L-XL' }),
+    it(18, 'IN09C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(19, 'IN09C', 'PAR', 1, 1200, 4000, { size: 'L-XL' }),
+  ];
+  const p = (sku, unitPrice) => proponerMapeo({ sku, unitPrice }, items);
+  const comp = (r) => r.components.map((c) => `${c.code}×${c.units}`).join(' + ');
+  // Código sin la última letra y xN.
+  assert.equal(comp(p('ME23-NEGRO-M-X2', 9000)), 'ME23C×2');
+  // Equivalencias confirmadas.
+  assert.equal(comp(p('VINCHA-ROSA', 2000)), 'VINCHA01×1');
+  assert.match(p('VINCHA-ROSA', 2000).reglas.join(), /equivalencia VINCHA = VINCHA01/);
+  assert.equal(comp(p('MUÑE-NEGRO', 2400)), 'MUÑEQUERA01×1');
+  assert.equal(comp(p('TE172-NEGRO-M', 3600)), 'TE75C×1');
+  // Colores con «+»: uno por color.
+  assert.equal(comp(p('ME19-AERO+NEGRO-M', 9000)), 'ME19C×2');
+  // Combos: la suma de sus partes (con «+» y pegados).
+  assert.equal(comp(p('ME62+ME19-AERO+NEGRO-M', 9500)), 'ME62C×1 + ME19C×1');
+  assert.equal(comp(p('MA01PA01-NEGRO-M1-P1', 6500)), 'MA01×1 + PA01×1', 'manguitas y pantorrilleras «a confirmar», por par');
+  // Un «a confirmar» que no es manguita ni pantorrillera queda para revisión.
+  assert.equal(p('XX01-NEGRO', 3500).estado, 'dudoso');
+  assert.equal(p('XX01-NEGRO', 3500).categoria, 'a confirmar en la lista');
+  // Par o tripack: el precio decide solo si la otra lectura queda claramente lejos.
+  assert.equal(p('TE1-NEGRO-M', 4200).components[0].presentation, 'PAR');
+  assert.equal(p('TE1-NEGRO-M', 10500).components[0].presentation, 'TRIPACK');
+  assert.equal(p('TE1-NEGRO-M', 6500).estado, 'dudoso', 'precio entre un par y un tripack: para revisión');
+  assert.equal(p('TE1-NEGRO-M', 6500).categoria, 'presentación ambigua');
+  assert.equal(p('TE1-NEGRO-M', null).estado, 'dudoso', 'sin precio no se elige entre par y tripack');
+  // xN con un código que solo viene en tripack: 3 pares = 1 tripack (no 3 tripacks), por precio.
+  assert.equal(comp(p('TR5-X3', 10000)), 'TR5×1');
+  assert.equal(comp(p('TR5-X3', 30000)), 'TR5×3');
+  // Discontinuado: entre dos códigos con el mismo precio, presentación y descuento; si los vecinos difieren, no.
+  assert.equal(comp(p('DE22-NEGRO', 3000)), 'DE20C×1');
+  assert.equal(p('DE26-NEGRO', 3000).estado, 'sin datos');
+  // Talles: con el mismo costo da igual; con costos distintos hace falta el talle.
+  assert.equal(p('IN04-NEGRO', 4000).estado, 'automático');
+  assert.equal(p('IN09-NEGRO', 4000).categoria, 'talle');
+  assert.equal(comp(p('IN09-NEGRO-L', 4000)), 'IN09C×1');
+  // Cantidades que no se reparten: para revisión, nunca inventadas.
+  assert.equal(p('ME23-NEGRO-X2-X3', 9000).estado, 'dudoso');
+  assert.equal(p('ME19-AERO+NEGRO+ROJO-X2', 9000).estado, 'dudoso');
+  assert.equal(p('ME62+ME19-NEGRO-X2', 9000).estado, 'dudoso', 'combo con xN');
+  assert.equal(p('ZZ99', 1000).estado, 'sin datos');
+  // El costo de la línea usa la fila elegida (tripack: su precio, no 3 pares).
+  assert.equal(costoLinea({ cantidad: 2, componentes: p('TE1-NEGRO-M', 10500).components, items }).valor, 2 * 2700 * 0.7125);
+});
+
+// ---------------- Mes en curso: corte, cuenta provisoria y comparación ----------------
+
+test('corte: el mes en curso se mide hasta ayer; los días futuros no son atrasados', () => {
+  assert.equal(corteDelMes('2026-10', GENERADO), '2026-10-26');
+  assert.equal(corteDelMes('2026-09', GENERADO), '2026-09-30');
+  assert.equal(corteDelMes('2026-11', GENERADO), null);
+  const alc = Array.from({ length: 26 }, (_, i) => ({ source: 'orders', status: 'completa', scope: `hist|2026-10-${String(i + 1).padStart(2, '0')}` }));
+  const d = diasCubiertos(alc, 'orders', '2026-10', '2026-10-26');
+  assert.deepEqual([d.dias, d.diasEsperados, d.faltan.length], [26, 26, 0]);
+  assert.equal(diasCubiertos(alc, 'orders', '2026-10').faltan.length, 5, 'sin corte, el mes entero');
+  // Ads: sin días, sin datos (null); con 0 leído, es dato.
+  assert.equal(adsMes([], '2026-10', '2026-10-26').total, null);
+  assert.equal(adsMes([{ day: '2026-10-02', metrics: { cost: 0 } }], '2026-10', '2026-10-26').total, 0);
+  // Reportes: un rango que cubre hasta el corte alcanza; con filas descartadas, no.
+  const imp = [{ format: 'flex_nc', status: 'cerrada', range_from: '2026-10-01', range_to: '2026-10-26' }];
+  assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10', '2026-10-26').estado, 'completa');
+  assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10').faltaDesde, '2026-10-27');
+  assert.equal(coberturaReportes([{ ...imp[0], coverage: 'parcial' }], ['flex_nc'], '2026-10', '2026-10-26').estado, 'parcial');
+});
+
+test('Luma: la planilla de detalle no duplica los viajes que ya están en la quincenal', () => {
+  const v = viajesSinDuplicar([
+    { id_viaje: '1', referencia: '2000001', fecha_creacion: '2026-09-02T10:00:00', precio: '3000' },
+    { referencia: '2000001', fecha_estado: '2026-09-02T18:00:00', precio: '3000' },
+    { referencia: '2000002', fecha_estado: '2026-09-03T18:00:00', precio: '3100' },
+  ]);
+  assert.equal(v.viajes.length, 2); assert.equal(v.repetidos, 1);
+  const l = logisticaReportesMes({ porFuente: { flex_viaje: [{ id_viaje: '1', referencia: '2000001', fecha_creacion: '2026-09-02T10:00:00', precio: '3000' },
+    { referencia: '2000001', fecha_estado: '2026-09-02T18:00:00', precio: '3000' }] } }, '2026-09');
+  assert.equal(l.cadete.total, 3000);
+});
+
+test('titularidad: el mes sin comprobantes se apoya en otro mes verificado de la MISMA cuenta; si los CAE no coinciden, nunca', () => {
+  const sep = { mes: '2026-09', cuentaPfos: '111111', cuenta: { verificada: true, estado: 'verificada', encontrados: 25, comparados: 25 } };
+  const oct = { mes: '2026-10', cuentaPfos: '111111', cuenta: { verificada: false, estado: 'sin evidencia', motivo: 'no hay comprobantes emitidos de ARCA con CAE para este mes' } };
+  const t = titularidad(oct, [sep, oct]);
+  assert.deepEqual([t.usable, t.provisoria, t.mesVerificado, t.conciliacionFiscal.estado], [true, true, '2026-09', 'pendiente']);
+  assert.equal(titularidad({ ...oct, cuentaPfos: '999999' }, [sep]).usable, false, 'otra cuenta: no');
+  assert.equal(titularidad({ ...oct, cuenta: { verificada: false, estado: 'no coincide', motivo: 'solo 3%' } }, [sep]).usable, false, 'CAE que no coinciden: no');
+  assert.equal(titularidad(oct, [oct]).usable, false, 'sin un mes verificado: no');
+  assert.equal(titularidad(sep, []).conciliacionFiscal.estado, 'conciliada');
+});
+
+conPg('octubre en curso: rentabilidad operativa provisoria al corte, conciliación fiscal pendiente y comparación con los mismos días de septiembre', async () => {
+  const db = await armarBase();
+  const ins = (key, data) => db.query(`INSERT INTO pfos_money_records (user_id, source, key, scope, data, sha, fetched_at, first_seen, last_seen)
+    VALUES ($1,'orders',$2,'x',$3,'s',now(),now(),now())`, [PROPIA, key, JSON.stringify(data)]);
+  await ins('6', orden('6', '2026-10-26T12:00:00.000-03:00', 'paid', [['ME23-NEGRO-M-X2', 1, 9000]], [], 9000));
+  await ins('7', orden('7', '2026-10-27T09:00:00.000-03:00', 'paid', [['ME23-NEGRO-M-X2', 1, 9000]], [], 9000)); // hoy: después del corte
+  for (let d = 1; d <= 26; d++) {
+    for (const src of ['orders', 'mp_payments']) {
+      await db.query(`INSERT INTO pfos_money_scopes (user_id, source, scope, family, status, updated_at) VALUES ($1,$2,$3,'ml','completa',now())`, [PROPIA, src, `hist|2026-10-${String(d).padStart(2, '0')}`]);
+    }
+  }
+  await db.exec('SET ROLE fiscalos_lectura');
+  const out = outConArca();
+  const [sep, oct] = await fotosDesde(comoPg(db), { meses: ['2026-09', '2026-10'], outDir: out, cuentaEsperada: String(PROPIA), generado: GENERADO });
+  assert.deepEqual([oct.corte, oct.mesCerrado, sep.mesCerrado], ['2026-10-26', false, true]);
+  assert.equal(oct.ventas.ordenes, 2); assert.equal(oct.ventas.posterioresAlCorte, 1);
+  assert.deepEqual([oct.cobertura.ordenes.diasEsperados, oct.cobertura.ordenes.faltan.length], [26, 0], 'los días 27 a 31 no son atrasados');
+  assert.equal(oct.lineas.publicidad.importe, null, 'octubre sin Ads leídos: faltante');
+  fs.mkdirSync(dirFotos(out), { recursive: true });
+  for (const f of [sep, oct]) fs.writeFileSync(path.join(dirFotos(out), `${f.mes}.json`), JSON.stringify(f));
+  // Titularidad por septiembre; conciliación fiscal de octubre aparte, pendiente.
+  const i = integraciones(out, '2026-10').pfos;
+  assert.deepEqual([i.verificada, i.usable, i.provisoria, i.titularidad.mesVerificado, i.conciliacionFiscal.estado], [false, true, true, '2026-09', 'pendiente']);
+  assert.ok(Object.keys(obtenerPfos(out, '2026-10')).length, 'octubre se puede usar como provisorio');
+  // Rentabilidad operativa provisoria: ventas de PFOS al corte, sin IVA; marcada.
+  const op = resultadoOperativo(out, '2026-10');
+  assert.ok(op.provisional); assert.equal(op.provisional.alCorte, '2026-10-26');
+  assert.equal(op.ventas.cifra.valor, Math.round((18000 / 1.21) * 100) / 100);
+  assert.equal(op.ventas.cifra.nivel, 'estimado');
+  assert.match(op.provisional.nota, /Conciliación fiscal del mes: pendiente/);
+  // Septiembre (mes cerrado, con sus comprobantes) no es provisorio.
+  assert.equal(resultadoOperativo(out, '2026-09').provisional, null);
+  // Comparación entre períodos equivalentes: del 1 al 26 de cada mes.
+  const c = i.comparacion;
+  assert.equal(c.dia, 26);
+  assert.deepEqual([c.anterior.desde, c.anterior.hasta, c.actual.hasta], ['2026-09-01', '2026-09-26', '2026-10-26']);
+  assert.equal(c.anterior.ordenes, 2, 'las del 10 y el 14; la del 30/09 no entra');
+  assert.equal(c.anterior.ads, 2600, '26 días de Ads de septiembre');
+  assert.equal(c.actual.ordenes, 2);
+  assert.equal(c.actual.ads, null);
+  assert.equal(compararAlCorte(oct, { mes: '2026-09' }).motivo.includes('detalle por día'), true);
 });
