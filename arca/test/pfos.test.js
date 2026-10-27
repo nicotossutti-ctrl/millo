@@ -233,6 +233,13 @@ test('titularidad por CAE: punto de venta + número solos nunca validan; CAE con
   assert.equal(ok.verificada, true); assert.equal(ok.encontrados, 30);
   // CAE que existe pero atado a otro número: no cuenta como coincidencia.
   assert.equal(verificarCuenta(Array.from({ length: 30 }, (_, i) => ({ pv: 9, numero: i + 1, cae: cae(i) })), arca).verificada, false);
+  // Una factura con 30 productos (30 filas, el mismo CAE) es UNA factura: no alcanza el mínimo.
+  const una = verificarCuenta(Array.from({ length: 30 }, () => ({ pv: 5, numero: 1, cae: cae(0) })), arca);
+  assert.equal(una.comparados, 1); assert.equal(una.filas, 30); assert.equal(una.verificada, false);
+  assert.match(una.motivo, /1 factura\(s\) distinta/);
+  // Un CAE que aparece con dos números distintos no coincide.
+  const doble = verificarCuenta([...Array.from({ length: 25 }, (_, i) => ({ pv: 5, numero: i + 1, cae: cae(i) })), { pv: 5, numero: 2, cae: cae(0) }], arca);
+  assert.equal(doble.comparados, 25); assert.equal(doble.encontrados, 24);
   // Pocos CAE: no alcanza aunque coincidan todos.
   assert.equal(verificarCuenta(Array.from({ length: 5 }, (_, i) => ({ pv: 5, numero: i + 1, cae: cae(i) })), arca).verificada, false);
 });
@@ -263,25 +270,46 @@ test('clave: aleatoria criptográfica y verificador SCRAM-SHA-256 correcto (vect
   assert.match(verificadorScram(c), /^SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
 });
 
-conPg('comprobación previa: corre como una sola consulta de lectura y da ok en una base de PFOS', async () => {
+conPg('comprobación previa: una sola consulta de lectura; separa lo que bloquea de las advertencias de datos', async () => {
   const db = await armarBase();
-  // Antes del acceso: se corre sobre una base sin «fiscalos» (se arma de nuevo sin el SQL de acceso).
+  // Base de PFOS con la estructura pero sin datos ni acceso: las faltas de datos son advertencias, nada bloquea.
   const limpia = new PGlite(); await limpia.exec(DDL);
   await limpia.query(`INSERT INTO ml_accounts VALUES ($1,'A','t',now()), ($2,'B','t',now())`, [PROPIA, OTRA]);
   const sql = fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-comprobacion.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(PROPIA)).replace(/<ID_EXCLUIDA>/g, String(OTRA));
+  const sinComentarios = sql.replace(/--.*$/gm, '').trim();
+  assert.match(sinComentarios, /^WITH\b/, 'es una consulta (WITH … SELECT)');
+  assert.equal(sinComentarios.replace(/'[^']*'/g, '').split(';').filter((x) => x.trim()).length, 1, 'una sola sentencia');
   const { rows } = await limpia.query(sql);
   const por = Object.fromEntries(rows.map((r) => [r.orden, r]));
-  assert.equal(rows.length, 15);
-  for (const n of [2, 3, 4, 5, 13, 15]) assert.equal(por[n].ok, true, `${por[n].control}: ${por[n].detalle}`);
-  assert.equal(por[6].ok, false, 'sin ventas cargadas lo dice');
-  // En la base con datos y con el acceso ya instalado: ventas sí, y avisa que el esquema y el rol ya existen.
+  assert.equal(rows.length, 16);
+  assert.ok(!rows.some((r) => r.resultado === 'BLOQUEA'), JSON.stringify(rows.filter((r) => r.resultado === 'BLOQUEA')));
+  for (const n of [6, 7, 10, 11, 13]) assert.equal(por[n].resultado, 'advertencia', `${por[n].control}: ${por[n].detalle}`);
+  // Con datos y el acceso ya instalado: septiembre con 25 CAE distintos (ok), octubre sin CAE (advertencia), y el
+  // esquema/rol ya existentes BLOQUEAN una segunda instalación.
   const { rows: r2 } = await db.query(sql);
   const p2 = Object.fromEntries(r2.map((r) => [r.orden, r]));
-  assert.equal(p2[6].ok, true); assert.match(p2[6].detalle, /^4 \/ 1 órdenes/, 'las 4 de septiembre (con la cancelada) y 1 de octubre, solo de la cuenta');
-  assert.equal(p2[10].ok, true, p2[10].detalle);
-  assert.equal(p2[15].ok, false);
+  assert.match(p2[6].detalle, /^4 \/ 1 órdenes/, 'las 4 de septiembre (con la cancelada) y 1 de octubre, solo de la cuenta');
+  assert.equal(p2[10].resultado, 'ok'); assert.match(p2[10].detalle, /^25 CAE distintos/);
+  assert.equal(p2[11].resultado, 'advertencia'); assert.match(p2[11].detalle, /^0 CAE distintos/);
+  assert.equal(p2[16].resultado, 'BLOQUEA');
+  // CAE repetidos en varias filas cuentan una vez.
+  await db.exec('RESET ROLE');
+  await db.query(`INSERT INTO pfos_fin_payloads VALUES ($1,'rep','{"punto_venta":"5","numero":"999","cae":"76999","fecha_emision":"2026-10-02T10:00:00"}')`, [PROPIA]);
+  const { rows: [{ id }] } = await db.query(`SELECT id FROM pfos_fin_imports WHERE user_id = $1 AND format = 'comprobantes'`, [PROPIA]);
+  for (let k = 0; k < 30; k++) await db.query(`INSERT INTO pfos_fin_observations VALUES ($1,9,$2,1,$3,'comprobante','rep','5-999','identificada',null,'d',null)`, [id, k, PROPIA]);
+  const { rows: r3 } = await db.query(sql);
+  assert.match(r3.find((r) => r.orden === 11).detalle, /^1 CAE distintos/);
+  assert.equal(r3.find((r) => r.orden === 11).resultado, 'advertencia');
+  // PUBLIC con CREATE en el esquema public: BLOQUEA (se revisa antes; el SQL de acceso ya no lo cambia solo).
+  await limpia.exec('GRANT CREATE ON SCHEMA public TO PUBLIC');
+  const { rows: r4 } = await limpia.query(sql);
+  assert.equal(r4.find((r) => r.orden === 15).resultado, 'BLOQUEA');
+  assert.match(r4.find((r) => r.orden === 15).detalle, /revisar/);
   // Una base equivocada (sin las tablas de PFOS) no pasa: la consulta falla al no encontrarlas.
   await assert.rejects(new PGlite().query(sql), /pfos_money_records|does not exist/);
+  // El SQL de acceso no toca permisos globales de la base.
+  const acceso = fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-acceso.sql'), 'utf8').replace(/--.*$/gm, '');
+  assert.doesNotMatch(acceso, /ON SCHEMA public/i);
 });
 
 conPg('el rol no puede crear objetos: con CREATE en un esquema, FiscalOS no lee', async () => {

@@ -49,27 +49,36 @@ export function comprobantesPfos(facturasApi, comprobantesReporte) {
 }
 
 /**
- * Verificación por CAE: con al menos `minimo` comprobantes de la cuenta CON CAE, ≥ `umbral` % tienen que estar en los
- * emitidos de ARCA con ese CAE (y el mismo punto de venta y número, si PFOS los trae). Sin CAE suficientes, NO se valida.
- * Devuelve { verificada, comparados, encontrados, porcentaje, soloNumero, motivo }.
+ * Verificación por CAE: con al menos `minimo` CAE DISTINTOS de la cuenta en el mes, ≥ `umbral` % tienen que estar en los
+ * emitidos de ARCA con ese CAE (y el mismo punto de venta y número, si PFOS los trae). Se cuentan facturas, no filas: una
+ * factura con 20 productos repetida en 20 filas es UN CAE. Si un CAE aparece con números distintos, no coincide. Sin CAE
+ * suficientes, NO se valida. Devuelve { verificada, comparados, encontrados, porcentaje, filas, soloNumero, motivo }.
  */
 export function verificarCuenta(comprobantes, arca, { minimo = 20, umbral = 95 } = {}) {
-  let comparados = 0; let encontrados = 0; let soloNumero = 0; let soloNumeroEnArca = 0;
+  const porCae = new Map(); const soloNumeros = new Set(); let filas = 0;
   for (const c of comprobantes) {
     if (!c.cae) {
-      if (c.pv != null && c.numero != null) { soloNumero++; if (arca.numeros.has(`${c.pv}-${c.numero}`)) soloNumeroEnArca++; }
+      if (c.pv != null && c.numero != null) soloNumeros.add(`${c.pv}-${c.numero}`);
       continue;
     }
-    comparados++;
-    const enArca = arca.caes.get(c.cae);
-    if (enArca && (c.pv == null || c.numero == null || enArca === `${c.pv}-${c.numero}`)) encontrados++;
+    filas++;
+    const numeros = porCae.get(c.cae) ?? new Set();
+    if (c.pv != null && c.numero != null) numeros.add(`${c.pv}-${c.numero}`);
+    porCae.set(c.cae, numeros);
   }
+  let encontrados = 0;
+  for (const [cae, numeros] of porCae) {
+    const enArca = arca.caes.get(cae);
+    if (enArca && [...numeros].every((n) => n === enArca)) encontrados++;
+  }
+  const comparados = porCae.size;
+  const soloNumeroEnArca = [...soloNumeros].filter((n) => arca.numeros.has(n)).length;
   const porcentaje = comparados ? Math.round((encontrados / comparados) * 1000) / 10 : null;
-  const base = { comparados, encontrados, porcentaje, soloNumero, soloNumeroEnArca };
+  const base = { comparados, encontrados, porcentaje, filas, soloNumero: soloNumeros.size, soloNumeroEnArca };
   if (!arca.caes.size) return { ...base, verificada: false, motivo: 'no hay comprobantes emitidos de ARCA con CAE para este mes (correr Mis Comprobantes emitidos)' };
   if (comparados < minimo) {
-    return { ...base, verificada: false, motivo: `PFOS tiene ${comparados} factura(s) a clientes de la cuenta con CAE en el mes (hacen falta ${minimo}): cargá en PFOS el reporte de comprobantes del mes. Punto de venta + número solos no alcanzan` };
+    return { ...base, verificada: false, motivo: `PFOS tiene ${comparados} factura(s) distinta(s) con CAE de la cuenta en el mes (hacen falta ${minimo}): cargá en PFOS el reporte de comprobantes del mes. Punto de venta + número solos no alcanzan` };
   }
   if (porcentaje < umbral) return { ...base, verificada: false, motivo: `solo ${porcentaje}% de los CAE de la cuenta están en los comprobantes emitidos de tu CUIT: la cuenta no es tuya o hay otro problema. No se usan sus datos` };
-  return { ...base, verificada: true, motivo: `${encontrados} de ${comparados} CAE de la cuenta están en tus comprobantes emitidos de ARCA` };
+  return { ...base, verificada: true, motivo: `${encontrados} de ${comparados} CAE distintos de la cuenta están en tus comprobantes emitidos de ARCA` };
 }

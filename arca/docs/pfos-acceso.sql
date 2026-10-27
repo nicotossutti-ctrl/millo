@@ -1,6 +1,8 @@
 -- FiscalOS ← PFOS: acceso de SOLO LECTURA y SOLO de la cuenta del contribuyente (PALERMO FITNESS).
 --
--- ANTES de este archivo: correr docs/pfos-comprobacion.sql (solo lectura) en la MISMA base y que todas sus filas den ok.
+-- ANTES de este archivo: correr docs/pfos-comprobacion.sql (solo lectura) en la MISMA base. Ninguna fila puede decir
+-- «BLOQUEA» (las «advertencia» son faltantes de datos y no impiden instalar). Este archivo NO cambia permisos globales de
+-- la base: si PUBLIC puede crear en el esquema public (control 14), se revisa antes con quien administra PFOS.
 --
 -- Lo corre Nicolás UNA vez en el SQL Editor de Neon, en el proyecto de PFOS Mercado Libre (NO en «PFOS TASKS»),
 -- conectado con el usuario dueño de la base. No modifica ninguna tabla de PFOS: crea un esquema aparte («fiscalos») con
@@ -67,9 +69,6 @@ ALTER ROLE fiscalos_lectura SET statement_timeout = '60s';
 ALTER ROLE fiscalos_lectura SET search_path = fiscalos;
 GRANT USAGE ON SCHEMA fiscalos TO fiscalos_lectura;
 GRANT SELECT ON ALL TABLES IN SCHEMA fiscalos TO fiscalos_lectura;
--- Nadie más que el dueño crea objetos en «public» (ya es así desde Postgres 15; si la comprobación dio que no, esto lo
--- corrige sin afectar a PFOS, que usa el usuario dueño).
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
 COMMIT;
 

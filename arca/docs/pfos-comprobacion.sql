@@ -1,12 +1,17 @@
 -- FiscalOS ← PFOS: COMPROBACIÓN PREVIA, SOLO LECTURA. Se corre ANTES de docs/pfos-acceso.sql, en el SQL Editor de Neon,
 -- en el proyecto de PFOS Mercado Libre (NO en «PFOS TASKS»). Es una sola consulta SELECT: no crea, no cambia ni borra
--- nada. Devuelve una fila por control con «ok» = true/false y el detalle; de los datos de la cuenta solo trae CANTIDADES.
+-- nada. De los datos de la cuenta solo trae CANTIDADES.
 --
 -- Reemplazar antes de correrla:
 --   <ID_CUENTA>    el user_id de Mercado Libre de PALERMO FITNESS (la cuenta que lee FiscalOS);
 --   <ID_EXCLUIDA>  el user_id de la otra cuenta (otro CUIT), que tiene que quedar afuera.
 --
--- Si alguna fila da ok = false, NO se corre pfos-acceso.sql: se manda el resultado para revisarlo.
+-- Cada fila dice:
+--   BLOQUEA      estructura incompatible, permisos inseguros o cuenta incorrecta: NO se corre pfos-acceso.sql;
+--   advertencia  faltan datos (días, cobros, CAE, reportes): se puede instalar; el mes afectado queda incompleto o sin
+--                verificar en FiscalOS, y se ve en su diagnóstico;
+--   ok / info    nada que hacer.
+-- Si la consulta falla con «relation "pfos_money_records" does not exist», es la base equivocada (p. ej. PFOS TASKS).
 
 WITH
 tablas(t) AS (VALUES ('pfos_money_records'), ('pfos_money_scopes'), ('pfos_hist_ads_daily'), ('pfos_fin_imports'), ('pfos_fin_observations'),
@@ -48,52 +53,66 @@ reg AS (SELECT source, CASE WHEN data->>'date_created' ~ '^\d{4}-\d{2}-\d{2}T' T
 alc AS (SELECT source, scope, status FROM public.pfos_money_scopes
         WHERE user_id = <ID_CUENTA> AND source IN ('orders', 'mp_payments') AND (scope LIKE 'hist|2026-09-%' OR scope LIKE 'hist|2026-10-%')),
 ads AS (SELECT level, day FROM public.pfos_hist_ads_daily WHERE user_id = <ID_CUENTA> AND day >= DATE '2026-09-01' AND day < DATE '2026-11-01'),
-cbte AS (SELECT left(pl.data->>'fecha_emision', 7) AS mes, (pl.data ? 'cae') AND coalesce(pl.data->>'cae', '') <> '' AS con_cae
+cbte AS (SELECT left(pl.data->>'fecha_emision', 7) AS mes, nullif(regexp_replace(coalesce(pl.data->>'cae', ''), '\D', '', 'g'), '') AS cae
          FROM public.pfos_fin_observations o JOIN public.pfos_fin_imports i ON i.id = o.import_id
          JOIN public.pfos_fin_payloads pl ON pl.user_id = o.user_id AND pl.sha = o.data_sha
-         WHERE o.user_id = <ID_CUENTA> AND o.source = 'comprobante' AND i.status IN ('cerrada', 'reemplazando'))
-SELECT orden, control, ok, detalle FROM (
-  SELECT 1 AS orden, 'base' AS control, true AS ok, current_database() || ' · ' || split_part(version(), ' ', 2) AS detalle
-  UNION ALL SELECT 2, 'tablas de PFOS Mercado Libre (si faltan, ¿es la base de PFOS TASKS?)', (SELECT x IS NULL FROM falta_tabla),
-    coalesce('faltan: ' || (SELECT x FROM falta_tabla), 'las 11 están')
-  UNION ALL SELECT 3, 'columnas que usan las vistas', (SELECT x IS NULL FROM falta_col), coalesce('faltan: ' || (SELECT x FROM falta_col), 'todas están')
-  UNION ALL SELECT 4, 'la cuenta de FiscalOS existe en PFOS', EXISTS (SELECT 1 FROM public.ml_accounts WHERE user_id = <ID_CUENTA>), '<ID_CUENTA>'
-  UNION ALL SELECT 5, 'la cuenta excluida es otra', <ID_EXCLUIDA> <> <ID_CUENTA>,
+         WHERE o.user_id = <ID_CUENTA> AND o.source = 'comprobante' AND i.status IN ('cerrada', 'reemplazando')),
+controles(orden, control, bloquea, ok, detalle) AS (
+  SELECT 1, 'base', false, true, current_database() || ' · ' || split_part(version(), ' ', 2)
+  UNION ALL SELECT 2, 'tablas de PFOS Mercado Libre', true, (SELECT x IS NULL FROM falta_tabla), coalesce('faltan: ' || (SELECT x FROM falta_tabla), 'las 11 están')
+  UNION ALL SELECT 3, 'columnas que usan las vistas', true, (SELECT x IS NULL FROM falta_col), coalesce('faltan: ' || (SELECT x FROM falta_col), 'todas están')
+  UNION ALL SELECT 4, 'la cuenta de FiscalOS existe en PFOS', true, EXISTS (SELECT 1 FROM public.ml_accounts WHERE user_id = <ID_CUENTA>), '<ID_CUENTA>'
+  UNION ALL SELECT 5, 'la cuenta excluida es otra', true, <ID_EXCLUIDA> <> <ID_CUENTA>,
     CASE WHEN EXISTS (SELECT 1 FROM public.ml_accounts WHERE user_id = <ID_EXCLUIDA>) THEN 'existe en PFOS y queda afuera de las vistas' ELSE 'no está en PFOS' END
-  UNION ALL SELECT 6, 'ventas de la cuenta (sept / oct)', (SELECT count(*) > 0 FROM reg WHERE source = 'orders' AND creada >= '2026-09-01T00:00:00-03:00' AND creada < '2026-10-01T00:00:00-03:00'),
+  UNION ALL SELECT 6, 'ventas de la cuenta (sept / oct)', false,
+    (SELECT count(*) FILTER (WHERE creada >= '2026-09-01T00:00:00-03:00' AND creada < '2026-10-01T00:00:00-03:00') > 0
+        AND count(*) FILTER (WHERE creada >= '2026-10-01T00:00:00-03:00' AND creada < '2026-11-01T00:00:00-03:00') > 0 FROM reg WHERE source = 'orders'),
     (SELECT count(*) FILTER (WHERE creada >= '2026-09-01T00:00:00-03:00' AND creada < '2026-10-01T00:00:00-03:00') || ' / ' ||
             count(*) FILTER (WHERE creada >= '2026-10-01T00:00:00-03:00' AND creada < '2026-11-01T00:00:00-03:00') || ' órdenes; ' ||
             count(*) FILTER (WHERE NOT con_items OR NOT con_pagos) || ' sin líneas o sin pagos' FROM reg WHERE source = 'orders')
-  UNION ALL SELECT 7, 'cobros de MP, devoluciones y facturas de la cuenta', (SELECT count(*) > 0 FROM reg WHERE source = 'mp_payments'),
+  UNION ALL SELECT 7, 'cobros de MP, devoluciones y facturas de la cuenta', false, (SELECT count(*) > 0 FROM reg WHERE source = 'mp_payments'),
     (SELECT count(*) FILTER (WHERE source = 'mp_payments') || ' cobros (' || count(*) FILTER (WHERE source = 'mp_payments' AND NOT con_cargos) || ' sin cargos) · ' ||
             count(*) FILTER (WHERE source = 'claim_returns') || ' devoluciones · ' || count(*) FILTER (WHERE source = 'invoices') || ' facturas' FROM reg)
-  UNION ALL SELECT 8, 'días con ventas y cobros completos en PFOS (sept / oct)', true,
+  UNION ALL SELECT 8, 'días con ventas y cobros completos en PFOS (sept / oct)', false,
+    (SELECT count(*) FILTER (WHERE status = 'completa' AND scope LIKE 'hist|2026-09-%') = 60 AND count(*) FILTER (WHERE status = 'completa' AND scope LIKE 'hist|2026-10-%') = 62 FROM alc),
     (SELECT 'ventas ' || count(*) FILTER (WHERE source = 'orders' AND status = 'completa' AND scope LIKE 'hist|2026-09-%') || '/30 · ' ||
             count(*) FILTER (WHERE source = 'orders' AND status = 'completa' AND scope LIKE 'hist|2026-10-%') || '/31; cobros ' ||
             count(*) FILTER (WHERE source = 'mp_payments' AND status = 'completa' AND scope LIKE 'hist|2026-09-%') || '/30 · ' ||
             count(*) FILTER (WHERE source = 'mp_payments' AND status = 'completa' AND scope LIKE 'hist|2026-10-%') || '/31' FROM alc)
-  UNION ALL SELECT 9, 'Mercado Ads por campaña (nivel «campaña»)', (SELECT count(*) > 0 FROM ads WHERE level = 'campaña'),
+  UNION ALL SELECT 9, 'Mercado Ads por campaña (nivel «campaña»)', false,
+    (SELECT count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day < DATE '2026-10-01') = 30 AND count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day >= DATE '2026-10-01') = 31 FROM ads),
     (SELECT 'días sept ' || count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day < DATE '2026-10-01') || '/30 · oct ' ||
             count(DISTINCT day) FILTER (WHERE level = 'campaña' AND day >= DATE '2026-10-01') || '/31 · niveles: ' || coalesce(string_agg(DISTINCT level, ', '), 'ninguno') FROM ads)
-  UNION ALL SELECT 10, 'facturas a clientes con CAE en «Conciliación» (sept / oct)', (SELECT count(*) FILTER (WHERE con_cae) >= 20 FROM cbte),
-    (SELECT count(*) FILTER (WHERE con_cae AND mes = '2026-09') || ' / ' || count(*) FILTER (WHERE con_cae AND mes = '2026-10') || ' con CAE · ' ||
-            count(*) FILTER (WHERE NOT con_cae) || ' sin CAE' FROM cbte)
-  UNION ALL SELECT 11, 'reportes cerrados de la cuenta (Flex, Luma, Full, comprobantes)', true,
+  -- FiscalOS exige al menos 20 CAE DISTINTOS por mes para dar la cuenta por verificada en ese mes.
+  UNION ALL SELECT 10, 'facturas distintas con CAE en «Conciliación»: septiembre (mínimo 20)', false,
+    (SELECT count(DISTINCT cae) >= 20 FROM cbte WHERE mes = '2026-09'),
+    (SELECT count(DISTINCT cae) || ' CAE distintos · ' || count(*) FILTER (WHERE cae IS NULL) || ' filas sin CAE' FROM cbte WHERE mes = '2026-09')
+  UNION ALL SELECT 11, 'facturas distintas con CAE en «Conciliación»: octubre (mínimo 20)', false,
+    (SELECT count(DISTINCT cae) >= 20 FROM cbte WHERE mes = '2026-10'),
+    (SELECT count(DISTINCT cae) || ' CAE distintos · ' || count(*) FILTER (WHERE cae IS NULL) || ' filas sin CAE' FROM cbte WHERE mes = '2026-10')
+  UNION ALL SELECT 12, 'reportes cerrados de la cuenta (Flex, Luma, Full, comprobantes)', false, true,
     (SELECT coalesce(string_agg(format || ' ' || coalesce(range_from, '?') || '→' || coalesce(range_to, '?'), ' · ' ORDER BY format, range_from), 'ninguno')
      FROM public.pfos_fin_imports WHERE user_id = <ID_CUENTA> AND status IN ('cerrada', 'reemplazando')
        AND format IN ('flex_nc', 'flex_nd', 'luma_viajes', 'luma_viajes_detalle', 'ml_cargos_full', 'comprobantes', 'comprobantes_2026_08'))
-  UNION ALL SELECT 12, 'listas de costos y SKU confirmados de la cuenta', (SELECT count(*) > 0 FROM public.pfos_cost_lists),
+  UNION ALL SELECT 13, 'listas de costos y SKU confirmados de la cuenta', false, (SELECT count(*) > 0 FROM public.pfos_cost_lists),
     (SELECT coalesce(string_agg(supplier || ' desde ' || valid_from, ', ' ORDER BY valid_from), 'ninguna') FROM public.pfos_cost_lists) || ' · ' ||
     (SELECT count(DISTINCT seller_sku) FROM public.pfos_cost_sku_map WHERE user_id = <ID_CUENTA>) || ' SKU con decisión'
-  UNION ALL SELECT 13, 'PUBLIC no puede leer tablas de PFOS (si pudiera, el rol nuevo también)',
+  UNION ALL SELECT 14, 'PUBLIC no puede leer tablas de PFOS (si pudiera, el rol nuevo también)', true,
     NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
       AND has_table_privilege('public', c.oid, 'SELECT')),
     coalesce((SELECT 'legibles por todos: ' || string_agg(c.relname, ', ') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm') AND has_table_privilege('public', c.oid, 'SELECT')), 'ninguna')
-  UNION ALL SELECT 14, 'PUBLIC no puede crear en el esquema public', true,
-    CASE WHEN has_schema_privilege('public', 'public', 'CREATE') THEN 'hoy SÍ puede: pfos-acceso.sql lo revoca' ELSE 'no puede' END
-  UNION ALL SELECT 15, 'todavía no existen el esquema «fiscalos» ni el rol «fiscalos_lectura»',
+  UNION ALL SELECT 15, 'PUBLIC no puede crear en el esquema public (si pudiera, el rol nuevo también)', true,
+    NOT has_schema_privilege('public', 'public', 'CREATE'),
+    CASE WHEN has_schema_privilege('public', 'public', 'CREATE')
+      THEN 'hoy SÍ puede: hay que revisar con quien administra PFOS qué roles lo usan antes de quitarlo; no se instala hasta resolverlo'
+      ELSE 'no puede' END
+  UNION ALL SELECT 16, 'todavía no existen el esquema «fiscalos» ni el rol «fiscalos_lectura»', true,
     to_regnamespace('fiscalos') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fiscalos_lectura'),
     CASE WHEN to_regnamespace('fiscalos') IS NOT NULL THEN 'el esquema ya existe · ' ELSE '' END ||
     CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fiscalos_lectura') THEN 'el rol ya existe' ELSE 'libres' END
-) AS controles ORDER BY orden;
+)
+SELECT orden, control,
+  CASE WHEN ok THEN 'ok' WHEN bloquea THEN 'BLOQUEA' ELSE 'advertencia' END AS resultado,
+  detalle
+FROM controles ORDER BY orden;

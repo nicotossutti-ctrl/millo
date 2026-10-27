@@ -48,7 +48,8 @@ cobertura real de septiembre y octubre la mide `fiscalos.ps1 pfos` la primera ve
    - cada vista tiene que traer una sola cuenta, la configurada.
 3. **Por CAE.** Las facturas a clientes de la cuenta, del reporte de comprobantes cargado en «Conciliación» de PFOS, tienen
    que estar en **tus comprobantes emitidos de ARCA** con el **mismo CAE** y el mismo punto de venta y número:
-   - hacen falta al menos 20 CAE en el mes, y que coincida el 95 %;
+   - hacen falta al menos 20 CAE **distintos** en el mes (se cuentan facturas, no filas de productos), y que coincida el
+     95 %; un CAE que aparece con dos números distintos no cuenta;
    - punto de venta + número solos **nunca** validan, porque se repiten entre CUIT distintos;
    - sin evidencia suficiente, el mes queda «cuenta no verificada» y sus datos no se usan.
 
@@ -84,9 +85,13 @@ cobertura real de septiembre y octubre la mide `fiscalos.ps1 pfos` la primera ve
 1. **Proyecto correcto.** En Neon, abrir el proyecto de **PFOS Mercado Libre**: es la base con `pfos_money_records`, **no**
    «PFOS TASKS».
 2. **Comprobación previa (solo lectura).** Abrir `docs/pfos-comprobacion.sql` y reemplazar `<ID_CUENTA>` (PALERMO) y
-   `<ID_EXCLUIDA>` (la otra cuenta). Correrlo en el SQL Editor:
-   - devuelve 15 filas;
-   - si alguna da `ok = false`, **parar** y mandar el resultado;
+   `<ID_EXCLUIDA>` (la otra cuenta). Correrlo en el SQL Editor. Devuelve 16 filas, cada una con su resultado:
+   - **BLOQUEA**: estructura incompatible (tablas o columnas), cuenta incorrecta o permisos inseguros (PUBLIC puede leer
+     tablas de PFOS o crear en `public`). **No se instala**: se manda el resultado para revisarlo. El SQL de acceso no
+     cambia permisos globales de la base;
+   - **advertencia**: faltan datos (días de ventas, cobros o Ads; menos de 20 CAE distintos en septiembre u octubre;
+     reportes). Se puede instalar: ese mes queda incompleto o «cuenta no verificada» en FiscalOS, con su diagnóstico a la
+     vista;
    - si la consulta falla con «relation "pfos_money_records" does not exist», es la base equivocada.
 3. **Clave.** En la PC: `fiscalos.ps1 actualizar` y después `fiscalos.ps1 pfos-clave`:
    - guarda la clave en `arca\.env`;
