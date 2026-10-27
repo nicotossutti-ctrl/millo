@@ -11,14 +11,15 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { generarInformeIva, tablaDe, resumenComprobantes } from '../informeIva.js';
+import { generarInformeIva, tablaDe } from '../informeIva.js';
 import { leerVigente } from '../portal/conservacion.js';
-import { leerManifiesto, decodificar } from '../portal/misComprobantes.js';
-import { leerZipDesdeArchivo } from '../portal/zip.js';
+import { leerManifiesto } from '../portal/misComprobantes.js';
 import { periodoDe, importeDe } from '../portal/ivaDdjj.js';
 import { fechaIso } from '../portal/calidad.js';
 import { estimar, alicuotaIIBB } from '../estimacion.js';
 import { importadoDelMes, mesesImportados, CONCEPTOS } from './importar.js';
+import { manualesDelMes, listarManuales } from './manuales.js';
+import { resultadoOperativo, rentabilidadMes } from './rentabilidad.js';
 import { integraciones } from './integraciones.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -45,27 +46,6 @@ function vigentes(datosDir, id) {
   }));
 }
 
-// Resumen de Mis Comprobantes por mes, con caché por archivo (el CSV de un mes tiene miles de filas).
-const cacheMc = new Map();
-function comprobantesMes(datosDir, id, tipo, mes) {
-  const dirFuente = path.join(datosDir, id);
-  const ini = `${mes}-01`; const fin = finDeMes(mes);
-  for (const [k, v] of Object.entries(leerManifiesto(dirFuente))) {
-    const [t, d, h] = k.split(':');
-    if (t !== tipo || !v?.ok || !v.archivo || d > ini || h < fin) continue;
-    const f = path.join(dirFuente, v.archivo);
-    let mtime = 0; try { mtime = fs.statSync(f).mtimeMs; } catch { continue; }
-    const clave = `${f}|${mtime}|${mes}`;
-    if (!cacheMc.has(clave)) {
-      const texto = /\.zip$/i.test(f) ? leerZipDesdeArchivo(f).filter((e) => /\.csv$/i.test(e.name)).map((e) => decodificar(e.data)).join('\n') : decodificar(fs.readFileSync(f));
-      cacheMc.set(clave, { ...resumenComprobantes(texto, mes), fecha: v.fecha });
-    }
-    const r = cacheMc.get(clave);
-    return r.error ? null : r;
-  }
-  return null;
-}
-
 /** Meses con datos (comprobantes, DJ, pagos, importaciones) más el mes anterior a hoy; del más nuevo al más viejo. */
 export function mesesDisponibles(outDir, hoy) {
   const datosDir = path.join(outDir, 'datos');
@@ -83,6 +63,7 @@ export function mesesDisponibles(outDir, hoy) {
   }
   for (const id of ['portal-iva-ddjj', 'mis-retenciones']) for (const v of Object.values(leerVigente(datosDir, id))) if (v.desde) s.add(v.desde.slice(0, 7));
   for (const m of mesesImportados(outDir)) s.add(m);
+  for (const c of listarManuales(outDir)) s.add(c.mes);
   return [...s].filter((m) => m <= hoy.slice(0, 7)).sort().reverse();
 }
 
@@ -192,7 +173,10 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const datosDir = path.join(outDir, 'datos');
   const [anio] = mes.split('-');
   const imp = importadoDelMes(outDir, mes);
-  const importado = (k) => (imp[k] ? cifra(imp[k].importe, 'importado', `importado: ${imp[k].archivos.join(', ')}`, imp[k].incluyeIva ? 'el archivo incluye IVA' : null) : null);
+  const man = manualesDelMes(outDir, mes);
+  // Carga manual (corrige o completa) > archivo importado. Nunca se suman entre sí.
+  const importado = (k) => (man[k] ? cifra(man[k].importe, 'manual', `carga manual: ${[...new Set(man[k].cargas.map((c) => c.fuente))].join(', ')}`, man[k].cargas[0].nota || null)
+    : imp[k] ? cifra(imp[k].importe, 'importado', `importado: ${imp[k].archivos.join(', ')}`, imp[k].incluyeIva ? 'el archivo incluye IVA' : null) : null);
   const contrib = contribuyente(paramsFile);
 
   // ---------- IVA ----------
@@ -240,10 +224,10 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const alic = contrib ? alicuotaIIBB(contrib) : 0;
   const volantes = volantesSifere(datosDir, mes);
   const iibbPagos = [importado('iibb-pagado'), volantes.length ? cifra(suma(volantes), 'verificado', volantes[0].fuente, `${volantes.length} volante(s)`) : null].filter(Boolean);
-  const iibbDeclarado = importado('iibb-declarado') ?? faltante('SIFERE no se lee todavía: importá la DJ de Convenio Multilateral (CM03) del mes');
+  const iibbDeclarado = importado('iibb-declarado') ?? faltante('cargá el impuesto determinado del CM03 del mes (SIFERE no se lee todavía)');
   const iibbEstimado = em && alic > 0 ? cifra(em.netoGravado * alic, 'estimado', 'facturación neta × alícuota efectiva', `alícuota efectiva ${r2(alic * 100)}% (params/contribuyente.json)`)
     : faltante(em ? 'configurá las jurisdicciones y alícuotas en params/contribuyente.json' : 'faltan los comprobantes emitidos del mes');
-  const iibbPagado = iibbPagos.length ? cifra(iibbPagos.reduce((n, c) => n + c.valor, 0), iibbPagos.every((c) => c.nivel === 'verificado') ? 'verificado' : 'importado', iibbPagos.map((c) => c.fuente).join(' + ')) : faltante('sin pagos de IIBB registrados ni importados');
+  const iibbPagado = iibbPagos.length ? cifra(iibbPagos.reduce((n, c) => n + c.valor, 0), iibbPagos.every((c) => c.nivel === 'verificado') ? 'verificado' : iibbPagos[0].nivel, iibbPagos.map((c) => c.fuente).join(' + ')) : faltante('sin pagos de IIBB registrados ni cargados');
   const iibb = {
     impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, estimado: iibbEstimado, pagos: iibbPagado,
     saldoPendiente: iibbDeclarado.valor != null ? cifra(Math.max(0, iibbDeclarado.valor - (iibbPagado.valor ?? 0)), iibbDeclarado.nivel, 'declarado − pagos', iibbPagado.valor == null ? 'sin pagos registrados' : null) : faltante('falta lo declarado'),
@@ -256,23 +240,28 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   let ganEstimado; let iibbParaGanancias = null;
   if (!contrib) ganEstimado = faltante('para estimar Ganancias falta params/contribuyente.json (deducciones, autónomos, IIBB)');
   else {
-    const meses = []; const sinDatos = [];
+    // Base mensual = resultado operativo de cada mes del año (facturación − CMV − gastos). El costo de
+    // la mercadería vendida es OBLIGATORIO: nunca se reemplaza por las compras del mes (con stock son
+    // conceptos distintos y distorsionan la rentabilidad).
+    const meses = []; const sinDatos = []; const sinCmv = []; const conGastosFaltantes = [];
     for (let i = 1; i <= Number(mes.slice(5)); i++) {
       const m = `${anio}-${String(i).padStart(2, '0')}`;
-      const e = comprobantesMes(datosDir, 'comprobantes-emitidos', 'emitidos', m);
-      const r = comprobantesMes(datosDir, 'comprobantes-recibidos', 'recibidos', m);
-      if (!e || !r) { sinDatos.push(m); continue; }
-      const im = importadoDelMes(outDir, m);
-      const gastosImp = ['comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos'].reduce((n, k) => n + Math.abs(im[k]?.importe ?? 0), 0);
-      const costo = im['costo-mercaderia'] ? Math.abs(im['costo-mercaderia'].importe) : r.netoGravado;
-      meses.push({ mes: m, ventasNetas: e.netoGravado + (im['otros-ingresos']?.importe ?? 0), gastosNetos: costo + gastosImp });
+      const op = resultadoOperativo(outDir, m);
+      if (op.ventas.cifra.valor == null) { sinDatos.push(m); continue; }
+      const cmv = op.lineas.find((l) => l.clave === 'costo-mercaderia');
+      if (cmv.cifra.valor == null) { sinCmv.push(m); continue; }
+      if (op.operativo.faltan.length) conGastosFaltantes.push(m);
+      const otros = op.lineas.find((l) => l.clave === 'otros-ingresos').cifra.valor ?? 0;
+      const gastos = op.lineas.filter((l) => l.signo < 0).reduce((n, l) => n + (l.cifra.valor ?? 0), 0);
+      meses.push({ mes: m, ventasNetas: op.ventas.cifra.valor + otros, gastosNetos: gastos });
     }
-    if (sinDatos.length) ganEstimado = faltante(`Ganancias se provisiona sobre el acumulado del año: faltan los comprobantes de ${sinDatos.join(', ')} (correr Mis Comprobantes con esas fechas)`);
-    else {
+    if (sinDatos.length || sinCmv.length) {
+      ganEstimado = faltante(`Ganancias se provisiona sobre el resultado acumulado del año: ${[sinDatos.length ? `faltan los comprobantes de ${sinDatos.join(', ')}` : null, sinCmv.length ? `falta el costo de mercadería vendida de ${sinCmv.join(', ')}` : null].filter(Boolean).join('; ')}`);
+    } else {
       const est = estimar(Number(anio), meses, contrib).at(-1);
       iibbParaGanancias = est.iibb;
       ganEstimado = cifra(est.ganancias, 'estimado', 'escala de Ganancias sobre el resultado proyectado del año',
-        `provisión del mes; resultado = facturación neta − ${imp['costo-mercaderia'] ? 'costo de mercadería importado' : 'compras netas facturadas (supone stock estable)'} − gastos importados − IIBB − autónomos; proyección anual ${est.proyeccionAnual}`);
+        `provisión del mes; base = facturación − costo de mercadería vendida − gastos − IIBB − autónomos de cada mes; proyección anual ${est.proyeccionAnual}${conGastosFaltantes.length ? `; gastos incompletos en ${conGastosFaltantes.join(', ')} (provisión sobreestimada)` : ''}`);
     }
   }
   // Ganancias es ANUAL: un pago con fecha en el mes (anticipo o saldo de DJ) se imputa a un período
@@ -295,47 +284,16 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const autImp = importado('autonomos');
   const autonomos = {
     impuesto: 'Autónomos', periodo: mes,
-    declarado: contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json', 'cuota mensual configurada') : faltante('cuota no configurada (params/contribuyente.json)'),
+    declarado: importado('autonomos-cuota') ?? (contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json', 'cuota mensual configurada') : faltante('cargá la cuota del mes')),
     pagos: autPagosCt.length ? cifra(suma(autPagosCt), 'verificado', autPagosCt[0].fuente) : autImp ?? faltante('sin pagos registrados en el mes'),
   };
 
   // ---------- Rentabilidad del mes ----------
-  const g = (k) => (imp[k] ? cifra(Math.abs(imp[k].importe), 'importado', `importado: ${imp[k].archivos.join(', ')}`, imp[k].incluyeIva ? 'incluye IVA' : null) : null);
-  const ingresos = em ? cifra(em.netoGravado + (imp['otros-ingresos']?.importe ?? 0), 'verificado', em.fuente, 'facturación neta de IVA (neto gravado de comprobantes emitidos, notas de crédito restando)') : faltante('faltan los comprobantes emitidos');
-  const lineasGasto = ['costo-mercaderia', 'comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos'].map((k) => ({ concepto: k, nombre: CONCEPTOS[k].nombre, ...(g(k) ?? faltante('no importado')) }));
-  const iibbAtribuible = iibb.declarado.valor != null ? iibb.declarado : iibb.estimado;
-  const faltanRent = [];
-  if (ingresos.valor == null) faltanRent.push('facturación del mes');
-  if (!imp['costo-mercaderia']) faltanRent.push('costo de la mercadería vendida (importar)');
-  if (iibbAtribuible.valor == null) faltanRent.push('Ingresos Brutos (declarado o estimado)');
-  if (ganEstimado.valor == null) faltanRent.push('provisión de Ganancias');
-  const gastosConocidos = lineasGasto.reduce((n, l) => n + (l.valor ?? 0), 0);
-  const conIva = lineasGasto.some((l) => /incluye IVA/.test(l.nota ?? ''));
-  const resultado = ingresos.valor != null && imp['costo-mercaderia']
-    ? cifra(ingresos.valor - gastosConocidos - (iibbAtribuible.valor ?? 0) - (ganEstimado.valor ?? 0) - (contrib?.autonomosMensual ?? 0),
-      [ingresos, ...lineasGasto, iibbAtribuible, ganEstimado].some((c) => c.nivel === 'estimado') ? 'estimado' : 'importado', 'cálculo de FiscalOS',
-      [faltanRent.length ? `incompleto: falta ${faltanRent.join(', ')}` : null, conIva ? 'hay gastos importados con IVA incluido: el resultado queda subestimado' : null].filter(Boolean).join(' · ') || null)
-    : faltante(`sin datos suficientes: falta ${faltanRent.join(', ')}`);
-  const rentabilidad = {
-    ingresos, gastos: lineasGasto,
-    referencia: {
-      comprasFacturadas: re ? cifra(re.netoGravado, 'verificado', re.fuente, 'compras netas de IVA facturadas por proveedores: no es el costo de lo vendido') : faltante('faltan los comprobantes recibidos'),
-      ventasMercadoLibre: imp['ventas-ml'] ? cifra(imp['ventas-ml'].importe, 'importado', `importado: ${imp['ventas-ml'].archivos.join(', ')}`, 'referencia: ya incluidas en la facturación, no se suman') : null,
-    },
-    iibb: iibbAtribuible, ganancias: ganEstimado, autonomos: contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json') : null,
-    resultado, faltantes: faltanRent,
-    nota: 'El IVA no se resta: lo cobrás por cuenta de ARCA y lo compensás con el de tus compras. Afecta la caja (y cuándo pagás), no el resultado económico.',
-  };
-
-  // ---------- Caja fiscal (qué hay que pagar y cuándo) ----------
-  const caja = [
-    { impuesto: 'IVA', importe: iva.saldoPendiente.valor ?? iva.declarado.valor ?? iva.estimado.valor, nivel: iva.saldoPendiente.valor != null ? iva.saldoPendiente.nivel : iva.declarado.valor != null ? 'verificado' : iva.estimado.nivel, vence: iva.vencimientoPago.fecha },
-    { impuesto: 'Ingresos Brutos', importe: iibb.saldoPendiente.valor ?? iibb.estimado.valor, nivel: iibb.saldoPendiente.valor != null ? iibb.saldoPendiente.nivel : iibb.estimado.nivel, vence: null },
-    { impuesto: 'Ganancias (provisión)', importe: ganEstimado.valor, nivel: ganEstimado.nivel, vence: null },
-  ];
+  const rentabilidad = rentabilidadMes(outDir, mes, { iva, iibb, ganancias, autonomos, pagosMes, hoy });
 
   return {
-    mes, hoy, iva, iibb, ganancias, autonomos, rentabilidad, caja, pagosDelMes: pagosMes,
+    mes, hoy, iva, iibb, ganancias, autonomos, rentabilidad, pagosDelMes: pagosMes,
+    manuales: listarManuales(outDir).filter((c) => c.mes === mes),
     obligaciones: obligaciones(datosDir, hoy),
     importado: Object.fromEntries(Object.entries(imp).map(([k, v]) => [k, { ...v, nombre: CONCEPTOS[k]?.nombre ?? k }])),
     configuracion: { contribuyente: !!contrib, iibbEstimable: alic > 0, iibbParaGanancias },

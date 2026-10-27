@@ -40,6 +40,7 @@ export const CONCEPTOS = {
   'iibb-pagado': { nombre: 'Ingresos Brutos: pagos', grupo: 'impuesto', impuesto: 'iibb', tipo: 'pagado' },
   'ganancias-anticipo': { nombre: 'Ganancias: anticipos pagados', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'pagado' },
   autonomos: { nombre: 'Autónomos: pagos', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'pagado' },
+  'autonomos-cuota': { nombre: 'Autónomos: cuota del mes', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'declarado' },
 };
 
 const MESES = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };

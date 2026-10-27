@@ -213,16 +213,30 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   *faltante* (y cómo obtenerla). El vencimiento de pago del IVA es el que registra Cuentas
   Tributarias para el régimen del contribuyente (p. ej. IVA diferido a 90 días); no se aplica el
   calendario general.
-- **Rentabilidad**: facturación neta − costo de mercadería − comisiones, publicidad, logística y
-  gastos − Ingresos Brutos − provisión de Ganancias. El IVA **no** se resta: va en "caja fiscal".
-  Sin costo de mercadería no se muestra resultado.
+- **Rentabilidad** (por mes de facturación), en cuatro bloques separados:
+  1. *Resultado económico*: facturación neta (ARCA) − costo de la mercadería vendida = margen bruto;
+     − cargos de Mercado Libre, publicidad, logística y gastos = resultado operativo; − IIBB y
+     autónomos; − provisión de Ganancias. Cada subtotal dice si está completo, con estimaciones o
+     **parcial** (y qué falta); un resultado parcial nunca se presenta como rentabilidad neta.
+  2. *Impuestos que generó el mes* (el IVA se muestra, pero no es costo).
+  3. *Pagos de impuestos que salieron de caja en el mes*, de cualquier período, separando los
+     propios de las retenciones depositadas como agente.
+  4. *Lo que el mes deja para pagar más adelante* (p. ej. el IVA diferido).
+
+  Reglas: una sola fuente por concepto y mes (carga manual > archivo importado > PFOS > facturas en
+  ARCA); las demás se muestran como referencia y no se suman. El costo de la mercadería vendida
+  nunca se reemplaza por las compras del mes (tampoco al estimar Ganancias). Los proveedores de las
+  facturas recibidas se clasifican una vez (mercadería, Mercado Libre, publicidad, logística, gasto,
+  excluir) y desde ahí sus gastos salen de ARCA. Cualquier importe se carga o corrige desde la
+  interfaz, con su fuente; se guarda el valor anterior.
 - **Obligaciones**: vencimientos y deudas registrados en Cuentas Tributarias.
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
 - **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
 - Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
-- PFOS: no está conectado; el contrato para conectarlo está en `src/app/integraciones.js`.
+- PFOS: no está conectado. No expone totales mensuales; la conexión prevista es de solo lectura a su base
+  (ver `docs/rentabilidad-DISENO.md` en PFOS). El contrato del lado de FiscalOS está en `src/app/integraciones.js`.
 
 ### Windows: un solo script, sin Git
 

@@ -32,7 +32,8 @@ async function api(ruta, cuerpo) {
   return j;
 }
 
-const badge = (nivel) => h('span', { class: `nivel ${nivel}` }, nivel);
+const NIVEL_TXT = { manual: 'cargado a mano' };
+const badge = (nivel) => h('span', { class: `nivel ${nivel}` }, NIVEL_TXT[nivel] ?? nivel);
 /** Celda de una cifra: importe + nivel; fuente y nota como texto chico. */
 function celdaCifra(c, { conNota = true } = {}) {
   if (!c) return h('td', { class: 'num' }, '—');
@@ -42,7 +43,7 @@ function celdaCifra(c, { conNota = true } = {}) {
 }
 const celdaFecha = (f) => h('td', { title: [f?.fuente, f?.nota].filter(Boolean).join(' · ') }, f?.fecha ? fecha(f.fecha) : '—', badge(f?.nivel ?? 'faltante'));
 
-const estado = { mes: null, meses: [], panel: null, hoy: null, conceptos: {} };
+const estado = { mes: null, meses: [], panel: null, hoy: null, conceptos: {}, clases: {} };
 
 // ---------------- pestañas y mes ----------------
 for (const b of document.querySelectorAll('[data-pestana]')) {
@@ -61,8 +62,8 @@ function moverMes(d) {
 
 async function iniciar() {
   try {
-    const [m, conceptos] = await Promise.all([api('/api/meses'), api('/api/conceptos')]);
-    estado.meses = m.meses; estado.hoy = m.hoy; estado.conceptos = conceptos;
+    const [m, conceptos, clases] = await Promise.all([api('/api/meses'), api('/api/conceptos'), api('/api/clases-proveedor')]);
+    estado.meses = m.meses; estado.hoy = m.hoy; estado.conceptos = conceptos; estado.clases = clases;
     const sel = $('#mes');
     poner(sel, ...m.meses.map((x) => h('option', { value: x }, `${nombreMes(x)}${x === m.porDefecto ? ' (mes anterior)' : ''}`)));
     const inicial = m.meses.includes(m.porDefecto) ? m.porDefecto : m.meses[0];
@@ -110,7 +111,7 @@ function renderImpuestos() {
       iva.presentacion.fecha ? `DJ presentada: ${iva.presentacion.fecha}` : null,
     ]),
     tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
-      iibb.declarado.valor != null ? 'Declarado (importado)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin DJ: importala en "Importar archivo"',
+      iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo en Rentabilidad',
     ]),
     tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [
       ganancias.estimado.valor != null ? 'Provisión estimada del mes' : 'Sin provisión (faltan datos)',
@@ -194,32 +195,138 @@ function renderImpuestos() {
 }
 
 // ---------------- Rentabilidad ----------------
+const fmtPct = (n) => (n == null ? '' : ` · ${n.toLocaleString('es-AR', { maximumFractionDigits: 1 })}%`);
+const ORIGEN_TXT = { manual: 'carga manual', importado: 'archivo importado', pfos: 'PFOS', arca: 'facturas en ARCA' };
+const CLASE_ESTADO = { completo: 'ok', 'con estimaciones': 'pend', parcial: 'alerta' };
+
+/** Editor en línea de las cargas manuales de un concepto del mes: corregir, borrar, agregar. */
+function editorCargas(concepto, cargas, alGuardar) {
+  const fila = (c) => {
+    const imp = h('input', { type: 'text', inputmode: 'decimal', value: c ? String(c.importe).replace('.', ',') : '', 'aria-label': 'Importe', placeholder: 'Importe (ej. 1.234.567,89)' });
+    const fue = h('input', { type: 'text', value: c?.fuente ?? '', 'aria-label': 'Fuente', placeholder: 'De dónde sale (ej. eCom, planilla de administración)' });
+    const nota = h('input', { type: 'text', value: c?.nota ?? '', 'aria-label': 'Nota', placeholder: 'Nota (opcional)' });
+    const msg = h('span', { class: 'nota' });
+    const guardar = async () => {
+      try { await api('/api/manuales/guardar', { id: c?.id ?? null, mes: estado.mes, concepto, importe: imp.value, fuente: fue.value, nota: nota.value }); await alGuardar(); }
+      catch (e) { msg.textContent = e.message; msg.className = 'error'; }
+    };
+    const borrar = c ? h('button', { onclick: async () => { if (!confirm('¿Borrar esta carga?')) return; try { await api('/api/manuales/eliminar', { id: c.id }); await alGuardar(); } catch (e) { msg.textContent = e.message; } } }, 'Borrar') : null;
+    return h('div', { class: 'carga' }, imp, fue, nota, h('button', { class: 'primario', onclick: guardar }, c ? 'Guardar corrección' : 'Agregar'), borrar, msg,
+      c?.historial?.length ? h('div', { class: 'nota' }, `Valores anteriores: ${c.historial.map((x) => fmt(x.importe)).join(' · ')}`) : null);
+  };
+  return h('div', { class: 'editor' },
+    h('div', { class: 'nota' }, cargas.length ? 'Cargas de este mes (se suman entre sí; reemplazan a las otras fuentes de este concepto):' : 'Cargá el importe del mes. Reemplaza a las otras fuentes de este concepto (no se suma a ellas).'),
+    ...cargas.map(fila), fila(null));
+}
+
 function renderRentabilidad() {
-  const r = estado.panel.rentabilidad;
-  const fila = (nombre, c, signo = '') => h('tr', {}, h('td', {}, `${signo}${nombre}`), celdaCifra(c));
-  const filas = [
-    fila('Facturación neta de IVA', r.ingresos),
-    ...r.gastos.map((g) => fila(g.nombre, g, '− ')),
-    fila('Ingresos Brutos atribuible', r.iibb, '− '),
-    fila('Provisión de Ganancias', r.ganancias, '− '),
-    r.autonomos ? fila('Autónomos', r.autonomos, '− ') : null,
-  ];
-  const total = h('tr', { class: 'total' }, h('td', {}, 'Resultado económico del mes'), celdaCifra(r.resultado));
-  const ref = [r.referencia.comprasFacturadas && fila('Compras facturadas por proveedores (neto)', r.referencia.comprasFacturadas),
-    r.referencia.ventasMercadoLibre && fila('Ventas de Mercado Libre (importadas)', r.referencia.ventasMercadoLibre)].filter(Boolean);
-  const caja = estado.panel.caja;
-  poner($('#rentabilidad'), 
-    h('div', { class: 'caja' }, h('h2', {}, `Resultado económico · ${nombreMes(estado.panel.mes)}`),
-      h('table', {}, h('tbody', {}, ...filas, total)),
-      r.resultado.nota ? h('p', { class: 'nota' }, r.resultado.nota) : null,
-      h('div', { class: 'aviso' }, r.nota),
-      r.faltantes.length ? h('p', { class: 'nota' }, `Para completar: ${r.faltantes.join(' · ')}. Los costos y gastos se cargan en "Importar archivo".`) : null),
-    ref.length ? h('div', { class: 'caja' }, h('h2', {}, 'Referencias (no se suman)'), h('table', {}, h('tbody', {}, ...ref))) : null,
-    h('div', { class: 'caja' }, h('h2', {}, 'Caja fiscal: lo que este mes genera para pagar'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Impuesto'), h('th', { class: 'num' }, 'Importe'), h('th', {}, 'Vence'))),
-        h('tbody', {}, ...caja.map((c) => h('tr', {}, h('td', {}, c.impuesto), celdaCifra({ valor: c.importe, nivel: c.importe == null ? 'faltante' : c.nivel }), h('td', {}, c.vence ? fecha(c.vence) : '—'))))),
-      h('p', { class: 'nota' }, 'El IVA aparece acá (caja) y no en el resultado. Ingresos Brutos y Ganancias aparecen en los dos: son costo del mes y también un pago futuro.')),
-    h('div', { class: 'caja' }, h('h2', {}, 'Conexión con PFOS'), h('p', { class: 'nota' }, estado.panel.integraciones.pfos.nota)));
+  const p = estado.panel; const r = p.rentabilidad;
+  const recargar = () => cargarMes(estado.mes);
+  const filas = [];
+  const linea = (l, { editable = null } = {}) => {
+    const conc = editable ?? (estado.conceptos[l.clave] ? l.clave : null);
+    const cargas = conc ? p.manuales.filter((c) => c.concepto === conc) : [];
+    const id = `ed-${conc ?? l.clave}`;
+    const editor = conc ? h('tr', { class: 'fuentes', id, hidden: true }, h('td', { colspan: 4 }, editorCargas(conc, cargas, recargar))) : null;
+    const boton = conc ? h('button', { class: 'ver-fuentes', 'aria-expanded': 'false', 'aria-controls': id, onclick: (e) => {
+      const abrir = editor.hidden; editor.hidden = !abrir; e.currentTarget.setAttribute('aria-expanded', String(abrir));
+    } }, cargas.length ? `Corregir (${cargas.length})` : 'Cargar') : null;
+    const alt = (l.alternativas ?? []).filter((a) => a.valor != null);
+    filas.push(h('tr', {},
+      h('td', { 'data-rotulo': 'Concepto' }, `${l.signo < 0 ? '− ' : ''}${l.nombre}`),
+      h('td', { class: 'num', 'data-rotulo': 'Importe', title: [l.cifra.fuente, l.cifra.nota].filter(Boolean).join(' · ') || null },
+        h('span', {}, l.cifra.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(l.cifra.valor), badge(l.cifra.nivel))),
+      h('td', { 'data-rotulo': 'Fuente' }, h('span', { class: 'nota' }, l.cifra.valor == null ? (l.cifra.nota ?? '') : (l.cifra.fuente ?? ''),
+        alt.length ? h('span', { class: 'alternativa' }, ` · también: ${alt.map((a) => `${ORIGEN_TXT[a.origen] ?? a.origen} ${fmt(a.valor)}`).join(', ')} (no se suma)`) : null)),
+      h('td', { 'data-rotulo': '' }, boton)), editor);
+  };
+  const sub = (s, extra = '') => filas.push(h('tr', { class: 'total' },
+    h('td', { 'data-rotulo': '' }, `= ${s.nombre}${extra}`),
+    h('td', { class: 'num', 'data-rotulo': 'Importe' }, s.valor == null ? '—' : fmt(s.valor)),
+    h('td', { 'data-rotulo': 'Estado', colspan: 2 }, h('span', { class: `estado ${CLASE_ESTADO[s.estado] ?? ''}` }, s.estado), s.faltan.length ? h('span', { class: 'nota' }, ` falta: ${s.faltan.join(', ')}`) : null)));
+
+  const L = Object.fromEntries(r.lineas.map((l) => [l.clave, l]));
+  linea({ ...r.ventas, signo: 1 });
+  if (L['otros-ingresos'].cifra.valor != null) linea(L['otros-ingresos']);
+  linea(L['costo-mercaderia']);
+  sub(r.margen, fmtPct(r.margenPct));
+  for (const k of ['comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos']) linea(L[k]);
+  sub(r.operativo);
+  linea(r.iibb, { editable: 'iibb-declarado' });
+  linea(r.autonomos);
+  sub(r.antesGanancias);
+  linea(r.ganancias);
+  const parcial = r.neto.estado === 'parcial';
+  sub({ ...r.neto, nombre: parcial ? 'Resultado parcial (no es la rentabilidad neta)' : 'Resultado neto estimado' });
+
+  const encabezado = h('div', { class: 'resumen-rent' },
+    h('div', {}, h('div', { class: 'nota' }, 'Facturación neta'), h('div', { class: 'monto' }, fmt(r.ventas.cifra.valor))),
+    h('div', {}, h('div', { class: 'nota' }, `Margen bruto${fmtPct(r.margenPct)}`), h('div', { class: 'monto' }, r.margen.estado === 'parcial' ? '—' : fmt(r.margen.valor))),
+    h('div', {}, h('div', { class: 'nota' }, 'Resultado operativo'), h('div', { class: 'monto' }, r.operativo.estado === 'parcial' ? '—' : fmt(r.operativo.valor))),
+    h('div', {}, h('div', { class: 'nota' }, parcial ? 'Resultado neto' : 'Resultado neto estimado'), h('div', { class: 'monto' }, parcial ? '—' : fmt(r.neto.valor)),
+      h('span', { class: `estado ${CLASE_ESTADO[r.neto.estado]}` }, parcial ? 'faltan datos' : r.neto.estado)));
+
+  const bloqueResultado = h('div', { class: 'caja' }, h('h2', {}, `1. Resultado económico de ${nombreMes(p.mes)}`), encabezado,
+    h('table', { class: 'apilable tabla-resultado' }, h('thead', {}, h('tr', {}, h('th', {}, 'Concepto'), h('th', { class: 'num' }, 'Importe'), h('th', {}, 'Fuente'), h('th', {}, ''))), h('tbody', {}, ...filas)),
+    h('div', { class: 'aviso' }, r.nota),
+    r.referencia.comprasMercaderia ? h('p', { class: 'nota' }, `Compras de mercadería del mes (ARCA): ${fmt(r.referencia.comprasMercaderia.valor)} — van a stock; no son el costo de lo vendido y no se restan.`) : null,
+    r.referencia.ventasMercadoLibre ? h('p', { class: 'nota' }, `Ventas de Mercado Libre: ${fmt(r.referencia.ventasMercadoLibre.valor)} — ya están dentro de la facturación; no se suman.`) : null,
+    r.avisos.length ? h('details', { open: true }, h('summary', { class: 'nota' }, `Revisar (${r.avisos.length})`), ...r.avisos.map((a) => h('div', { class: 'aviso' }, a))) : null);
+
+  const imp = r.impuestos;
+  const bloqueImpuestos = h('div', { class: 'caja' }, h('h2', {}, `2. Impuestos que generó ${nombreMes(p.mes)}`),
+    h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Impuesto', 'Importe', 'Tratamiento', 'Vence'].map((x, i) => h('th', { class: i === 1 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...imp.filas.map((f) => h('tr', {},
+        h('td', { 'data-rotulo': 'Impuesto' }, f.impuesto),
+        h('td', { class: 'num', 'data-rotulo': 'Importe', title: [f.cifra.fuente, f.cifra.nota].filter(Boolean).join(' · ') || null }, h('span', {}, f.cifra.valor == null ? '—' : fmt(f.cifra.valor), badge(f.cifra.nivel))),
+        h('td', { 'data-rotulo': 'Tratamiento' }, h('span', { class: 'nota' }, f.tratamiento)),
+        h('td', { 'data-rotulo': 'Vence' }, f.vence ? fecha(f.vence) : '—'))))),
+    h('p', {}, h('strong', {}, 'Carga fiscal atribuible (sin IVA): '), imp.cargaAtribuible.valor == null ? '—' : fmt(imp.cargaAtribuible.valor), badge(imp.cargaAtribuible.nivel),
+      imp.cargaPct != null ? h('span', { class: 'nota' }, ` ${imp.cargaPct.toLocaleString('es-AR')}% de la facturación${imp.cargaAtribuible.nota ? ` (${imp.cargaAtribuible.nota})` : ''}`) : null));
+
+  const pg = r.pagos;
+  const formPago = (() => {
+    const conc = h('select', { 'aria-label': 'Impuesto pagado' }, ...['iibb-pagado', 'ganancias-anticipo', 'autonomos'].map((k) => h('option', { value: k }, estado.conceptos[k]?.nombre ?? k)));
+    const cont = h('div');
+    const abrir = h('button', { class: 'ver-fuentes', onclick: () => { poner(cont, h('div', { class: 'editor' }, h('label', { class: 'nota' }, 'Impuesto ', conc), editorCargas(conc.value, [], recargar))); conc.onchange = () => abrir.click(); } }, 'Cargar un pago que no está en ARCA');
+    return h('div', {}, abrir, cont);
+  })();
+  const bloquePagos = h('div', { class: 'caja' }, h('h2', {}, `3. Pagos de impuestos que salieron de caja en ${nombreMes(p.mes)}`),
+    h('p', { class: 'nota' }, 'Cualquier período: cada pago dice a qué corresponde. No es la carga del mes.'),
+    pg.filas.length ? h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Fecha', 'Impuesto', 'Corresponde a', 'Importe'].map((x, i) => h('th', { class: i === 3 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...pg.filas.map((f) => h('tr', {},
+        h('td', { 'data-rotulo': 'Fecha' }, f.fecha ? fecha(f.fecha) : '—'),
+        h('td', { 'data-rotulo': 'Impuesto' }, h('span', {}, f.impuesto, ' ', h('span', { class: `etiqueta ${f.propio ? 'propio' : ''}` }, f.propio === false ? 'como agente' : 'propio'), f.posibleDuplicado ? h('span', { class: 'etiqueta' }, '¿duplicado con ARCA?') : null)),
+        h('td', { 'data-rotulo': 'Corresponde a' }, f.corresponde),
+        h('td', { class: 'num', 'data-rotulo': 'Importe' }, h('span', {}, fmt(f.importe), badge(f.nivel))))))) : h('p', { class: 'no-disponible' }, 'Sin pagos de impuestos con fecha en este mes.'),
+    h('p', {}, h('strong', {}, 'Impuestos propios pagados: '), fmt(pg.propios), pg.comoAgente ? h('span', { class: 'nota' }, ` · retenciones depositadas como agente: ${fmt(pg.comoAgente)} (dinero de terceros)`) : null),
+    formPago);
+
+  const bloqueObligaciones = h('div', { class: 'caja' }, h('h2', {}, `4. Lo que ${nombreMes(p.mes)} deja para pagar más adelante`),
+    h('table', { class: 'apilable' }, h('tbody', {}, ...r.obligaciones.map((o) => h('tr', {},
+      h('td', { 'data-rotulo': 'Impuesto' }, o.impuesto),
+      h('td', { class: 'num', 'data-rotulo': 'Importe' }, h('span', {}, o.cifra.valor == null ? '—' : fmt(o.cifra.valor), badge(o.cifra.nivel))),
+      h('td', { 'data-rotulo': 'Vence' }, o.vence ? fecha(o.vence) : '—'),
+      h('td', { 'data-rotulo': '' }, h('span', { class: 'nota' }, o.nota ?? '')))))));
+
+  const sinClasificar = r.proveedores.filter((x) => !x.clase);
+  const bloqueProveedores = h('div', { class: 'caja' }, h('details', { open: sinClasificar.length > 0 },
+    h('summary', {}, h('strong', {}, `Proveedores de ${nombreMes(p.mes)} (facturas recibidas en ARCA)`), sinClasificar.length ? h('span', { class: 'nota' }, ` · ${sinClasificar.length} sin clasificar`) : h('span', { class: 'nota' }, ' · todos clasificados')),
+    h('p', { class: 'nota' }, 'Clasificá cada proveedor una sola vez: se recuerda para todos los meses. Así los gastos con factura salen de ARCA sin preparar planillas. La mercadería va a stock y no se resta.'),
+    r.proveedores.length ? h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Proveedor', 'Comprobantes', 'Neto', 'Clasificación'].map((x, i) => h('th', { class: i === 2 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...r.proveedores.map((x) => {
+        const sel = h('select', { 'aria-label': `Clasificación de ${x.nombre}` }, h('option', { value: '' }, x.sugerida ? `— sin clasificar (sugerido: ${estado.clases[x.sugerida]?.nombre}) —` : '— sin clasificar —'),
+          ...Object.entries(estado.clases).map(([k, c]) => h('option', { value: k }, c.nombre)));
+        sel.value = x.clase ?? '';
+        sel.addEventListener('change', async () => { try { await api('/api/proveedores/clasificar', { clave: x.clave, nombre: x.nombre, clase: sel.value }); await recargar(); } catch (e) { alert(e.message); } });
+        return h('tr', {}, h('td', { 'data-rotulo': 'Proveedor' }, x.nombre), h('td', { class: 'num', 'data-rotulo': 'Comprobantes' }, String(x.comprobantes)),
+          h('td', { class: 'num', 'data-rotulo': 'Neto' }, fmt(x.neto)), h('td', { 'data-rotulo': 'Clasificación' }, sel));
+      }))) : h('p', { class: 'no-disponible' }, 'No hay comprobantes recibidos conservados para este mes.')));
+
+  const bloqueFaltantes = r.faltantes.length ? h('div', { class: 'caja' }, h('h2', {}, 'Qué falta y de dónde sale'),
+    h('ul', { class: 'lista' }, ...r.faltantes.map((f) => h('li', {}, h('strong', {}, f.dato), `: ${f.como}`)))) : null;
+
+  poner($('#rentabilidad'), bloqueResultado, h('div', { class: 'columnas' }, bloqueImpuestos, bloquePagos), h('div', { class: 'columnas' }, bloqueObligaciones, bloqueFaltantes), bloqueProveedores);
 }
 
 // ---------------- Obligaciones ----------------

@@ -55,6 +55,7 @@ tr.total td { font-weight: 650; border-top: 2px solid var(--borde); }
 .nivel.importado { background: var(--imp-f); color: var(--imp); }
 .nivel.estimado { background: var(--est-f); color: var(--est); }
 .nivel.faltante { background: var(--fal-f); color: var(--fal); }
+.nivel.manual { background: var(--imp-f); color: var(--imp); border: 1px dashed var(--imp); }
 .nota { color: var(--suave); font-size: 12px; margin-top: 2px; }
 td.num .nota { white-space: normal; max-width: 240px; margin-left: auto; }
 .aviso { background: var(--est-f); color: var(--est); border-radius: 8px; padding: 8px 12px; margin: 6px 0; font-size: 13px; }
@@ -103,3 +104,15 @@ tr[hidden] { display: none !important; }
   table.apilable tr.fuentes > td { display: block; text-align: left; }
   tr.fuentes dl { grid-template-columns: 1fr; }
 }
+
+/* Rentabilidad */
+.resumen-rent { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; margin-bottom: 14px; }
+.resumen-rent > div { background: var(--fondo); border-radius: 10px; padding: 10px 14px; }
+.resumen-rent .monto { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tabla-resultado tr.total td { background: var(--fondo); }
+.alternativa { color: var(--est); }
+.editor { display: flex; flex-direction: column; gap: 8px; }
+.carga { display: grid; grid-template-columns: minmax(140px, 180px) minmax(200px, 2fr) minmax(140px, 1fr) auto auto; gap: 8px; align-items: center; }
+.carga .error, .carga .nota { grid-column: 1 / -1; }
+details > summary { cursor: pointer; }
+@media (max-width: 760px) { .carga { grid-template-columns: 1fr; } }
