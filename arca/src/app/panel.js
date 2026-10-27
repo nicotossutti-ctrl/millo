@@ -318,6 +318,40 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     obligaciones: obligaciones(datosDir, hoy),
     importado: Object.fromEntries(Object.entries(imp).map(([k, v]) => [k, { ...v, nombre: CONCEPTOS[k]?.nombre ?? k }])),
     configuracion: { contribuyente: !!contrib, iibbEstimable: alic > 0, iibbParaGanancias },
-    integraciones: integraciones(mes),
+    integraciones: integraciones(outDir, mes),
   };
+}
+
+/**
+ * Comparación de varios meses de facturación: facturación, costo de lo vendido, margen, gastos, impuestos atribuibles
+ * (sin IVA) y resultado, cada uno con su estado. La variación entre meses solo se calcula si los dos valores existen, y se
+ * marca cuando alguno es parcial o estimado.
+ */
+export function comparacionMeses(outDir, meses, opciones = {}) {
+  const fila = (valor, estado, nivel = null) => ({ valor: valor ?? null, estado: valor == null ? 'faltante' : estado, nivel });
+  const columnas = meses.map((mes) => {
+    const p = panelMes(outDir, mes, opciones);
+    const r = p.rentabilidad;
+    const L = Object.fromEntries(r.lineas.map((l) => [l.clave, l]));
+    const gastos = ['comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos'].map((k) => L[k]);
+    const gastosFaltan = gastos.filter((g) => g.cifra.valor == null).map((g) => g.nombre);
+    const gastosEst = gastos.some((g) => g.cifra.nivel === 'estimado');
+    const sumaGastos = gastos.reduce((n, g) => n + (g.cifra.valor ?? 0), 0);
+    const ivaCifra = p.iva.declarado.valor != null ? p.iva.declarado : p.iva.estimado;
+    return {
+      mes,
+      facturacion: fila(r.ventas.cifra.valor, 'completo', r.ventas.cifra.nivel),
+      costo: fila(L['costo-mercaderia'].cifra.valor, L['costo-mercaderia'].cifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', L['costo-mercaderia'].cifra.nivel),
+      costoFuente: L['costo-mercaderia'].origen,
+      margen: { ...fila(r.margen.estado === 'parcial' ? null : r.margen.valor, r.margen.estado), pct: r.margenPct },
+      gastos: { ...fila(gastos.some((g) => g.cifra.valor != null) ? Math.round(sumaGastos * 100) / 100 : null, gastosFaltan.length ? 'parcial' : gastosEst ? 'con estimaciones' : 'completo'), faltan: gastosFaltan },
+      impuestos: fila(r.impuestos.cargaAtribuible.valor, r.impuestos.cargaAtribuible.nota ? 'parcial' : 'con estimaciones', r.impuestos.cargaAtribuible.nivel),
+      resultado: { ...fila(r.neto.estado === 'parcial' ? null : r.neto.valor, r.neto.estado), parcial: r.neto.estado === 'parcial' ? r.neto.valor : null, faltan: r.neto.faltan },
+      iva: fila(ivaCifra.valor, ivaCifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', ivaCifra.nivel),
+      // Completo solo si alguna consulta conservada de pagos de Cuentas Tributarias cubre el mes entero.
+      pagosImpuestos: fila(r.pagos.propios, Object.values(leerVigente(path.join(outDir, 'datos'), 'ct-pagos')).some((v) => (v.desde ?? '9') <= `${mes}-01` && (v.hasta ?? '') >= finDeMes(mes)) ? 'completo' : 'parcial'),
+      pfos: p.integraciones.pfos.conectado ? (p.integraciones.pfos.verificada ? 'verificada' : 'sin verificar') : 'sin datos',
+    };
+  });
+  return { meses, columnas };
 }

@@ -13,6 +13,7 @@ import { ejecutarTodo } from './portal/orquestador.js';
 import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
 import { reprocesarDjIva } from './reprocesarDj.js';
+import { actualizarPfos } from './pfos/actualizar.js';
 import { iniciarServidor } from './app/servidor.js';
 import { spawn } from 'node:child_process';
 
@@ -51,6 +52,9 @@ Aplicación (interfaz en el navegador, local, sin abrir ARCA):
 Informes (sin abrir ARCA, con los datos conservados en out/datos):
   informe:iva --periodo AAAA-MM  IVA del mes: comprobantes, declarado (DJ), pagado, retenciones, presentación,
                                 vencimiento y deuda; conciliación solo con cifras existentes y validadas.
+  pfos:actualizar --periodo AAAA-MM[,AAAA-MM]
+                                Lee PFOS en solo lectura (solo la cuenta del contribuyente, verificada contra tus
+                                comprobantes emitidos de ARCA) y guarda la foto del mes para Rentabilidad.
   dj:iva --periodo AAAA-MM      Vuelve a interpretar la DJ de IVA del mes con la última captura ya bajada
                                 (vista + JSON de Portal IVA), sin abrir ARCA. Si queda validada, se conserva.
 
@@ -170,6 +174,21 @@ try {
     console.error(`FiscalOS está abierto en ${url}  (dejá esta ventana abierta; Ctrl+C para cerrar)`);
     if (!o['no-abrir']) abrirNavegador(url);
     await new Promise(() => {}); // el servidor mantiene vivo el proceso hasta Ctrl+C
+  }
+
+  if (cmd === 'pfos:actualizar') {
+    // Lee PFOS en SOLO LECTURA (rol fiscalos_lectura) y guarda una foto por mes en out/pfos/. No escribe en PFOS.
+    const cfg = loadConfig({ requireAuth: false });
+    const meses = String(need('periodo')).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+    if (!meses.length || meses.some((m) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(m))) throw new Error('--periodo tiene que ser AAAA-MM (uno o varios, separados por coma)');
+    const fotos = await actualizarPfos({ outDir: cfg.outDir ?? 'out', meses });
+    for (const f of fotos) {
+      console.log(`\n${f.mes} · cuenta ${f.cuenta.verificada ? 'VERIFICADA' : 'NO verificada'}: ${f.cuenta.motivo}`);
+      for (const [k, l] of Object.entries(f.lineas)) console.log(`  ${k}: ${l.importe} (${l.nivel}${l.completo ? ', completo' : `, INCOMPLETO: ${l.faltan.join('; ')}`})`);
+      if (f.costo.sinCosto.length) console.log(`  sin costo: ${f.costo.sinCosto.slice(0, 10).map((x) => `${x.sku} (${x.unidades} u.: ${x.motivo})`).join(' · ')}`);
+    }
+    console.error('\nFotos guardadas en out/pfos/. Abrí la app para verlas en Rentabilidad.');
+    process.exit(0);
   }
 
   if (cmd === 'dj:iva') {

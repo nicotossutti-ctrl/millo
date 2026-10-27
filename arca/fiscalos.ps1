@@ -8,11 +8,12 @@
 #   .\fiscalos.ps1 correr -Servicios cuentas-tributarias,ct-deudas   Prueba solo esas fuentes.
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
 #   .\fiscalos.ps1 informe-iva -Periodo 2026-09   Informe de IVA del mes con los datos ya conservados (no abre ARCA).
+#   .\fiscalos.ps1 pfos -Periodo 2026-09,2026-10   Lee PFOS (solo lectura) y guarda la rentabilidad de esos meses.
 #   .\fiscalos.ps1 app            Abre FiscalOS en el navegador (panel por mes, rentabilidad, importar archivos).
 #   .\fiscalos.ps1 acceso-directo Crea un acceso directo "FiscalOS" en el escritorio que abre la app.
 #   .\fiscalos.ps1 reprocesar-dj -Periodo 2026-09 Vuelve a leer la DJ de IVA del mes con la ultima captura ya bajada (no abre ARCA).
 param(
-  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj','app','acceso-directo')]
+  [Parameter(Position=0)][ValidateSet('actualizar','login','correr','test','abrir-informe','informe-iva','reprocesar-dj','app','acceso-directo','pfos')]
   [string]$Accion = 'correr',
   [string]$Desde,
   [string]$Hasta,
@@ -109,6 +110,12 @@ function Reprocesar-Dj {
   try { Correr-Paso "DJ de IVA $Periodo (reinterpretacion local)" 'npm.cmd' @('run','arca','--','dj:iva','--periodo',$Periodo) } finally { Pop-Location }
 }
 
+function Pfos {
+  if (-not $Periodo) { Fallar 'Indicá los meses con -Periodo AAAA-MM (por ejemplo -Periodo 2026-09,2026-10).' }
+  Push-Location $Raiz
+  try { Correr-Paso "PFOS: rentabilidad de $Periodo (solo lectura)" 'npm.cmd' @('run','arca','--','pfos:actualizar','--periodo',$Periodo) } finally { Pop-Location }
+}
+
 function App {
   Push-Location $Raiz
   try {
@@ -161,5 +168,6 @@ switch ($Accion) {
   'informe-iva' { Informe-Iva }
   'reprocesar-dj' { Reprocesar-Dj }
   'app'           { App }
+  'pfos'          { Pfos }
   'acceso-directo' { Acceso-Directo }
 }

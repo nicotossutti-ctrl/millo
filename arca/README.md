@@ -235,8 +235,12 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
 - **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
 - Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
-- PFOS: no está conectado. No expone totales mensuales; la conexión prevista es de solo lectura a su base
-  (ver `docs/rentabilidad-DISENO.md` en PFOS). El contrato del lado de FiscalOS está en `src/app/integraciones.js`.
+- **PFOS** (Mercado Libre, solo la cuenta del CUIT del contribuyente): `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`
+  lee PFOS en **solo lectura** y guarda una foto por mes en `out/pfos/`, con costo de lo vendido, cargos de ML,
+  logística, publicidad, cobertura de cada fuente y la cuenta verificada contra tus comprobantes emitidos de ARCA.
+  Acceso y seguridad: `docs/pfos-acceso.sql`; qué aporta y qué falta: `docs/pfos-conexion.md`.
+- **Comparación de meses** (arriba de Rentabilidad): facturación, costo, margen, gastos, impuestos atribuibles,
+  resultado, IVA y pagos de impuestos, con el estado de cada cifra; la variación se marca si alguna es parcial o estimada.
 
 ### Windows: un solo script, sin Git
 

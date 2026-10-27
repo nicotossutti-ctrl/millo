@@ -238,7 +238,7 @@ function renderRentabilidad() {
       h('td', { class: 'num', 'data-rotulo': 'Importe', title: [l.cifra.fuente, l.cifra.nota].filter(Boolean).join(' · ') || null },
         h('span', {}, l.cifra.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(l.cifra.valor), badge(l.cifra.nivel))),
       h('td', { 'data-rotulo': 'Fuente' }, h('span', { class: 'nota' }, l.cifra.valor == null ? (l.cifra.nota ?? '') : (l.cifra.fuente ?? ''),
-        alt.length ? h('span', { class: 'alternativa' }, ` · también: ${alt.map((a) => `${ORIGEN_TXT[a.origen] ?? a.origen} ${fmt(a.valor)}`).join(', ')} (no se suma)`) : null)),
+        alt.length ? h('span', { class: 'alternativa', title: alt.map((a) => a.nota).filter(Boolean).join(' · ') || null }, ` · también: ${alt.map((a) => `${ORIGEN_TXT[a.origen] ?? a.origen}${a.referencia ? ' (incompleto)' : ''} ${fmt(a.valor)}`).join(', ')} (no se suma)`) : null)),
       h('td', { 'data-rotulo': '' }, boton)), editor);
   };
   const sub = (s, extra = '') => filas.push(h('tr', { class: 'total' },
@@ -327,7 +327,71 @@ function renderRentabilidad() {
   const bloqueFaltantes = r.faltantes.length ? h('div', { class: 'caja' }, h('h2', {}, 'Qué falta y de dónde sale'),
     h('ul', { class: 'lista' }, ...r.faltantes.map((f) => h('li', {}, h('strong', {}, f.dato), `: ${f.como}`)))) : null;
 
-  poner($('#rentabilidad'), bloqueResultado, h('div', { class: 'columnas' }, bloqueImpuestos, bloquePagos), h('div', { class: 'columnas' }, bloqueObligaciones, bloqueFaltantes), bloqueProveedores);
+  const comparacion = h('div', { class: 'caja', id: 'comparacion' }, h('h2', {}, 'Comparación de meses'), h('div', { class: 'cargando' }, 'Cargando…'));
+  poner($('#rentabilidad'), comparacion, bloqueResultado, h('div', { class: 'columnas' }, bloqueImpuestos, bloquePagos), h('div', { class: 'columnas' }, bloqueObligaciones, bloqueFaltantes),
+    bloquePfos(p), bloqueProveedores);
+  renderComparacion(comparacion);
+}
+
+const ESTADO_TXT = { completo: 'completo', 'con estimaciones': 'con estimaciones', parcial: 'parcial', faltante: 'falta' };
+const chipEstado = (e) => h('span', { class: `estado ${CLASE_ESTADO[e] ?? ''}` }, ESTADO_TXT[e] ?? e);
+
+/** Comparación del mes elegido con el anterior disponible, con el estado de cada cifra. */
+async function renderComparacion(cont) {
+  const i = estado.meses.indexOf(estado.mes);
+  // El mes elegido contra el anterior (o, si no hay anterior, contra el siguiente).
+  const meses = (estado.meses[i + 1] ? [estado.meses[i + 1], estado.mes] : [estado.mes, estado.meses[i - 1]]).filter(Boolean).sort();
+  if (meses.length < 2) { poner(cont, h('h2', {}, 'Comparación de meses'), h('p', { class: 'no-disponible' }, 'Hace falta más de un mes con datos para comparar.')); return; }
+  try {
+    const c = await api(`/api/comparacion?meses=${encodeURIComponent(meses.join(','))}`);
+    const filas = [
+      ['Facturación neta', 'facturacion'], ['Costo de la mercadería vendida', 'costo'], ['Margen bruto', 'margen'], ['Gastos (ML, publicidad, logística, operativos)', 'gastos'],
+      ['Impuestos atribuibles (IIBB, autónomos, Ganancias)', 'impuestos'], ['Resultado neto', 'resultado'], ['IVA del mes (no es costo)', 'iva'], ['Impuestos pagados en el mes (caja)', 'pagosImpuestos'],
+    ];
+    const celda = (x, k) => {
+      const v = x[k];
+      const extra = k === 'margen' && v.pct != null ? ` (${v.pct.toLocaleString('es-AR')}%)` : '';
+      const parcial = k === 'resultado' && v.valor == null && v.parcial != null ? h('div', { class: 'nota' }, `parcial: ${fmt(v.parcial)}`) : null;
+      const nota = [k === 'costo' && x.costoFuente ? `fuente: ${ORIGEN_TXT[x.costoFuente] ?? x.costoFuente}` : null, v.faltan?.length ? `falta: ${v.faltan.join(', ')}` : null].filter(Boolean).join(' · ');
+      return h('td', { class: 'num', 'data-rotulo': nombreMes(x.mes), title: nota || null }, h('span', {}, v.valor == null ? '—' : `${fmt(v.valor)}${extra}`, ' ', chipEstado(v.estado)), parcial);
+    };
+    const variacion = (k) => {
+      const [a, b] = c.columnas.slice(-2).map((x) => x[k]);
+      if (a?.valor == null || b?.valor == null || !a.valor) return h('td', { class: 'num', 'data-rotulo': 'Variación' }, '—');
+      const pctv = ((b.valor - a.valor) / Math.abs(a.valor)) * 100;
+      const dudosa = [a, b].some((x) => x.estado !== 'completo');
+      return h('td', { class: 'num', 'data-rotulo': 'Variación', title: dudosa ? 'alguno de los dos meses es parcial o tiene estimaciones' : null },
+        `${pctv >= 0 ? '+' : ''}${pctv.toLocaleString('es-AR', { maximumFractionDigits: 1 })}%${dudosa ? ' *' : ''}`);
+    };
+    poner(cont, h('h2', {}, 'Comparación de meses'),
+      h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, h('th', {}, ''), ...c.columnas.map((x) => h('th', { class: 'num' }, nombreMes(x.mes))), h('th', { class: 'num' }, 'Variación'))),
+        h('tbody', {}, ...filas.map(([nombre, k]) => h('tr', {}, h('td', { 'data-rotulo': '' }, h('strong', {}, nombre)), ...c.columnas.map((x) => celda(x, k)), variacion(k))))),
+      h('p', { class: 'nota' }, '* La variación compara meses donde alguna cifra es parcial o estimada: tomala como orientación, no como dato. Pasá el mouse para ver la fuente y lo que falta.'),
+      h('p', { class: 'nota' }, `PFOS: ${c.columnas.map((x) => `${nombreMes(x.mes)} ${x.pfos}`).join(' · ')}`));
+  } catch (e) { poner(cont, h('h2', {}, 'Comparación de meses'), h('div', { class: 'error' }, e.message)); }
+}
+
+/** Datos de PFOS del mes: cuenta verificada, cobertura de cada fuente y lo que falta. */
+function bloquePfos(p) {
+  const x = p.integraciones.pfos;
+  if (!x.conectado) return h('div', { class: 'caja' }, h('h2', {}, 'PFOS (Mercado Libre)'), h('p', { class: 'no-disponible' }, x.nota));
+  const cob = x.cobertura;
+  const rep = (r) => (r.estado === 'completa' ? 'completo' : r.estado === 'parcial' ? `parcial (${r.rangos.map((g) => `${fecha(g.desde)}–${fecha(g.hasta)}`).join(', ')})` : 'sin reporte');
+  const filas = [
+    ['Ventas (órdenes)', `${cob.ordenes.dias} de ${cob.ordenes.diasMes} días completos en PFOS · ${x.ventas.ordenes} órdenes, ${x.ventas.unidades} unidades`],
+    ['Cobros de Mercado Pago', `${cob.cobrosDeVentas ?? '—'}% de las ventas con su cobro`],
+    ['Costo de la mercadería', `${x.costo.unidadesConCosto} de ${x.costo.unidades} unidades con costo (${x.costo.cobertura ?? '—'}%)${x.costo.unidadesListaPosterior ? ` · ${x.costo.unidadesListaPosterior} con la lista posterior a la venta` : ''}${x.costo.unidadesAutomaticas ? ` · ${x.costo.unidadesAutomaticas} con mapeo automático` : ''}`],
+    ['Publicidad (Mercado Ads)', `${cob.ads.dias} de ${cob.ads.diasMes} días`],
+    ['Flex: bonificaciones', rep(cob.reportes.flexBonif)], ['Flex: viajes de Luma', rep(cob.reportes.luma)], ['Full', rep(cob.reportes.full)],
+  ];
+  return h('div', { class: 'caja' }, h('details', { open: !x.verificada },
+    h('summary', {}, h('strong', {}, 'PFOS (Mercado Libre, solo la cuenta de tu CUIT)'), h('span', { class: 'nota' }, ` · datos del ${fecha(String(x.generado).slice(0, 10))} · `),
+      h('span', { class: `estado ${x.verificada ? 'ok' : 'alerta'}` }, x.verificada ? 'cuenta verificada' : 'cuenta NO verificada: no se usan sus datos')),
+    h('p', { class: 'nota' }, x.cuenta?.motivo ?? ''),
+    h('table', { class: 'apilable' }, h('tbody', {}, ...filas.map(([k, v]) => h('tr', {}, h('td', { 'data-rotulo': '' }, k), h('td', { 'data-rotulo': '' }, v))))),
+    x.costo.sinCosto?.length ? [h('h3', {}, 'Unidades sin costo (se resuelven confirmando el SKU en PFOS → Costos de la mercadería)'),
+      h('ul', { class: 'lista' }, ...x.costo.sinCosto.slice(0, 15).map((s) => h('li', {}, `${s.sku}: ${s.unidades} u. — ${s.motivo}`)))] : null,
+    h('p', { class: 'nota' }, `Retenciones de Mercado Pago en los cobros del mes: ${fmt(x.retencionesMp.importe)} (anticipos de impuestos, no costo).`)));
 }
 
 // ---------------- Obligaciones ----------------

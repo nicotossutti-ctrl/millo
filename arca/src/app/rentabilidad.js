@@ -27,6 +27,7 @@ import { manualesDelMes, leerClasificacion, CLASES_PROVEEDOR, sugerirClase } fro
 import { obtenerPfos } from './integraciones.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
+const pesos = (n) => `$ ${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const col = (headers, re) => headers.findIndex((h) => re.test(norm(h)));
 const finDeMes = (mes) => { const [y, m] = mes.split('-'); return new Date(Date.UTC(+y, +m, 0)).toISOString().slice(0, 10); };
@@ -121,23 +122,31 @@ export function origenesDelMes(outDir, mes) {
     o.importe = r2(o.importe + p.neto); o.proveedores.push(p.nombre);
   }
   return {
-    manual: manualesDelMes(outDir, mes), importado: importadoDelMes(outDir, mes), pfos: obtenerPfos(mes) ?? {},
+    manual: manualesDelMes(outDir, mes), importado: importadoDelMes(outDir, mes), pfos: obtenerPfos(outDir, mes) ?? {},
     arca, proveedores, recibidosFuente: recibidos?.fuente ?? null,
   };
 }
 
-/** Candidatos de un concepto en orden de prioridad: [{ origen, cifra }]. El primero es el que se usa. */
+/**
+ * Candidatos de un concepto, ordenados por prioridad: [{ origen, cifra, referencia }]. Se usa el primero que no sea solo
+ * referencia. Orden: carga manual firme > archivo importado > PFOS completo > carga manual ESTIMADA > facturas en ARCA.
+ * PFOS incompleto (cobertura insuficiente) nunca es la fuente: queda como referencia, con lo que le falta.
+ */
 export function candidatos(origenes, concepto, { valorAbsoluto = true } = {}) {
   const v = (x) => (valorAbsoluto ? Math.abs(x) : x);
   const out = [];
   const m = origenes.manual[concepto];
-  if (m) out.push({ origen: 'manual', cifra: cifra(v(m.importe), m.estimado ? 'estimado' : 'manual', `carga manual: ${[...new Set(m.cargas.map((c) => c.fuente))].join(', ')}`, m.cargas.length > 1 ? `${m.cargas.length} cargas` : m.cargas[0].nota || null), cargas: m.cargas });
+  if (m) out.push({ rango: m.estimado ? 4 : 1, origen: 'manual', cifra: cifra(v(m.importe), m.estimado ? 'estimado' : 'manual', `carga manual: ${[...new Set(m.cargas.map((c) => c.fuente))].join(', ')}`, m.cargas.length > 1 ? `${m.cargas.length} cargas` : m.cargas[0].nota || null), cargas: m.cargas });
   const i = origenes.importado[concepto];
-  if (i) out.push({ origen: 'importado', cifra: cifra(v(i.importe), 'importado', `archivo: ${i.archivos.join(', ')}`, i.incluyeIva ? 'el archivo incluye IVA' : null) });
+  if (i) out.push({ rango: 2, origen: 'importado', cifra: cifra(v(i.importe), 'importado', `archivo: ${i.archivos.join(', ')}`, i.incluyeIva ? 'el archivo incluye IVA' : null) });
   const p = origenes.pfos[concepto];
-  if (p?.importe != null) out.push({ origen: 'pfos', cifra: cifra(v(p.importe), 'importado', `PFOS${p.fuente ? ` (${p.fuente})` : ''}`, p.nota ?? null) });
+  if (p?.importe != null) {
+    out.push({ rango: p.completo ? 3 : 9, referencia: !p.completo, origen: 'pfos',
+      cifra: cifra(v(p.importe), p.nivel ?? 'importado', `PFOS (datos del ${String(p.generado ?? '').slice(0, 10)})`, [p.nota, p.completo ? null : `incompleto: ${(p.faltan ?? []).join('; ')}`].filter(Boolean).join(' · ') || null) });
+  }
   const a = origenes.arca[concepto];
-  if (a) out.push({ origen: 'arca', cifra: cifra(v(a.importe), 'verificado', `facturas recibidas en ARCA: ${a.proveedores.slice(0, 4).join(', ')}${a.proveedores.length > 4 ? '…' : ''}`, 'neto de IVA') });
+  if (a) out.push({ rango: 5, origen: 'arca', cifra: cifra(v(a.importe), 'verificado', `facturas recibidas en ARCA: ${a.proveedores.slice(0, 4).join(', ')}${a.proveedores.length > 4 ? '…' : ''}`, 'neto de IVA') });
+  out.sort((x, y) => x.rango - y.rango);
   return out;
 }
 
@@ -164,23 +173,26 @@ export function resultadoOperativo(outDir, mes) {
     cifra: em ? cifra(em.netoGravado, 'verificado', em.fuente, `${em.comprobantes} comprobantes emitidos (${em.notasCredito} notas de crédito restando)`) : faltante('faltan los comprobantes emitidos del mes (Mis Comprobantes)') };
   const lineas = LINEAS.map((l) => {
     const cands = candidatos(origenes, l.clave, { valorAbsoluto: l.signo < 0 });
-    const usada = cands[0] ?? null;
+    const usada = cands.find((c) => !c.referencia) ?? null;
     return { clave: l.clave, nombre: CONCEPTOS[l.clave].nombre, signo: l.signo, opcional: !!l.opcional, ayuda: l.ayuda ?? null,
       cifra: usada ? usada.cifra : faltante(l.opcional ? 'sin otros ingresos cargados' : `falta: ${l.ayuda}`), origen: usada?.origen ?? null,
       cargas: cands.find((c) => c.origen === 'manual')?.cargas ?? [],
-      alternativas: cands.slice(1).map((c) => ({ origen: c.origen, ...c.cifra })) };
+      alternativas: cands.filter((c) => c !== usada).map((c) => ({ origen: c.origen, referencia: !!c.referencia, ...c.cifra })) };
   });
   const L = Object.fromEntries(lineas.map((l) => [l.clave, l]));
   const avisos = [];
   // Mercado Libre factura en un mismo comprobante comisiones, publicidad y envíos: si los cargos de ML
   // salen de sus facturas en ARCA y publicidad o envíos de otra fuente, puede haber doble conteo.
-  if (L['comisiones-ml'].origen === 'arca' && ['publicidad', 'logistica'].some((k) => L[k].origen && L[k].origen !== 'arca' && (L[k].cifra.valor ?? 0) > 0)) {
+  if (['comisiones-ml', 'logistica'].some((k) => L[k].origen === 'pfos') && ['comisiones-ml', 'logistica'].some((k) => L[k].origen === 'arca')) {
+    avisos.push('Cargos de Mercado Libre y logística salen de fuentes distintas (PFOS y facturas en ARCA): las facturas de ML incluyen envíos y Full; revisá que nada se cuente dos veces.');
+  }
+  if (L['comisiones-ml'].origen === 'arca' && ['publicidad', 'logistica'].some((k) => L[k].origen && L[k].origen !== 'arca' && L[k].origen !== 'pfos' && (L[k].cifra.valor ?? 0) > 0)) {
     avisos.push('Los cargos de Mercado Libre salen de sus facturas en ARCA, que pueden incluir publicidad y envíos; publicidad o envíos vienen además de otra fuente: revisá que no estén contados dos veces.');
   }
   for (const l of lineas) {
     for (const a of l.alternativas) {
       if (l.cifra.valor != null && a.valor != null && Math.abs(a.valor - l.cifra.valor) >= 1) {
-        avisos.push(`${l.nombre}: se usa ${etiquetaOrigen(l.origen)} (${l.cifra.valor}); ${etiquetaOrigen(a.origen)} dice ${a.valor}. No se suman: revisá cuál corresponde.`);
+        avisos.push(`${l.nombre}: se usa ${etiquetaOrigen(l.origen)} (${pesos(l.cifra.valor)}); ${etiquetaOrigen(a.origen)}${a.referencia ? ' (incompleto)' : ''} dice ${pesos(a.valor)}. No se suman: revisá cuál corresponde.`);
       }
     }
   }

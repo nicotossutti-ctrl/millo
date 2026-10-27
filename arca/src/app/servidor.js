@@ -7,7 +7,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { panelMes, mesesDisponibles, mesAnterior } from './panel.js';
+import { panelMes, mesesDisponibles, mesAnterior, comparacionMeses } from './panel.js';
 import { guardarManual, eliminarManual, clasificarProveedor, CLASES_PROVEEDOR } from './manuales.js';
 import { analizarArchivo, vistaPendiente, simularImportacion, confirmarImportacion, eliminarImportacion, listarImportaciones, CONCEPTOS } from './importar.js';
 
@@ -60,6 +60,11 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         const mes = url.searchParams.get('mes') ?? mesAnterior(fecha);
         if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { error: 'mes inválido (AAAA-MM)' });
         return json(res, 200, panelMes(outDir, mes, { hoy: fecha, paramsFile }));
+      }
+      if (ruta === 'GET /api/comparacion') {
+        const meses = String(url.searchParams.get('meses') ?? '').split(',').filter(Boolean);
+        if (!meses.length || meses.length > 12 || meses.some((m) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(m))) return json(res, 400, { error: 'meses inválidos (AAAA-MM separados por coma, hasta 12)' });
+        return json(res, 200, comparacionMeses(outDir, meses, { hoy: fecha, paramsFile }));
       }
       if (ruta === 'GET /api/conceptos') return json(res, 200, CONCEPTOS);
       if (ruta === 'GET /api/clases-proveedor') return json(res, 200, CLASES_PROVEEDOR);
