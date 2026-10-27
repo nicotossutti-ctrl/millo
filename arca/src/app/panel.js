@@ -129,6 +129,23 @@ export function pagosDelMes(datosDir, mes) {
   return out.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
 }
 
+/** Pagos de Cuentas Tributarias de un impuesto IMPUTADOS al período `mes` (cualquier fecha de pago). */
+export function pagosDelPeriodo(datosDir, mes, clave) {
+  const out = []; const vistos = new Set();
+  for (const v of vigentes(datosDir, 'ct-pagos')) {
+    for (const t of v.tablas) {
+      const ii = col(t.headers, /impuesto/); const im = col(t.headers, /importe/); const fe = col(t.headers, /fecha/); const ip = col(t.headers, /periodo/);
+      for (const f of t.rows) {
+        const per = periodoFiscal(f[ip]);
+        if (clasificarImpuesto(f[ii]).clave !== clave || per?.tipo !== 'mes' || per.mes !== mes) continue;
+        const k = f.join('|'); if (vistos.has(k)) continue; vistos.add(k); // ventanas que se superponen
+        out.push({ fecha: fechaIso(f[fe]), importe: importeDe(f[im]) });
+      }
+    }
+  }
+  return out;
+}
+
 /** Volantes de pago de SIFERE (IIBB) del anticipo `mes`, si se conservaron. Verificados. */
 function volantesSifere(datosDir, mes) {
   const out = [];
@@ -175,7 +192,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const imp = importadoDelMes(outDir, mes);
   const man = manualesDelMes(outDir, mes);
   // Carga manual (corrige o completa) > archivo importado. Nunca se suman entre sí.
-  const importado = (k) => (man[k] ? cifra(man[k].importe, 'manual', `carga manual: ${[...new Set(man[k].cargas.map((c) => c.fuente))].join(', ')}`, man[k].cargas[0].nota || null)
+  const importado = (k) => (man[k] ? cifra(man[k].importe, man[k].estimado ? 'estimado' : 'manual', `carga manual: ${[...new Set(man[k].cargas.map((c) => c.fuente))].join(', ')}`, man[k].cargas[0].nota || null)
     : imp[k] ? cifra(imp[k].importe, 'importado', `importado: ${imp[k].archivos.join(', ')}`, imp[k].incluyeIva ? 'el archivo incluye IVA' : null) : null);
   const contrib = contribuyente(paramsFile);
 
@@ -281,10 +298,14 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
 
   // ---------- Autónomos ----------
   const autPagosCt = pagosMes.filter((x) => x.clasificacion.clave === 'autonomos');
+  const autPeriodo = pagosDelPeriodo(datosDir, mes, 'autonomos');
   const autImp = importado('autonomos');
   const autonomos = {
     impuesto: 'Autónomos', periodo: mes,
-    declarado: importado('autonomos-cuota') ?? (contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json', 'cuota mensual configurada') : faltante('cargá la cuota del mes')),
+    // Cuota del mes: carga manual > pagos registrados en ARCA imputados a ESTE período > params > faltante.
+    declarado: importado('autonomos-cuota')
+      ?? (autPeriodo.length ? cifra(suma(autPeriodo), 'verificado', 'Cuentas Tributarias', `${autPeriodo.length} pago(s) imputados al período`) : null)
+      ?? (contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json', 'cuota mensual configurada') : faltante('sin pagos del período en ARCA: cargá la cuota del mes')),
     pagos: autPagosCt.length ? cifra(suma(autPagosCt), 'verificado', autPagosCt[0].fuente) : autImp ?? faltante('sin pagos registrados en el mes'),
   };
 

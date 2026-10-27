@@ -1,7 +1,8 @@
 /**
  * Cargas manuales y clasificación de proveedores, desde la interfaz (sin editar JSON a mano).
  *
- * Carga manual: un importe por concepto y mes, con su fuente ("planilla de administración", "CM03
+ * Carga manual: un importe por concepto y mes, con su fuente y si es una ESTIMACIÓN (entonces se muestra
+ * como estimado, nunca como dato firme), ("planilla de administración", "CM03
  * presentado", ...) y una nota. Se puede corregir o borrar. Para un concepto y mes puede haber varias
  * cargas (p. ej. dos gastos sin factura): se suman entre sí. La carga manual es una FUENTE más del
  * concepto, con prioridad sobre las otras (ver rentabilidad.js): nunca se suma a ellas.
@@ -33,7 +34,7 @@ const archivoManuales = (outDir) => path.join(dir(outDir), 'manuales.json');
 export const listarManuales = (outDir) => leerJson(archivoManuales(outDir), []);
 
 /** Crea o corrige una carga manual. Devuelve la carga guardada. */
-export function guardarManual(outDir, { id = null, mes, concepto, importe, fuente, nota = '' }) {
+export function guardarManual(outDir, { id = null, mes, concepto, importe, fuente, nota = '', estimado = false }) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(mes))) throw new Error('mes inválido (AAAA-MM)');
   if (!CONCEPTOS[concepto]) throw new Error('concepto desconocido');
   const t = String(importe ?? '').trim().replace(/\s|\$/g, '');
@@ -52,11 +53,11 @@ export function guardarManual(outDir, { id = null, mes, concepto, importe, fuent
   if (id) {
     const i = lista.findIndex((x) => x.id === id);
     if (i < 0) throw new Error('no existe esa carga');
-    carga = { ...lista[i], mes, concepto, importe: r2(n), fuente: f.slice(0, 200), nota: String(nota ?? '').slice(0, 500), actualizado: ahora,
+    carga = { ...lista[i], mes, concepto, importe: r2(n), fuente: f.slice(0, 200), nota: String(nota ?? '').slice(0, 500), estimado: !!estimado, actualizado: ahora,
       historial: [...(lista[i].historial ?? []), { importe: lista[i].importe, fuente: lista[i].fuente, cuando: lista[i].actualizado ?? lista[i].cuando }].slice(-10) };
     lista[i] = carga;
   } else {
-    carga = { id: `${ahora.replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`, mes, concepto, importe: r2(n), fuente: f.slice(0, 200), nota: String(nota ?? '').slice(0, 500), cuando: ahora, actualizado: ahora };
+    carga = { id: `${ahora.replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`, mes, concepto, importe: r2(n), fuente: f.slice(0, 200), nota: String(nota ?? '').slice(0, 500), estimado: !!estimado, cuando: ahora, actualizado: ahora };
     lista.push(carga);
   }
   escribirAtomico(archivoManuales(outDir), JSON.stringify(lista, null, 2));
@@ -74,8 +75,8 @@ export function eliminarManual(outDir, id) {
 export function manualesDelMes(outDir, mes) {
   const out = {};
   for (const c of listarManuales(outDir).filter((x) => x.mes === mes)) {
-    const o = (out[c.concepto] ??= { importe: 0, cargas: [] });
-    o.importe = r2(o.importe + c.importe); o.cargas.push(c);
+    const o = (out[c.concepto] ??= { importe: 0, cargas: [], estimado: false });
+    o.importe = r2(o.importe + c.importe); o.cargas.push(c); o.estimado ||= !!c.estimado;
   }
   return out;
 }

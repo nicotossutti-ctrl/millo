@@ -131,7 +131,7 @@ export function candidatos(origenes, concepto, { valorAbsoluto = true } = {}) {
   const v = (x) => (valorAbsoluto ? Math.abs(x) : x);
   const out = [];
   const m = origenes.manual[concepto];
-  if (m) out.push({ origen: 'manual', cifra: cifra(v(m.importe), 'manual', `carga manual: ${[...new Set(m.cargas.map((c) => c.fuente))].join(', ')}`, m.cargas.length > 1 ? `${m.cargas.length} cargas` : m.cargas[0].nota || null), cargas: m.cargas });
+  if (m) out.push({ origen: 'manual', cifra: cifra(v(m.importe), m.estimado ? 'estimado' : 'manual', `carga manual: ${[...new Set(m.cargas.map((c) => c.fuente))].join(', ')}`, m.cargas.length > 1 ? `${m.cargas.length} cargas` : m.cargas[0].nota || null), cargas: m.cargas });
   const i = origenes.importado[concepto];
   if (i) out.push({ origen: 'importado', cifra: cifra(v(i.importe), 'importado', `archivo: ${i.archivos.join(', ')}`, i.incluyeIva ? 'el archivo incluye IVA' : null) });
   const p = origenes.pfos[concepto];
@@ -262,7 +262,7 @@ export function rentabilidadMes(outDir, mes, fiscal) {
   for (const k of ['comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos']) if (L[k].cifra.valor == null) faltantes.push({ dato: L[k].nombre, como: L[k].ayuda });
   if (op.referencia.sinClasificar) faltantes.push({ dato: 'Proveedores sin clasificar', como: `clasificalos una vez en "Proveedores del mes": ${op.referencia.sinClasificar.fuente}` });
   if (iibb.declarado.valor == null) faltantes.push({ dato: 'Ingresos Brutos declarado', como: 'cargá el impuesto determinado del CM03 del mes' });
-  if (autLinea.cifra.valor == null) faltantes.push({ dato: 'Autónomos', como: 'cargá la cuota del mes (0 si no corresponde)' });
+  if (autLinea.cifra.valor == null) faltantes.push({ dato: 'Autónomos', como: 'no hay pagos de autónomos del período en ARCA: cargá la cuota (está en ARCA, "Mis aportes" / CCMA); si la cargás aproximada, marcala como estimación' });
   if (ganLinea.cifra.valor == null) faltantes.push({ dato: 'Provisión de Ganancias', como: ganLinea.cifra.nota ?? 'requiere el resultado de todos los meses del año' });
 
   return {

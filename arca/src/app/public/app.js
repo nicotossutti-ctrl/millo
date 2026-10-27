@@ -205,13 +205,14 @@ function editorCargas(concepto, cargas, alGuardar) {
     const imp = h('input', { type: 'text', inputmode: 'decimal', value: c ? String(c.importe).replace('.', ',') : '', 'aria-label': 'Importe', placeholder: 'Importe (ej. 1.234.567,89)' });
     const fue = h('input', { type: 'text', value: c?.fuente ?? '', 'aria-label': 'Fuente', placeholder: 'De dónde sale (ej. eCom, planilla de administración)' });
     const nota = h('input', { type: 'text', value: c?.nota ?? '', 'aria-label': 'Nota', placeholder: 'Nota (opcional)' });
+    const est = h('input', { type: 'checkbox', checked: !!c?.estimado, 'aria-label': 'Es una estimación' });
     const msg = h('span', { class: 'nota' });
     const guardar = async () => {
-      try { await api('/api/manuales/guardar', { id: c?.id ?? null, mes: estado.mes, concepto, importe: imp.value, fuente: fue.value, nota: nota.value }); await alGuardar(); }
+      try { await api('/api/manuales/guardar', { id: c?.id ?? null, mes: estado.mes, concepto, importe: imp.value, fuente: fue.value, nota: nota.value, estimado: est.checked }); await alGuardar(); }
       catch (e) { msg.textContent = e.message; msg.className = 'error'; }
     };
     const borrar = c ? h('button', { onclick: async () => { if (!confirm('¿Borrar esta carga?')) return; try { await api('/api/manuales/eliminar', { id: c.id }); await alGuardar(); } catch (e) { msg.textContent = e.message; } } }, 'Borrar') : null;
-    return h('div', { class: 'carga' }, imp, fue, nota, h('button', { class: 'primario', onclick: guardar }, c ? 'Guardar corrección' : 'Agregar'), borrar, msg,
+    return h('div', { class: 'carga' }, imp, fue, nota, h('label', { class: 'nota estimacion' }, est, ' es una estimación'), h('button', { class: 'primario', onclick: guardar }, c ? 'Guardar corrección' : 'Agregar'), borrar, msg,
       c?.historial?.length ? h('div', { class: 'nota' }, `Valores anteriores: ${c.historial.map((x) => fmt(x.importe)).join(' · ')}`) : null);
   };
   return h('div', { class: 'editor' },

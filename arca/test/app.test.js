@@ -379,3 +379,34 @@ test('rentabilidad: cuota de autónomos cargada a mano; aviso de doble conteo de
   r = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') }).rentabilidad;
   assert.ok(r.avisos.some((a) => /contados dos veces/.test(a)));
 });
+
+test('carga manual marcada como estimación: se muestra como estimado y el resultado queda "con estimaciones"', async () => {
+  const { guardarManual, clasificarProveedor } = await import('../src/app/manuales.js');
+  const out = escenario();
+  for (const [clave, nombre, clase] of [['30703088534', 'MERCADOLIBRE S.R.L.', 'mercado-libre'], ['20222222223', 'ESTUDIO CONTABLE PEREZ', 'gasto'], ['30111111118', 'DISTRIBUIDORA MAYORISTA SA', 'mercaderia']]) clasificarProveedor(out, { clave, nombre, clase });
+  guardarManual(out, { mes: '2026-09', concepto: 'costo-mercaderia', importe: '40.000', fuente: 'PFOS (aprox.)', estimado: true });
+  for (const k of ['publicidad', 'logistica']) guardarManual(out, { mes: '2026-09', concepto: k, importe: 0, fuente: 'no hubo' });
+  const r = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') }).rentabilidad;
+  const cmv = r.lineas.find((l) => l.clave === 'costo-mercaderia');
+  assert.equal(cmv.cifra.nivel, 'estimado');
+  assert.equal(r.margen.estado, 'con estimaciones', 'nunca "completo" con un costo estimado');
+  assert.equal(r.operativo.estado, 'con estimaciones');
+});
+
+test('autónomos: la cuota del mes sale de los pagos de ARCA imputados al período; la carga manual manda', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = escenario(); const d = path.join(out, 'datos');
+  const dir = path.join(d, 'ct-pagos', 'vigente', '2026-09-01_2026-09-30');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.csv'), toCsv([['18/09/2026', '1571', '1', '308 - APORTES SEG.SOCIAL AUTONOMOS', '202609', '62.000,00']],
+    ['Fecha Operación', 'Formulario', 'Versión', 'Impuesto', 'Período Fiscal', 'Importe'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  const man = JSON.parse(fs.readFileSync(path.join(d, 'ct-pagos', 'vigente.json'), 'utf8'));
+  man['2026-09-01_2026-09-30'] = { cuando: 'c', nivel: 'validado', archivos: ['a.csv'], desde: '2026-09-01', hasta: '2026-09-30' };
+  fs.writeFileSync(path.join(d, 'ct-pagos', 'vigente.json'), JSON.stringify(man));
+  let p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.autonomos.declarado.valor, 62000);
+  assert.equal(p.autonomos.declarado.nivel, 'verificado');
+  guardarManual(out, { mes: '2026-09', concepto: 'autonomos-cuota', importe: '60.000', fuente: 'boleta' });
+  p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.autonomos.declarado.valor, 60000);
+});

@@ -112,7 +112,8 @@ tr[hidden] { display: none !important; }
 .tabla-resultado tr.total td { background: var(--fondo); }
 .alternativa { color: var(--est); }
 .editor { display: flex; flex-direction: column; gap: 8px; }
-.carga { display: grid; grid-template-columns: minmax(140px, 180px) minmax(200px, 2fr) minmax(140px, 1fr) auto auto; gap: 8px; align-items: center; }
+.carga { display: grid; grid-template-columns: minmax(140px, 180px) minmax(200px, 2fr) minmax(140px, 1fr) auto auto auto; gap: 8px; align-items: center; }
+.carga .estimacion { white-space: nowrap; display: flex; align-items: center; gap: 4px; }
 .carga .error, .carga .nota { grid-column: 1 / -1; }
 details > summary { cursor: pointer; }
 @media (max-width: 760px) { .carga { grid-template-columns: 1fr; } }
