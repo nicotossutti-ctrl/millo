@@ -40,6 +40,8 @@ export const CONCEPTOS = {
   'iibb-pagado': { nombre: 'Ingresos Brutos: pagos', grupo: 'impuesto', impuesto: 'iibb', tipo: 'pagado' },
   'ganancias-anticipo': { nombre: 'Ganancias: anticipos pagados', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'pagado' },
   autonomos: { nombre: 'Autónomos: pagos', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'pagado' },
+  // Anual: se guarda en diciembre del período fiscal (la DJ de 2025 va en 2025-12).
+  'ganancias-determinado': { nombre: 'Ganancias: impuesto determinado de la DJ anual', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'declarado', anual: true },
   'autonomos-cuota': { nombre: 'Autónomos: cuota del mes', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'declarado' },
 };
 

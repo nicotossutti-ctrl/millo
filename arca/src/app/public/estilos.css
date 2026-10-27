@@ -117,3 +117,8 @@ tr[hidden] { display: none !important; }
 .carga .error, .carga .nota { grid-column: 1 / -1; }
 details > summary { cursor: pointer; }
 @media (max-width: 760px) { .carga { grid-template-columns: 1fr; } }
+/* Cartel de pendientes de carga: arriba de todo, visible en cualquier pestaña. */
+.aviso-pendientes { border-left: 4px solid var(--est); background: var(--est-f); }
+.aviso-pendientes li { margin-bottom: 10px; }
+.aviso-pendientes .carga { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.aviso-pendientes input { min-width: 0; flex: 1 1 180px; max-width: 260px; }

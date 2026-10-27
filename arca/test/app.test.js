@@ -410,3 +410,36 @@ test('autónomos: la cuota del mes sale de los pagos de ARCA imputados al perío
   p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   assert.equal(p.autonomos.declarado.valor, 60000);
 });
+
+// ---------------- Pendientes de carga (cartel) ----------------
+test('pendientes: el cartel pide lo que ARCA no entrega sola y se va cuando está cargado', async () => {
+  const { pendientesDeCarga } = await import('../src/app/pendientes.js');
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = tmp(); const d = path.join(out, 'datos');
+  for (const [id, tipo] of [['comprobantes-emitidos', 'emitidos'], ['comprobantes-recibidos', 'recibidos']]) {
+    fs.mkdirSync(path.join(d, id), { recursive: true });
+    fs.writeFileSync(path.join(d, id, 'mc.csv'), '"Fecha de Emisión";"Tipo de Comprobante"\r\n"2026-09-01";"1"');
+    fs.writeFileSync(path.join(d, id, 'manifiesto.json'), JSON.stringify({ [`${tipo}:2026-09-01:2026-09-30`]: { ok: true, fecha: '2026-10-21', archivo: 'mc.csv' } }));
+  }
+  const op = { paramsFile: path.join(out, 'no.json') };
+  const claves = (hoy) => pendientesDeCarga(out, hoy, op).map((x) => x.clave);
+  assert.deepEqual(claves('2026-10-28'), ['iibb-declarado:2026-09', 'autonomos-cuota:2026-09', 'ganancias-determinado:2025']);
+  // El mes en curso no se pide; antes de julio, la DJ anual tampoco.
+  assert.ok(!claves('2026-10-28').some((c) => c.includes('2026-10')));
+  assert.ok(!claves('2026-06-15').some((c) => c.startsWith('ganancias')));
+  // CM03 cargado: ahora se pide el pago (si hay impuesto); con el pago, nada de IIBB.
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: '1.234.567,89', fuente: 'cartel de pendientes' });
+  assert.deepEqual(claves('2026-10-28'), ['iibb-pagado:2026-09', 'autonomos-cuota:2026-09', 'ganancias-determinado:2025']);
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 1234567.89, fuente: 'VEP' });
+  guardarManual(out, { mes: '2026-09', concepto: 'autonomos-cuota', importe: 95000, fuente: 'CCMA' });
+  // La DJ anual se guarda en diciembre del período y no abre ese mes en el selector.
+  guardarManual(out, { mes: '2025-12', concepto: 'ganancias-determinado', importe: 5000000, fuente: 'F.711' });
+  assert.deepEqual(claves('2026-10-28'), []);
+  assert.ok(!mesesDisponibles(out, '2026-10-28').includes('2025-12'));
+  assert.equal(panelMes(out, '2026-09', { hoy: '2026-10-28', ...op }).ganancias.djAnterior.valor, 5000000);
+  // Un mes cerrado sin Mis Comprobantes: se avisa que se trae con la actualización de ARCA (no es una descarga a mano).
+  guardarManual(out, { mes: '2026-08', concepto: 'iibb-declarado', importe: 1, fuente: 'x' });
+  const ago = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-08');
+  assert.deepEqual(ago.map((x) => x.accion.tipo), ['arca', 'arca', 'cargar', 'cargar']);
+  assert.match(ago[0].como, /fiscalos\.ps1 correr/);
+});

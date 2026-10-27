@@ -64,13 +64,13 @@ export function mesesDisponibles(outDir, hoy) {
   }
   for (const id of ['portal-iva-ddjj', 'mis-retenciones']) for (const v of Object.values(leerVigente(datosDir, id))) if (v.desde) s.add(v.desde.slice(0, 7));
   for (const m of mesesImportados(outDir)) s.add(m);
-  for (const c of listarManuales(outDir)) s.add(c.mes);
+  for (const c of listarManuales(outDir)) if (!CONCEPTOS[c.concepto]?.anual) s.add(c.mes); // lo anual (DJ de Ganancias) no abre un mes
   for (const f of leerFotos(outDir)) s.add(f.mes); // el mes en curso, con su rentabilidad provisoria
   return [...s].filter((m) => m <= hoy.slice(0, 7)).sort().reverse();
 }
 
 /** Contribuyente (params/contribuyente.json) si existe; si no, null (las estimaciones quedan faltantes). */
-function contribuyente(paramsFile) {
+export function contribuyente(paramsFile) {
   try { return JSON.parse(fs.readFileSync(paramsFile, 'utf8')); } catch { return null; }
 }
 
@@ -149,7 +149,7 @@ export function pagosDelPeriodo(datosDir, mes, clave) {
 }
 
 /** Volantes de pago de SIFERE (IIBB) del anticipo `mes`, si se conservaron. Verificados. */
-function volantesSifere(datosDir, mes) {
+export function volantesSifere(datosDir, mes) {
   const out = [];
   for (const v of vigentes(datosDir, 'sifere-consultas-volantes-pago')) {
     for (const t of v.tablas) {
@@ -289,8 +289,11 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const pagosMes = pagosDelMes(datosDir, mes);
   const ganPagosMes = pagosMes.filter((x) => x.clasificacion.clave === 'ganancias');
   const ganImp = importado('ganancias-anticipo');
+  // DJ anual del año anterior (de ella salen los anticipos de este año): la carga el contribuyente, una vez por año.
+  const djAnt = manualesDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'] ?? importadoDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'];
   const ganancias = {
     impuesto: 'Ganancias', periodo: mes, declarado: faltante('es anual: la DJ de Ganancias (F.711) no se lee todavía'), estimado: ganEstimado,
+    djAnterior: djAnt ? cifra(djAnt.importe, djAnt.cargas ? 'manual' : 'importado', `DJ ${Number(anio) - 1}`, 'impuesto determinado del año anterior: base de los anticipos de este año') : faltante(`falta la DJ ${Number(anio) - 1} (cargala desde el cartel de pendientes)`),
     pagos: faltante('impuesto anual: los pagos no se atribuyen a un mes'),
     pagosEnElMes: ganPagosMes.length || ganImp ? cifra((ganPagosMes.reduce((n, x) => n + (x.importe ?? 0), 0)) + (ganImp?.valor ?? 0), ganImp && !ganPagosMes.length ? 'importado' : 'verificado',
       'ct-pagos', ganPagosMes.map((x) => `${fechaDma(x.fecha)}: ${x.imputadoA}`).join(' · ') || null) : null,

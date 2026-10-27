@@ -69,7 +69,7 @@ async function iniciar() {
     const inicial = m.meses.includes(m.porDefecto) ? m.porDefecto : m.meses[0];
     sel.value = inicial;
     renderImportar();
-    await cargarMes(inicial);
+    await Promise.all([cargarMes(inicial), renderPendientes()]);
   } catch (e) {
     poner($('#impuestos'), h('div', { class: 'error' }, `No se pudo cargar FiscalOS: ${e.message}`));
   }
@@ -84,6 +84,36 @@ async function cargarMes(mes) {
   } catch (e) {
     poner($('#impuestos'), h('div', { class: 'error' }, `No se pudo armar el panel de ${nombreMes(mes)}: ${e.message}`));
   }
+}
+
+// ---------------- Pendientes de carga (cartel) ----------------
+/** Lo que ARCA no entrega sola: se pide con un cartel hasta que esté cargado (importe acá o archivo en «Importar»). */
+async function renderPendientes() {
+  const cont = $('#pendientes');
+  let lista;
+  try { lista = await api('/api/pendientes'); } catch (e) { poner(cont, h('div', { class: 'error' }, `No se pudieron revisar los pendientes: ${e.message}`)); return; }
+  if (!lista.length) { poner(cont); return; }
+  const item = (x) => {
+    const msg = h('span', { class: 'nota', role: 'status' });
+    let form = null;
+    if (x.accion.tipo === 'cargar') {
+      const imp = h('input', { type: 'text', inputmode: 'decimal', placeholder: 'Importe (ej. 1.234.567,89)', 'aria-label': `Importe: ${x.titulo}` });
+      const guardar = async () => {
+        try {
+          await api('/api/manuales/guardar', { mes: x.accion.mes, concepto: x.accion.concepto, importe: imp.value, fuente: 'cartel de pendientes', nota: x.titulo });
+          await renderPendientes(); if (estado.mes) await cargarMes(estado.mes);
+        } catch (e) { msg.textContent = e.message; }
+      };
+      imp.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
+      form = h('div', { class: 'carga' }, imp, h('button', { class: 'primario', onclick: guardar }, 'Guardar'),
+        h('button', { onclick: () => document.querySelector('[data-pestana=importar]').click() }, 'Importar archivo'), msg);
+    }
+    return h('li', {}, h('strong', {}, x.titulo), h('div', { class: 'nota' }, `Por qué: ${x.porque}.`), h('div', { class: 'nota' }, x.como), form);
+  };
+  poner(cont, h('div', { class: 'caja aviso-pendientes' }, h('details', { open: true },
+    h('summary', {}, h('strong', {}, `Te falta cargar ${lista.length === 1 ? '1 dato' : `${lista.length} datos`} de ARCA y SIFERE`),
+      h('span', { class: 'nota' }, ' · lo que ARCA no entrega sola; el cartel desaparece cuando está cargado')),
+    h('ul', { class: 'lista' }, ...lista.map(item)))));
 }
 
 // ---------------- Impuestos del mes ----------------
@@ -111,11 +141,12 @@ function renderImpuestos() {
       iva.presentacion.fecha ? `DJ presentada: ${iva.presentacion.fecha}` : null,
     ]),
     tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
-      iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo en Rentabilidad',
+      iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo desde el cartel de pendientes',
     ]),
     tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [
       ganancias.estimado.valor != null ? 'Provisión estimada del mes' : 'Sin provisión (faltan datos)',
       ganancias.pagosEnElMes ? `Pagado en el mes: ${fmt(ganancias.pagosEnElMes.valor)} (de otro período, ver abajo)` : null,
+      ganancias.djAnterior?.valor != null ? `${ganancias.djAnterior.fuente}: impuesto determinado ${fmt(ganancias.djAnterior.valor)}` : null,
     ]),
     tarjeta('Autónomos', autonomos.declarado, null, [autonomos.pagos.valor != null ? `Pagado en el mes: ${fmt(autonomos.pagos.valor)}` : 'Sin pagos registrados en el mes']),
   );

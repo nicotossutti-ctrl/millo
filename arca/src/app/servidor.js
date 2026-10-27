@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { panelMes, mesesDisponibles, mesAnterior, comparacionMeses } from './panel.js';
+import { pendientesDeCarga } from './pendientes.js';
 import { guardarManual, eliminarManual, clasificarProveedor, CLASES_PROVEEDOR } from './manuales.js';
 import { analizarArchivo, vistaPendiente, simularImportacion, confirmarImportacion, eliminarImportacion, listarImportaciones, CONCEPTOS } from './importar.js';
 
@@ -66,6 +67,7 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         if (!meses.length || meses.length > 12 || meses.some((m) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(m))) return json(res, 400, { error: 'meses inválidos (AAAA-MM separados por coma, hasta 12)' });
         return json(res, 200, comparacionMeses(outDir, meses, { hoy: fecha, paramsFile }));
       }
+      if (ruta === 'GET /api/pendientes') return json(res, 200, pendientesDeCarga(outDir, fecha, { paramsFile }));
       if (ruta === 'GET /api/conceptos') return json(res, 200, CONCEPTOS);
       if (ruta === 'GET /api/clases-proveedor') return json(res, 200, CLASES_PROVEEDOR);
       if (ruta === 'GET /api/importaciones') return json(res, 200, listarImportaciones(outDir).map(({ id, archivo, cuando, concepto, filas, duplicadas, descartadas, porMes, incluyeIva }) => ({ id, archivo, cuando, concepto, conceptoNombre: CONCEPTOS[concepto]?.nombre ?? concepto, filas, duplicadas, descartadas, porMes, incluyeIva })));

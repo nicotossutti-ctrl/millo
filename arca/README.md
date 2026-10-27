@@ -233,6 +233,9 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
+- **Pendientes de carga** (cartel arriba de todo): lo que ARCA no entrega sola, por mes cerrado (CM03 de SIFERE y su pago,
+  cuota de autónomos sin pagos en ARCA) y una vez por año (impuesto determinado de la DJ de Ganancias). Se carga el
+  importe ahí mismo o el archivo en «Importar»; el pedido desaparece cuando está cargado.
 - **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
 - Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
 - **PFOS** (Mercado Libre, solo la cuenta del CUIT del contribuyente): `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`
