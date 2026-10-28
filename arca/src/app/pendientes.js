@@ -9,13 +9,14 @@
  *  - Ingresos Brutos: el pago, si hay impuesto declarado y no se encontró un pago que lo cubra. «No encontrado» es falta de
  *    evidencia, no prueba de que esté impago; un pago parcial no silencia el pedido.
  *  - Autónomos: la cuota del mes, si ARCA no tiene pagos imputados al período y no está configurada.
+ *  - F.931 (empleador) y F.744 / SICORE (agente), si su DJ figura presentada: el total declarado y, después, el pago.
  * Una vez por año (desde julio): el impuesto determinado de la DJ anual de Ganancias del año anterior.
  */
 import path from 'node:path';
 import { leerManifiesto } from '../portal/misComprobantes.js';
 import { manualesDelMes } from './manuales.js';
 import { importadoDelMes, CONCEPTOS } from './importar.js';
-import { mesAnterior, pagosDelPeriodo, volantesSifere, contribuyente, estadoPago, cifra } from './panel.js';
+import { mesAnterior, pagosDelPeriodo, contribuyente, estadoPago, cifra, pagosIibbDelPeriodo, obligacionesDeTerceros, TERCEROS } from './panel.js';
 import { cm03Sifere, djAnualGanancias } from './presentaciones.js';
 
 export const MESES_REVISADOS = 6;
@@ -67,9 +68,9 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
         como: `En SIFERE Web (Convenio Multilateral), ${cual}: el total de impuesto determinado de todas las jurisdicciones. Cargá ese número acá, o el archivo en «Importar archivo».`,
         accion: { tipo: 'cargar', concepto: 'iibb-declarado', mes } });
     } else if (iibb.importe > 0) {
-      const volantes = volantesSifere(datosDir, mes);
-      const manual = cargado(outDir, mes, 'iibb-pagado');
-      const pagos = [...(volantes.length ? [cifra(volantes.reduce((x, v) => x + (v.importe ?? 0), 0), 'verificado')] : []), ...(manual ? [cifra(manual.importe, 'manual')] : [])];
+      // Lo que descuenta la obligación del período: volantes PAGADOS y pagos cargados para el período, sin duplicados.
+      const ip = pagosIibbDelPeriodo(outDir, datosDir, mes);
+      const pagos = ip.computados.map((x) => cifra(x.importe, x.nivel));
       const estado = estadoPago(iibb.importe, pagos);
       if (estado === 'pago no encontrado (sin cobertura)' || estado === 'pago parcial: falta conciliar') {
         const pagado = pagos.reduce((x, c) => x + c.valor, 0);
@@ -77,7 +78,23 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
           porque: estado === 'pago parcial: falta conciliar'
             ? `hay pagos por ${pesos(pagado)} de ${pesos(iibb.importe)} declarados: falta conciliar ${pesos(iibb.importe - pagado)}`
             : 'no encontramos el pago en SIFERE ni en tus cargas. Eso no prueba que esté impago: si lo pagaste, cargá el importe; si todavía no, queda pendiente',
-          como: 'El importe pagado del VEP o del volante de SIFERE de ese período.', accion: { tipo: 'cargar', concepto: 'iibb-pagado', mes } });
+          como: `El importe pagado del VEP o del volante de SIFERE de ese período, con la fecha en que se pagó.${ip.volantesSinPago.length ? ` Hay ${ip.volantesSinPago.length} volante(s) generado(s) en SIFERE sin estado de pago: un volante no es un pago.` : ''}${ip.inciertos.length ? ' Hay un pago cargado sin fecha que no se suma hasta tener su fecha.' : ''}`,
+          accion: { tipo: 'cargar', concepto: 'iibb-pagado', mes, conFecha: true } });
+      }
+    }
+    // Como empleador (F.931) y agente (F.744 / SICORE): solo si la DJ del período figura presentada (hay obligación).
+    for (const o of obligacionesDeTerceros(outDir, datosDir, mes, hoy)) {
+      const t = TERCEROS[o.id];
+      if (!o.presentacion) continue;
+      if (o.declarado.valor == null) {
+        out.push({ clave: `${t.declarado}:${mes}`, mes, titulo: `${o.nombre} de ${n}: total declarado · presentada el ${String(o.presentacion.fecha).slice(0, 10)}`,
+          porque: `la DJ figura presentada en Cuentas Tributarias, pero la lista no trae el importe (${t.tratamiento})`,
+          como: `En ${t.dondeDeclarado}. Cargá ese número acá.`, accion: { tipo: 'cargar', concepto: t.declarado, mes } });
+      } else if (o.declarado.valor > 0 && ['pago no encontrado (sin cobertura)', 'pago parcial: falta conciliar'].includes(o.estado)) {
+        out.push({ clave: `${t.pagado}:${mes}`, mes, titulo: `${o.nombre} de ${n}: pago`, estadoPago: o.estado,
+          porque: o.estado === 'pago parcial: falta conciliar' ? 'los pagos encontrados no cubren lo declarado: falta conciliar'
+            : 'no encontramos el pago imputado al período en Cuentas Tributarias. Eso no prueba que esté impago: si lo pagaste, cargá el importe y la fecha',
+          como: 'El importe pagado del VEP de ese período, con la fecha en que se pagó.', accion: { tipo: 'cargar', concepto: t.pagado, mes, conFecha: true } });
       }
     }
     if (!cargado(outDir, mes, 'autonomos-cuota') && !pagosDelPeriodo(datosDir, mes, 'autonomos').length && !contrib?.autonomosMensual) {

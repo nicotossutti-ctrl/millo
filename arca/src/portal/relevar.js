@@ -3,7 +3,7 @@
  * menús y roles, en el documento principal, en cada frame y dentro de shadow DOM.
  * Solo lectura. Nunca guarda el valor de un input. Los textos se sanean con sanitizarTexto.
  */
-import { sanitizarTexto, sanitizarUrl } from './diagnostico.js';
+import { sanitizarTexto, sanitizarUrl, sanitizarReferencia } from './diagnostico.js';
 
 /** Se ejecuta dentro del navegador. Recorre el DOM incluyendo shadow roots. */
 function relevarEnDocumento() {
@@ -84,7 +84,7 @@ function relevarEnDocumento() {
       const filasMuestra = (esComp ? [...e.querySelectorAll('[role=row]')] : [...e.querySelectorAll('tr')]).slice(0, 6);
       const control = (c) => ({ tag: c.tagName.toLowerCase(), texto: (c.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40) || null,
         title: c.getAttribute('title'), alt: c.getAttribute('alt'), ariaLabel: c.getAttribute('aria-label'), onclick: c.hasAttribute('onclick') || undefined,
-        src: c.tagName === 'IMG' ? (c.getAttribute('src') || '').split('/').pop().slice(0, 40) : undefined });
+        src: c.tagName === 'IMG' ? (c.getAttribute('src') || '').split(/[?#]/)[0].split('/').pop().slice(0, 40) : undefined });
       const muestra = filasMuestra.map((r) => [...r.querySelectorAll(esComp ? '[role=gridcell], [role=cell], [role=columnheader], .e-rowcell' : ':scope > td, :scope > th')].slice(0, 20).map((c) => ({
         texto: txt(c) || null,
         controles: [...c.querySelectorAll('a, img, button, input[type=image], input[type=button], input[type=submit], [onclick]')].slice(0, 6).map(control),
@@ -110,7 +110,8 @@ function sanear(obj) {
   if (Array.isArray(obj)) return obj.map(sanear);
   if (typeof obj === 'object') {
     const o = {};
-    for (const [k, v] of Object.entries(obj)) o[k] = k === 'muestra' ? sanearMuestra(v) : (k === 'href' || k === 'src' || k === 'url' || k === 'action') && typeof v === 'string' && /^https?:/i.test(v) ? sanitizarUrl(v) : sanear(v);
+    // Toda referencia, absoluta o relativa, pierde query, fragmento y protocolos con datos (javascript:, data:…).
+    for (const [k, v] of Object.entries(obj)) o[k] = k === 'muestra' ? sanearMuestra(v) : (k === 'href' || k === 'src' || k === 'url' || k === 'action') && typeof v === 'string' ? sanitizarReferencia(v) : sanear(v);
     return o;
   }
   return obj;

@@ -232,11 +232,12 @@ test('cargas manuales: CM03 con corrección e historial, fuente obligatoria; lo 
   guardarManual(out, { id: iibb.id, mes: '2026-09', concepto: 'iibb-declarado', importe: '2.500,00', fuente: 'CM03 presentado (rectificado)' });
   assert.equal(listarManuales(out).find((c) => c.id === iibb.id).historial[0].importe, 2400, 'la corrección guarda el valor anterior');
   assert.throws(() => guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '5', fuente: '' }), /fuente/);
+  assert.throws(() => guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '5', fuente: 'VEP' }), /fecha en que se pagó/, 'un pago nuevo necesita su fecha');
   let p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   assert.equal(p.iibb.declarado.valor, 2500); assert.equal(p.iibb.declarado.nivel, 'manual');
   assert.equal(p.iibb.estado, 'pago no encontrado (sin cobertura)', 'sin pago registrado: falta evidencia, no «impago»');
   assert.equal(p.deja.find((o) => o.impuesto === 'Ingresos Brutos').cifra.valor, 2500);
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '1.000', fuente: 'VEP' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '1.000', fuente: 'VEP', fechaPago: '2026-10-20' });
   p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   assert.equal(p.iibb.estado, 'pago parcial: falta conciliar');
   // Lo comercial lo calcula PFOS: no se crean cargas nuevas. Una carga vieja se conserva y se puede borrar.
@@ -278,7 +279,7 @@ test('Ganancias: proyección con el resultado comercial de PFOS de cada mes; sin
 test('pagos de caja del mes: propios separados de los depositados como agente; cargas manuales marcadas', async () => {
   const { guardarManual } = await import('../src/app/manuales.js');
   const out = escenario();
-  guardarManual(out, { mes: '2026-10', concepto: 'iibb-pagado', importe: '2.500', fuente: 'VEP CM03 septiembre' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '2.500', fuente: 'VEP CM03 septiembre', fechaPago: '2026-10-15' });
   const p = panelMes(out, '2026-10', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   const pg = p.pagos;
   assert.ok(pg.filas.some((f) => f.impuesto === 'Ganancias' && f.corresponde === 'período fiscal 2025 (anual)' && f.importe === 7000));
@@ -421,10 +422,10 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
   let pago = pendientesDeCarga(out, '2026-10-28', op).find((x) => x.clave === 'iibb-pagado:2026-09');
   assert.equal(pago.estadoPago, 'pago no encontrado (sin cobertura)');
   assert.match(pago.porque, /no prueba que esté impago/);
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 1000000, fuente: 'VEP' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 1000000, fuente: 'VEP', fechaPago: '2026-10-15' });
   pago = pendientesDeCarga(out, '2026-10-28', op).find((x) => x.clave === 'iibb-pagado:2026-09');
   assert.equal(pago.estadoPago, 'pago parcial: falta conciliar');
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 234567.89, fuente: 'VEP 2' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 234567.89, fuente: 'VEP 2', fechaPago: '2026-10-22' });
   guardarManual(out, { mes: '2026-09', concepto: 'autonomos-cuota', importe: 95000, fuente: 'CCMA' });
   assert.deepEqual(de('2026-09'), []);
   // La DJ anual se guarda en diciembre del período y no abre ese mes en el selector.
@@ -479,4 +480,160 @@ test('DJ presentadas: Cuentas Tributarias (todas las nacionales del período, F.
   assert.match(pend.find((x) => x.clave === 'iibb-declarado:2026-09').titulo, /presentada el 14\/10\/2026/);
   assert.match(pend.find((x) => x.clave === 'iibb-declarado:2026-05').como, /rectificativa 1 presentada el 24\/06\/2026/);
   assert.match(pend.find((x) => x.clave === 'ganancias-determinado:2025').titulo, /F\.711 presentada el 23\/06\/2026/);
+});
+
+// ---------------- Conciliación de pagos (revisión de 337b136) ----------------
+function conPagosCt(out, ventanas) {
+  const d = path.join(out, 'datos'); const man = {};
+  for (const [clave, filas] of Object.entries(ventanas)) {
+    const dir = path.join(d, 'ct-pagos', 'vigente', clave); fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'p.csv'), toCsv(filas, ['Fecha Operación', 'Formulario', 'Versión', 'Impuesto', 'Período Fiscal', 'Importe'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+    const [desde, hasta] = clave.split('_');
+    man[clave] = { cuando: 'c', nivel: 'validado', archivos: ['p.csv'], desde, hasta };
+  }
+  fs.writeFileSync(path.join(d, 'ct-pagos', 'vigente.json'), JSON.stringify(man));
+}
+
+test('pagos: el CM03 de septiembre pagado el 20/10 baja la obligación de septiembre y sale de la caja de octubre, nunca de la de septiembre', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = escenario(); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 2500, fuente: 'VEP', fechaPago: '2026-10-20' });
+  // Anticipo de Ganancias del período fiscal 2026 pagado en octubre: caja de octubre.
+  guardarManual(out, { mes: '2026-08', concepto: 'ganancias-anticipo', importe: 4000, fuente: 'VEP anticipo 1', fechaPago: '2026-10-05' });
+  const sep = panelMes(out, '2026-09', op); const oct = panelMes(out, '2026-10', op);
+  assert.equal(sep.iibb.estado, 'pago cargado a mano', 'cuenta contra la obligación de septiembre');
+  assert.ok(!sep.pagos.filas.some((f) => f.clave === 'iibb'), 'no sale de la caja de septiembre');
+  const iibbOct = oct.pagos.filas.find((f) => f.clave === 'iibb');
+  assert.deepEqual([iibbOct.fecha, iibbOct.importe, iibbOct.corresponde], ['2026-10-20', 2500, 'período 09/2026']);
+  assert.ok(oct.pagos.filas.some((f) => f.clave === 'ganancias' && f.importe === 4000 && f.fecha === '2026-10-05'));
+  assert.equal(oct.ganancias.pagosEnElMes.valor, 7000 + 4000, 'el de Cuentas Tributarias (17/10) y el anticipo cargado');
+  // Una carga vieja sin fecha de pago: cuenta contra su período, no entra en ninguna caja, y se avisa.
+  const f = path.join(out, 'importados', 'manuales.json'); const lista = JSON.parse(fs.readFileSync(f, 'utf8'));
+  lista.push({ id: 'vieja', mes: '2026-07', concepto: 'iibb-pagado', importe: 100, fuente: 'VEP', cuando: 'x', actualizado: 'x' });
+  fs.writeFileSync(f, JSON.stringify(lista));
+  assert.match(panelMes(out, '2026-07', op).pagos.sinFecha.nota, /sin fecha de pago/);
+  assert.ok(!panelMes(out, '2026-07', op).pagos.filas.some((x) => x.id === 'vieja'));
+});
+
+test('pagos: el mismo pago en ARCA y a mano (o en dos ventanas de Cuentas Tributarias) se suma una sola vez; dos pagos distintos, los dos', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = escenario(); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
+  // Dos ventanas de consulta que se superponen con la misma fila de autónomos, y un pago de Ganancias.
+  const fila = ['18/10/2026', '1571', '1', '308 - APORTES SEG.SOCIAL AUTONOMOS', '202609', '62.000,00'];
+  conPagosCt(out, { '2026-10-01_2026-10-20': [fila], '2026-10-15_2026-10-26': [fila, ['17/10/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '7.000,00']] });
+  let p = panelMes(out, '2026-10', op);
+  assert.equal(p.pagos.filas.filter((x) => x.clave === 'autonomos').length, 1, 'ventanas superpuestas: una vez');
+  // El mismo pago cargado a mano (mismo importe, fecha cercana): duplicado, no se suma.
+  guardarManual(out, { mes: '2026-09', concepto: 'autonomos', importe: '62.000', fuente: 'boleta', fechaPago: '2026-10-19' });
+  p = panelMes(out, '2026-10', op);
+  const dup = p.pagos.filas.find((x) => x.estadoConciliacion === 'duplicado');
+  assert.ok(dup); assert.match(dup.nota, /no se suma/);
+  assert.equal(p.pagos.propios, 62000 + 7000);
+  assert.equal(p.autonomos.pagos.valor, 62000);
+  // Un pago distinto (otro importe, con fecha): se suma.
+  guardarManual(out, { mes: '2026-10', concepto: 'autonomos', importe: '5.000', fuente: 'boleta otra', fechaPago: '2026-10-25' });
+  p = panelMes(out, '2026-10', op);
+  assert.equal(p.pagos.propios, 62000 + 7000 + 5000);
+});
+
+test('pagos de IIBB: un volante de SIFERE solo cuenta si está pagado; el mismo pago a mano y en SIFERE no se suma dos veces', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const { volantesSifere } = await import('../src/app/panel.js');
+  const out = escenario(); const d = path.join(out, 'datos'); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
+  const dir = path.join(d, 'sifere-consultas-volantes-pago', 'vigente', 'acumulado'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'v.csv'), toCsv([['', '202609 - 0', '14/10/2026', '2.500,00', 'VEP', 'Generado'], ['', '202608 - 0', '14/09/2026', '3.000,00', 'VEP', 'Pagado']],
+    ['Acciones', 'Anticipo', 'Fecha Generación', 'Monto Total', 'Medio de Pago', 'Estado'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  fs.writeFileSync(path.join(d, 'sifere-consultas-volantes-pago', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['v.csv'] } }));
+  assert.deepEqual(volantesSifere(d, '2026-09').map((v) => v.pagado), [false]);
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-08', concepto: 'iibb-declarado', importe: 3000, fuente: 'CM03' });
+  let sep = panelMes(out, '2026-09', op);
+  assert.equal(sep.iibb.estado, 'pago no encontrado (sin cobertura)', 'volante generado: no es un pago');
+  assert.match(sep.iibb.volantesSinPago[0].nota, /pago sin verificar/);
+  const ago = panelMes(out, '2026-08', op);
+  assert.equal(ago.iibb.estado, 'pagado verificado');
+  // El pago de agosto también cargado a mano: duplicado del volante pagado, no se suma.
+  guardarManual(out, { mes: '2026-08', concepto: 'iibb-pagado', importe: 3000, fuente: 'VEP', fechaPago: '2026-09-15' });
+  const ago2 = panelMes(out, '2026-08', op);
+  assert.equal(ago2.iibb.estado, 'pagado verificado');
+  assert.equal(ago2.iibb.pagos.valor, 3000);
+  assert.equal(ago2.iibb.pagosNoSumados.length, 1);
+});
+
+test('conciliación con PFOS: lo facturado es el importe total de los comprobantes (con no gravado y notas de crédito)', async () => {
+  const { integraciones } = await import('../src/app/integraciones.js');
+  const out = tmp(); const d = path.join(out, 'datos');
+  fs.mkdirSync(path.join(d, 'comprobantes-emitidos'), { recursive: true });
+  // Factura con parte no gravada y una nota de crédito.
+  const cab = ['Fecha de Emisión', 'Tipo de Comprobante', 'Punto de Venta', 'Número Desde', 'Imp. Neto Gravado Total', 'Imp. Neto No Gravado', 'IVA 21%', 'Total IVA', 'Imp. Total', 'Nro. Doc. Emisor', 'Denominación Emisor'];
+  const filas = [['2026-09-01', '6', '1', '1', '1000,00', '500,00', '210,00', '210,00', '1710,00', '', ''], ['2026-09-02', '8', '1', '2', '100,00', '0,00', '21,00', '21,00', '121,00', '', '']];
+  fs.writeFileSync(path.join(d, 'comprobantes-emitidos', 'mc.csv'), [cab, ...filas].map((f) => f.map((x) => `"${x}"`).join(';')).join('\r\n'));
+  fs.writeFileSync(path.join(d, 'comprobantes-emitidos', 'manifiesto.json'), JSON.stringify({ 'emitidos:2026-09-01:2026-09-30': { ok: true, fecha: '2026-10-02', archivo: 'mc.csv' } }));
+  fs.mkdirSync(path.join(out, 'pfos'), { recursive: true });
+  fs.writeFileSync(path.join(out, 'pfos', '2026-09.json'), JSON.stringify({ mes: '2026-09', cuentaPfos: '1', corte: '2026-09-30', mesCerrado: true,
+    cuenta: { verificada: true, estado: 'verificada', motivo: 'ok' }, ventas: { ordenes: 1, totalConIva: 1500 }, retencionesMp: { importe: 0 } }));
+  const c = integraciones(out, '2026-09').pfos.control;
+  assert.equal(c.facturado, 1710 - 121, 'importe total, con la nota de crédito restando');
+  assert.equal(c.diferencia, 1710 - 121 - 1500);
+});
+
+test('Ganancias: la proyección usa el CM03 real y la cuota real de autónomos cuando existen; si no, lo marca como hipótesis', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = tmp(); const d = path.join(out, 'datos');
+  fs.mkdirSync(path.join(d, 'comprobantes-emitidos'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'comprobantes-emitidos', 'mc.csv'), csvMc([['2026-01-10', '1', '1', '1', '1000000,00', '210000,00', '210000,00', '1210000,00', '', ''], ['2026-02-10', '1', '1', '2', '1000000,00', '210000,00', '210000,00', '1210000,00', '', '']]));
+  fs.writeFileSync(path.join(d, 'comprobantes-emitidos', 'manifiesto.json'), JSON.stringify({ 'emitidos:2026-01-01:2026-02-28': { ok: true, fecha: '2026-03-02', archivo: 'mc.csv' } }));
+  const params = path.join(out, 'contribuyente.json');
+  fs.writeFileSync(params, JSON.stringify({ deduccionEspecial: 'ap1', cargasFamilia: { conyuge: 0, hijos: 0 }, ingresosBrutos: [{ jurisdiccion: 'X', coeficiente: 1, alicuota: 0.03 }], autonomosMensual: 50000 }));
+  for (const m of ['2026-01', '2026-02']) guardarManual(out, { mes: m, concepto: 'resultado-comercial', importe: 8000000, fuente: 'PFOS' });
+  const nota = () => panelMes(out, '2026-02', { hoy: '2026-03-05', paramsFile: params }).ganancias.estimado.nota;
+  assert.match(nota(), /IIBB por alícuota \(hipótesis\) en 2026-01, 2026-02; autónomos de params \(hipótesis\) en 2026-01, 2026-02/);
+  const antes = panelMes(out, '2026-02', { hoy: '2026-03-05', paramsFile: params }).ganancias.estimado.valor;
+  for (const m of ['2026-01', '2026-02']) {
+    guardarManual(out, { mes: m, concepto: 'iibb-declarado', importe: 10000, fuente: 'CM03' });
+    guardarManual(out, { mes: m, concepto: 'autonomos-cuota', importe: 90000, fuente: 'CCMA' });
+  }
+  assert.match(nota(), /IIBB real \(CM03\) en todos los meses; autónomos reales en todos los meses/);
+  const despues = panelMes(out, '2026-02', { hoy: '2026-03-05', paramsFile: params }).ganancias.estimado.valor;
+  assert.notEqual(despues, antes, 'con 10.000 de IIBB real en vez de 30.000 por alícuota y 90.000 de autónomos en vez de 50.000');
+  // Los pagos no se restan otra vez: un pago de IIBB cargado no cambia la proyección.
+  guardarManual(out, { mes: '2026-02', concepto: 'iibb-pagado', importe: 10000, fuente: 'VEP', fechaPago: '2026-03-15' });
+  assert.equal(panelMes(out, '2026-02', { hoy: '2026-03-05', paramsFile: params }).ganancias.estimado.valor, despues);
+});
+
+test('F.931 y SICORE: aparte de los impuestos propios; DJ presentada no es pagada; el cartel pide el importe y después el pago', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const { clasificarImpuesto } = await import('../src/app/panel.js');
+  const { pendientesDeCarga } = await import('../src/app/pendientes.js');
+  assert.equal(clasificarImpuesto('301 - EMPLEADOR-APORTES SEG. SOCIAL').clave, 'empleador');
+  assert.equal(clasificarImpuesto('351 - CONTRIBUCIONES SEG. SOCIAL').clave, 'empleador');
+  assert.equal(clasificarImpuesto('308 - APORTES SEG.SOCIAL AUTONOMOS').clave, 'autonomos', 'los aportes de autónomos son propios');
+  assert.equal(clasificarImpuesto('217 - SICORE-IMPTO.A LAS GANANCIAS').clave, 'agente');
+  const out = escenario(); const d = path.join(out, 'datos'); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
+  const dir = path.join(d, 'ct-ddjj', 'vigente', 'acumulado'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'dj.csv'), toCsv([['05/10/2026 10:26', '0', '931', '4700', '301 - EMPLEADOR-APORTES SEG. SOCIAL', '20260900', 'Comprobante general', 'VALIDO'],
+    ['09/10/2026 10:35', '0', '744', '900', '220 - PRESENTAC. DJ RET. Y/O PERCEP', '20260900', 'Contribuyente No Inscripto en el Impuesto', 'VALIDO']],
+  ['Fecha Operación', 'Est.', 'Formulario', 'Versión', 'Impuesto', 'Periodo', 'Descripción', 'Observaciones'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  fs.writeFileSync(path.join(d, 'ct-ddjj', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['dj.csv'] } }));
+  conPagosCt(out, { '2026-10-01_2026-10-26': [['09/10/2026', '1571', '1', '301 - EMPLEADOR-APORTES SEG. SOCIAL', '202609', '80.000,00'], ['17/10/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '7.000,00']] });
+  let p = panelMes(out, '2026-09', op);
+  const f931 = p.terceros.find((o) => o.id === 'f931'); const sicore = p.terceros.find((o) => o.id === 'sicore');
+  assert.equal(f931.presentacion.fecha, '05/10/2026 10:26');
+  assert.equal(f931.estado, 'presentada, importe sin cargar', 'presentada no es pagada');
+  assert.equal(f931.pagos.valor, 80000);
+  assert.equal(sicore.estado, 'presentada, importe sin cargar');
+  // En la caja de octubre: el F.931 va como empleador, no como impuesto propio.
+  const oct = panelMes(out, '2026-10', op);
+  assert.equal(oct.pagos.propios, 7000); assert.equal(oct.pagos.comoEmpleador, 80000);
+  let claves = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-09').map((x) => x.clave);
+  assert.ok(claves.includes('f931-declarado:2026-09') && claves.includes('sicore-declarado:2026-09'));
+  assert.ok(!pendientesDeCarga(out, '2026-10-28', op).some((x) => x.clave === 'f931-declarado:2026-08'), 'sin DJ presentada, no se pide');
+  guardarManual(out, { mes: '2026-09', concepto: 'f931-declarado', importe: 80000, fuente: 'acuse F.931' });
+  guardarManual(out, { mes: '2026-09', concepto: 'sicore-declarado', importe: 12000, fuente: 'acuse F.744' });
+  p = panelMes(out, '2026-09', op);
+  assert.equal(p.terceros.find((o) => o.id === 'f931').estado, 'pagado verificado');
+  assert.equal(p.terceros.find((o) => o.id === 'sicore').estado, 'pago no encontrado (sin cobertura)');
+  claves = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-09').map((x) => x.clave);
+  assert.ok(claves.includes('sicore-pagado:2026-09') && !claves.includes('f931-pagado:2026-09'));
 });

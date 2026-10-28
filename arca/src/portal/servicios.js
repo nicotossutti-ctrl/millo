@@ -64,6 +64,12 @@ export const SERVICIOS = [
   // el portal de ARCA ya muestra el acceso "Convenio Multilateral – SIFERE WEB - DDJJ". Se entra por
   // ese acceso, como cualquier servicio: la sesión de ARCA pasa sola (sin segunda clave) y abre en
   // pestaña propia. Si igual pidiera login, abrirServicio espera a que la persona lo complete.
+  // 2026-10-28 (revisión de la PR #2): la Comisión Arbitral separa «SIFERE WEB – DDJJ» (confeccionar y presentar) de
+  // «SIFERE WEB – Consultas» (DJ presentadas, pagos y retenciones), y el portal muestra los dos accesos. Esta entrada
+  // es SOLO de relevamiento: entra por Consultas, espera el ingreso a COMARB como la otra y releva la pantalla (con la
+  // muestra de filas y acciones) SIN hacer clic en nada. Con esa evidencia se escribe el lector de la CM03 presentada.
+  { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
+    fuente: '5-consultas', confirmado: false, extractor: 'sifere', grillas: [], soloRelevamiento: true },
   { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE WEB - DDJJ', 'CONVENIO MULTILATERAL – SIFERE WEB - DDJJ'], fuente: 5, confirmado: false, extractor: 'sifere',
     grillas: [
       { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },

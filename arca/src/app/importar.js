@@ -45,6 +45,11 @@ export const CONCEPTOS = {
   // Anual: se guarda en diciembre del período fiscal (la DJ de 2025 va en 2025-12).
   'ganancias-determinado': { nombre: 'Ganancias: impuesto determinado de la DJ anual', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'declarado', anual: true },
   'autonomos-cuota': { nombre: 'Autónomos: cuota del mes', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'declarado' },
+  // Como empleador y como agente (no son impuestos propios): importe declarado del período y sus pagos.
+  'f931-declarado': { nombre: 'F.931 (empleador): total declarado del período', grupo: 'terceros', impuesto: 'empleador', tipo: 'declarado' },
+  'f931-pagado': { nombre: 'F.931 (empleador): pagos', grupo: 'terceros', impuesto: 'empleador', tipo: 'pagado' },
+  'sicore-declarado': { nombre: 'SICORE (agente): total declarado del período (F.744)', grupo: 'terceros', impuesto: 'agente', tipo: 'declarado' },
+  'sicore-pagado': { nombre: 'SICORE (agente): pagos', grupo: 'terceros', impuesto: 'agente', tipo: 'pagado' },
 };
 
 const MESES = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };

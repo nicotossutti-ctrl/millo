@@ -70,3 +70,36 @@ test('relevamiento: muestra enmascarada de las primeras filas y de las acciones 
     assert.ok(resumenRelevamiento(rel).some((l) => /fila: .*\[img: Ver DDJJ\]/.test(l)));
   } finally { await b.close(); }
 });
+
+test('referencias saneadas: absolutas y relativas sin query ni fragmento; javascript:, data: y onclick no se conservan', async () => {
+  const { sanitizarReferencia } = await import('../src/portal/diagnostico.js');
+  assert.equal(sanitizarReferencia('https://sifereweb.comarb.gob.ar/x/Lista.do?token=SECRETO&cuit=20123456783#a'), 'https://sifereweb.comarb.gob.ar/x/Lista.do');
+  assert.equal(sanitizarReferencia('/consulta?token=SECRETO&cuit=20123456783'), '/consulta');
+  assert.equal(sanitizarReferencia('detalle.aspx?id=555000111#top'), 'detalle.aspx');
+  assert.equal(sanitizarReferencia('#/declaraciones?sesion=abc'), '#');
+  assert.equal(sanitizarReferencia('//cdn.afip.gob.ar/a.js?v=1'), '//cdn.afip.gob.ar/a.js');
+  assert.equal(sanitizarReferencia('javascript:generarVEP(window.document.formu,555000111);'), 'javascript:[omitido]');
+  assert.equal(sanitizarReferencia('data:image/png;base64,AAAA'), 'data:[omitido]');
+  assert.equal(sanitizarReferencia('mailto:alguien@ejemplo.com'), 'mailto:[omitido]');
+  assert.equal(sanitizarTexto('ver https://x.gob.ar/a?token=SECRETO y listo'), 'ver https://x.gob.ar/a y listo');
+  const html = sanitizarHtml(`<a href="/p?token=SECRETO">x</a><a href='javascript:generarVEP(f,555000111)' onclick="generarVEP(f,555000111)">v</a><form action="enviar.do?sesion=1"></form><img src="i.png?k=2">`);
+  assert.doesNotMatch(html, /SECRETO|555000111|sesion=|k=2/);
+  assert.match(html, /href="\/p"/); assert.match(html, /action="enviar\.do"/); assert.match(html, /href="javascript:\[omitido\]"/);
+});
+
+test('relevamiento: ninguna URL del diagnóstico conserva query, fragmento ni javascript (navegador real, si hay)', async (t) => {
+  const { relevarPagina, resumenRelevamiento } = await import('../src/portal/relevar.js');
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  let b;
+  try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
+  try {
+    const pg = await b.newPage();
+    await pg.setContent(`<a href="/consulta?token=SECRETO&cuit=20123456783">Consulta</a><a href="#/x?sesion=SECRETO">Ancla</a>
+      <a href="javascript:generarVEP(f,555000111)">VEP</a><form action="/enviar?token=SECRETO"><input type="text" value="SECRETO"></form>
+      <iframe src="/frame?token=SECRETO"></iframe><table><tr><td><a href="detalle.do?id=555000111" title="Ver"><img src="lupa.gif?token=SECRETO" alt="Ver"></a></td></tr></table>`);
+    const rel = await relevarPagina(pg);
+    const todo = JSON.stringify(rel) + resumenRelevamiento(rel).join('\n');
+    assert.doesNotMatch(todo, /SECRETO|555000111|20123456783|sesion=|token=/);
+  } finally { await b.close(); }
+});

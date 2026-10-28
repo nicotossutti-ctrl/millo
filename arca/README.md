@@ -226,6 +226,13 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
+- **Pagos**: cada pago cargado a mano lleva el *período* al que corresponde y su *fecha de pago*: el período descuenta
+  esa obligación y la fecha lo ubica en la caja del mes en que salió (el CM03 de septiembre pagado en octubre sale de la
+  caja de octubre). Un pago cargado que coincide con uno de ARCA o de SIFERE no se suma dos veces; uno sin fecha que puede
+  ser el mismo queda sin sumar hasta aclararlo. Un volante de SIFERE generado no es un pago.
+- **Como empleador y agente de retención** (aparte de los impuestos propios): F.931 (seguridad social) y F.744 / SICORE
+  (retenciones y percepciones practicadas a terceros), con su DJ presentada, importe declarado, pagos del período, estado
+  y vencimiento. Presentar la DJ no es pagarla.
 - **DJ presentadas**: el estado de presentación sale de lo ya bajado: las DJ de Cuentas Tributarias (todas las
   nacionales del período: IVA, retenciones como agente, cargas sociales, y la DJ anual de Ganancias) y la lista de CM03
   de SIFERE (con su rectificativa). Esas listas no traen el impuesto determinado de IIBB ni de Ganancias: se pide en el

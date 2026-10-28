@@ -406,7 +406,7 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   return {
     estado,
     archivos, filas, intentos,
-    motivo: filas > 0 ? undefined
+    motivo: filas > 0 ? undefined : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
       : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
     validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
       motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
@@ -559,7 +559,7 @@ export function generarCobertura(resultados, { cuit, cuando } = {}) {
  */
 /** Fuentes de la matriz histórica: cada servicio, y los listados de SIFERE como fuentes propias. */
 export function fuentesDe(servicios) {
-  return servicios.flatMap((s) => (s.extractor === 'sifere' && s.grillas?.length
+  return servicios.filter((s) => !s.soloRelevamiento).flatMap((s) => (s.extractor === 'sifere' && s.grillas?.length
     ? s.grillas.map((g) => ({ id: `${s.id}-${g.id}`, nombre: `SIFERE · ${g.id}` }))
     : [{ id: s.id, nombre: s.nombre }]));
 }

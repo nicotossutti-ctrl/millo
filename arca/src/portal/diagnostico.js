@@ -21,6 +21,9 @@ const MASCARA_IMPORTE = /\$?\s?\d{1,3}(\.\d{3})+(,\d{2})?/g;
 
 export function sanitizarHtml(html) {
   return html
+    // Manejadores en línea (onclick="generarVEP(…, número)") y referencias con query, fragmento o javascript:.
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*')/gi, '')
+    .replace(/\b(href|src|action)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (_, at, a, b) => `${at}="${sanitizarReferencia(a ?? b)}"`)
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script></script>')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/(<input\b[^>]*\s)value="[^"]*"/gi, '$1value="[omitido]"')
@@ -30,11 +33,28 @@ export function sanitizarHtml(html) {
 }
 
 export function sanitizarTexto(t) {
-  return t == null ? t : String(t).replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]');
+  return t == null ? t : String(t).replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi, '$1').replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]');
 }
 
 export function sanitizarUrl(u) {
   try { const x = new URL(u); return `${x.origin}${x.pathname}`; } catch { return '[url]'; }
+}
+
+/**
+ * Cualquier referencia (href, src, action, url) sin nada que pueda identificar una sesión o un dato: absolutas y
+ * protocolo-relativas quedan en origen + ruta; relativas y fragmentos pierden query y fragmento (?token=…, #…);
+ * javascript:, data:, blob:, mailto: y tel: no se conservan (pueden llevar números de VEP, CUIT o datos).
+ */
+export function sanitizarReferencia(v) {
+  if (v == null) return v;
+  const s = String(v).trim();
+  if (!s) return s;
+  if (/^https?:/i.test(s)) return sanitizarUrl(s);
+  if (s.startsWith('//')) { const r = sanitizarUrl(`https:${s}`); return r === '[url]' ? r : r.replace(/^https:/, ''); }
+  const esquema = s.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (esquema) return `${esquema[1].toLowerCase()}:[omitido]`;
+  const base = s.split(/[?#]/)[0];
+  return sanitizarTexto(base || (s.startsWith('#') ? '#' : ''));
 }
 
 function escribirProtegido(file, contenido) {

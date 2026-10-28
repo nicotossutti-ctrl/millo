@@ -39,8 +39,11 @@ export function estimar(anio, meses, contribuyente, { proyeccionAnual = null } =
   const base = meses.map((m) => {
     // resultadoBruto: el resultado comercial del mes ya calculado (PFOS); si no viene, ventas − gastos.
     const resultadoBruto = m.resultadoBruto ?? m.ventasNetas - m.gastosNetos;
-    const iibbMes = r2(m.ventasNetas * iibb);
-    return { ...m, resultadoBruto: r2(resultadoBruto), iibb: iibbMes, autonomos, antesGanancias: r2(resultadoBruto - iibbMes - autonomos) };
+    // IIBB y autónomos reales del mes (CM03 cargado o verificado, cuota real) mandan sobre la alícuota y la cuota de params.
+    const iibbMes = r2(m.iibbReal ?? m.ventasNetas * iibb);
+    const autMes = m.autonomosReal ?? autonomos;
+    return { ...m, resultadoBruto: r2(resultadoBruto), iibb: iibbMes, autonomos: autMes, iibbEsReal: m.iibbReal != null, autonomosEsReal: m.autonomosReal != null,
+      antesGanancias: r2(resultadoBruto - iibbMes - autMes) };
   });
 
   // Para Ganancias, IIBB y autónomos son gasto deducible: se proyecta sobre el resultado neto de ellos.

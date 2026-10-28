@@ -30,10 +30,11 @@ export function integraciones(outDir, mes) {
     generado: foto.generado, corte: foto.corte ?? null, mesCerrado: foto.mesCerrado ?? true, cuenta: foto.cuenta };
   if (!t.usable) return { pfos: base }; // cuenta sin verificar: sus datos no se muestran
   const em = comprobantesMes(path.join(outDir, 'datos'), 'comprobantes-emitidos', 'emitidos', mes);
-  const facturado = em ? r2(em.netoGravado + em.iva) : null;
+  // «Imp. Total» de los comprobantes (con las notas de crédito restando): incluye no gravado, exento y otros tributos.
+  const facturado = em ? (em.total != null ? r2(em.total) : r2(em.netoGravado + em.iva)) : null;
   const ventas = foto.ventas?.totalConIva ?? null;
   return { pfos: { ...base, cobertura: foto.cobertura,
     control: { ventasMl: ventas, ordenes: foto.ventas?.ordenes ?? null, facturado, diferencia: ventas != null && facturado != null ? r2(facturado - ventas) : null,
-      nota: 'facturado (neto gravado + IVA de los comprobantes emitidos) − ventas de Mercado Libre con IVA. La diferencia puede venir de ventas fuera de Mercado Libre, envíos facturados, notas de crédito o fechas de emisión: es para revisar, no un error' },
+      nota: 'facturado (importe total de los comprobantes emitidos del mes, con las notas de crédito restando; fecha de emisión) − ventas de Mercado Libre con IVA (fecha de venta). La diferencia puede venir de ventas fuera de Mercado Libre, envíos facturados, notas de crédito o ventas facturadas en otro mes: es para revisar, no un error' },
     retencionesMp: foto.retencionesMp ?? null } };
 }

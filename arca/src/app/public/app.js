@@ -98,14 +98,15 @@ async function renderPendientes() {
     let form = null;
     if (x.accion.tipo === 'cargar') {
       const imp = h('input', { type: 'text', inputmode: 'decimal', placeholder: 'Importe (ej. 1.234.567,89)', 'aria-label': `Importe: ${x.titulo}` });
+      const fp = x.accion.conFecha ? h('input', { type: 'date', 'aria-label': `Fecha de pago: ${x.titulo}`, title: 'Fecha en que se pagó' }) : null;
       const guardar = async () => {
         try {
-          await api('/api/manuales/guardar', { mes: x.accion.mes, concepto: x.accion.concepto, importe: imp.value, fuente: 'cartel de pendientes', nota: x.titulo });
+          await api('/api/manuales/guardar', { mes: x.accion.mes, concepto: x.accion.concepto, importe: imp.value, fuente: 'cartel de pendientes', nota: x.titulo, fechaPago: fp?.value || null });
           await renderPendientes(); if (estado.mes) await cargarMes(estado.mes);
         } catch (e) { msg.textContent = e.message; }
       };
       imp.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
-      form = h('div', { class: 'carga' }, imp, h('button', { class: 'primario', onclick: guardar }, 'Guardar'),
+      form = h('div', { class: 'carga' }, imp, fp ? h('label', { class: 'nota' }, 'pagado el ', fp) : null, h('button', { class: 'primario', onclick: guardar }, 'Guardar'),
         h('button', { onclick: () => document.querySelector('[data-pestana=importar]').click() }, 'Importar archivo'), msg);
     }
     return h('li', {}, h('strong', {}, x.titulo), x.estadoPago ? h('span', { class: 'estado pend' }, x.estadoPago) : null,
@@ -146,6 +147,7 @@ function renderImpuestos() {
     ]),
     tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
       iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo desde el cartel de pendientes',
+      iibb.volantesSinPago?.length ? `${iibb.volantesSinPago.length} volante(s) de SIFERE generado(s) sin estado de pago: no se descuentan` : null,
       iibb.presentacion?.fecha ? `CM03 presentada: ${fecha(iibb.presentacion.fecha)} (${iibb.presentacion.nota.replace(/^CM03 /, '').replace(/ presentada.*/, '')}, SIFERE)` : null,
     ]),
     tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [
@@ -221,23 +223,36 @@ function renderImpuestos() {
     djs.length ? h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Presentada', 'Formulario', 'Impuesto', 'Versión'].map((x) => h('th', {}, x)))),
       h('tbody', {}, ...djs.map((d) => h('tr', {}, h('td', { 'data-rotulo': 'Presentada' }, d.fecha ?? '—'), h('td', { 'data-rotulo': 'Formulario' }, `F.${d.formulario}`),
         h('td', { 'data-rotulo': 'Impuesto' }, d.impuesto), h('td', { 'data-rotulo': 'Versión' }, d.version ?? '—'))))) : h('p', { class: 'no-disponible' }, 'No hay DJ de este período en lo bajado de Cuentas Tributarias.'));
-  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloquePfos(p));
+  const bloqueTerceros = h('div', { class: 'caja' }, h('h2', {}, 'Como empleador y como agente de retención'),
+    h('p', { class: 'nota' }, 'No son impuestos propios sobre tu actividad: F.931 son las cargas sociales del personal; SICORE, lo que retuviste o percibiste a terceros. Presentar la DJ no es pagarla.'),
+    h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Obligación', 'DJ presentada', 'Declarado', 'Pagos del período', 'Estado', 'Vence'].map((x, i) => h('th', { class: i === 2 || i === 3 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...(p.terceros ?? []).map((o) => h('tr', { title: o.tratamiento },
+        h('td', { 'data-rotulo': 'Obligación' }, o.nombre),
+        h('td', { 'data-rotulo': 'DJ presentada' }, o.presentacion ? h('span', {}, o.presentacion.fecha ?? '—', badge('verificado')) : h('span', { class: 'sin-dato' }, '—')),
+        celdaCifra(o.declarado), celdaCifra(o.pagos),
+        h('td', { 'data-rotulo': 'Estado' }, h('span', { class: `estado ${claseEstado(o.estado)}` }, o.estado)),
+        h('td', { 'data-rotulo': 'Vence' }, o.vencimiento?.fecha ? fecha(o.vencimiento.fecha) : '—'))))));
+  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloqueTerceros, bloquePfos(p));
 }
 
 // ---------------- Cargas a mano (pagos que no están en ARCA) ----------------
 /** Editor en línea de las cargas manuales de un concepto del mes: corregir, borrar, agregar. */
-function editorCargas(concepto, cargas, alGuardar) {
+function editorCargas(concepto, cargas, alGuardar, { pago = false, periodoPorDefecto = null } = {}) {
   const fila = (c) => {
     const imp = h('input', { type: 'text', inputmode: 'decimal', value: c ? String(c.importe).replace('.', ',') : '', 'aria-label': 'Importe', placeholder: 'Importe (ej. 1.234.567,89)' });
+    // Un pago: el PERÍODO al que corresponde y la FECHA en que se pagó, por separado.
+    const per = pago ? h('input', { type: 'month', value: c?.mes ?? periodoPorDefecto ?? '', 'aria-label': 'Período al que corresponde' }) : null;
+    const fp = pago ? h('input', { type: 'date', value: c?.fechaPago ?? '', 'aria-label': 'Fecha de pago' }) : null;
     const fue = h('input', { type: 'text', value: c?.fuente ?? '', 'aria-label': 'Fuente', placeholder: 'De dónde sale (ej. VEP, volante de SIFERE)' });
     const nota = h('input', { type: 'text', value: c?.nota ?? '', 'aria-label': 'Nota', placeholder: 'Nota (opcional)' });
     const msg = h('span', { class: 'nota' });
     const guardar = async () => {
-      try { await api('/api/manuales/guardar', { id: c?.id ?? null, mes: estado.mes, concepto, importe: imp.value, fuente: fue.value, nota: nota.value }); await alGuardar(); }
+      try { await api('/api/manuales/guardar', { id: c?.id ?? null, mes: per?.value || c?.mes || estado.mes, concepto, importe: imp.value, fuente: fue.value, nota: nota.value, fechaPago: fp?.value || null }); await alGuardar(); }
       catch (e) { msg.textContent = e.message; msg.className = 'error'; }
     };
     const borrar = c ? h('button', { onclick: async () => { if (!confirm('¿Borrar esta carga?')) return; try { await api('/api/manuales/eliminar', { id: c.id }); await alGuardar(); } catch (e) { msg.textContent = e.message; } } }, 'Borrar') : null;
-    return h('div', { class: 'carga' }, imp, fue, nota, h('button', { class: 'primario', onclick: guardar }, c ? 'Guardar corrección' : 'Agregar'), borrar, msg,
+    return h('div', { class: 'carga' }, imp, per ? h('label', { class: 'nota' }, 'período ', per) : null, fp ? h('label', { class: 'nota' }, 'pagado el ', fp) : null,
+      fue, nota, h('button', { class: 'primario', onclick: guardar }, c ? 'Guardar corrección' : 'Agregar'), borrar, msg,
       c?.historial?.length ? h('div', { class: 'nota' }, `Valores anteriores: ${c.historial.map((x) => fmt(x.importe)).join(' · ')}`) : null);
   };
   return h('div', { class: 'editor' }, ...cargas.map(fila), fila(null));
@@ -247,10 +262,13 @@ function editorCargas(concepto, cargas, alGuardar) {
 function bloquePagos(p) {
   const pg = p.pagos;
   const recargar = async () => { await cargarMes(estado.mes); await renderPendientes(); };
-  const conc = h('select', { 'aria-label': 'Impuesto pagado' }, ...['iibb-pagado', 'ganancias-anticipo', 'autonomos'].map((k) => h('option', { value: k }, estado.conceptos[k]?.nombre ?? k)));
+  const conc = h('select', { 'aria-label': 'Impuesto pagado' }, ...['iibb-pagado', 'ganancias-anticipo', 'autonomos', 'f931-pagado', 'sicore-pagado'].map((k) => h('option', { value: k }, estado.conceptos[k]?.nombre ?? k)));
   const cont = h('div');
   const abrir = h('button', { class: 'ver-fuentes', onclick: () => {
-    poner(cont, h('div', { class: 'editor' }, h('label', { class: 'nota' }, 'Impuesto ', conc), editorCargas(conc.value, p.manuales.filter((c) => c.concepto === conc.value), recargar)));
+    const [y, m] = p.mes.split('-').map(Number); const anterior = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    poner(cont, h('div', { class: 'editor' }, h('label', { class: 'nota' }, 'Impuesto ', conc),
+      h('p', { class: 'nota' }, 'El período es al que corresponde el pago; la fecha, cuándo salió el dinero. Si ARCA ya lo registra, no lo cargues: se detecta como duplicado y no se suma.'),
+      editorCargas(conc.value, [], recargar, { pago: true, periodoPorDefecto: anterior })));
     conc.onchange = () => abrir.click();
   } }, 'Cargar un pago que no está en ARCA');
   return h('div', { class: 'caja' }, h('h2', {}, `Pagos de impuestos realizados en ${nombreMes(p.mes)}`),
@@ -258,10 +276,14 @@ function bloquePagos(p) {
     pg.filas.length ? h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Fecha', 'Impuesto', 'Corresponde a', 'Importe'].map((x, i) => h('th', { class: i === 3 ? 'num' : '' }, x)))),
       h('tbody', {}, ...pg.filas.map((f) => h('tr', { title: f.detalle ?? null },
         h('td', { 'data-rotulo': 'Fecha' }, f.fecha ? fecha(f.fecha) : '—'),
-        h('td', { 'data-rotulo': 'Impuesto' }, h('span', {}, f.impuesto, ' ', h('span', { class: `etiqueta ${f.propio ? 'propio' : ''}` }, f.propio === false ? 'como agente' : 'propio'), f.posibleDuplicado ? h('span', { class: 'etiqueta' }, '¿duplicado con ARCA?') : null)),
+        h('td', { 'data-rotulo': 'Impuesto' }, h('span', {}, f.impuesto, ' ', h('span', { class: `etiqueta ${f.propio === true ? 'propio' : ''}` }, f.propio === false ? 'como agente' : f.propio === 'empleador' ? 'como empleador' : 'propio'),
+          f.estadoConciliacion === 'duplicado' ? h('span', { class: 'etiqueta', title: f.nota }, 'duplicado: no se suma') : f.estadoConciliacion === 'incierto' ? h('span', { class: 'etiqueta', title: f.nota }, 'sin fecha: no se suma') : null)),
         h('td', { 'data-rotulo': 'Corresponde a' }, f.corresponde),
         h('td', { class: 'num', 'data-rotulo': 'Importe' }, h('span', {}, fmt(f.importe), badge(f.nivel))))))) : h('p', { class: 'no-disponible' }, 'No hay pagos con fecha en este mes en las consultas conservadas de Cuentas Tributarias ni cargados a mano.'),
-    h('p', {}, h('strong', {}, 'Impuestos propios pagados: '), fmt(pg.propios), pg.comoAgente ? h('span', { class: 'nota' }, ` · retenciones depositadas como agente: ${fmt(pg.comoAgente)} (dinero de terceros)`) : null),
+    h('p', {}, h('strong', {}, 'Impuestos propios pagados: '), fmt(pg.propios), pg.comoAgente ? h('span', { class: 'nota' }, ` · retenciones depositadas como agente: ${fmt(pg.comoAgente)} (dinero de terceros)`) : null,
+      pg.comoEmpleador ? h('span', { class: 'nota' }, ` · seguridad social como empleador: ${fmt(pg.comoEmpleador)}`) : null),
+    pg.noSumados ? h('div', { class: 'aviso' }, `${pg.noSumados} pago(s) cargado(s) a mano no se suman: coinciden con uno verificado o no tienen fecha (pasá el mouse para ver por qué).`) : null,
+    pg.sinFecha ? h('div', { class: 'aviso' }, pg.sinFecha.nota) : null,
     h('div', {}, abrir, cont));
 }
 
@@ -285,7 +307,7 @@ function bloquePfos(p) {
   const c = x.control; const r = x.retencionesMp;
   const filas = x.usable ? [
     ['Ventas de Mercado Libre con IVA', c?.ventasMl == null ? '—' : `${fmt(c.ventasMl)} · ${c.ordenes} órdenes${corte}`],
-    ['Facturado en el mes (comprobantes emitidos, neto + IVA)', c?.facturado == null ? 'faltan los comprobantes emitidos del mes' : fmt(c.facturado)],
+    ['Facturado en el mes (importe total de los comprobantes emitidos)', c?.facturado == null ? 'faltan los comprobantes emitidos del mes' : fmt(c.facturado)],
     ['Diferencia (facturado − ventas de ML)', c?.diferencia == null ? '—' : fmt(c.diferencia)],
     ['Retenciones de Mercado Pago en los cobros', r?.importe == null ? '—' : `${fmt(r.importe)}${r.cobertura != null ? ` · ${r.cobertura}% de las ventas con su cobro` : ''}`],
   ] : [];
