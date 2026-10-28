@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.2",
+    "pdfjs-dist": "4.10.38",
     "pg": "8.16.3",
     "playwright": "^1.64.1"
   },

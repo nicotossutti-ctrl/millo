@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { panelMes, mesesDisponibles, mesAnterior } from './panel.js';
 import { pendientesDeCarga } from './pendientes.js';
 import { guardarManual, eliminarManual } from './manuales.js';
+import { importarCm03, listarCm03, eliminarCm03 } from './cm03.js';
 import { analizarArchivo, vistaPendiente, simularImportacion, confirmarImportacion, eliminarImportacion, listarImportaciones, CONCEPTOS } from './importar.js';
 
 const PUBLICO = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -64,6 +65,7 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
       }
       if (ruta === 'GET /api/pendientes') return json(res, 200, pendientesDeCarga(outDir, fecha, { paramsFile }));
       if (ruta === 'GET /api/conceptos') return json(res, 200, CONCEPTOS);
+      if (ruta === 'GET /api/cm03') return json(res, 200, listarCm03(outDir).map(({ id, archivo, cuando, periodo, rectificativa, estado, motivos, impuestoDeterminadoTotal, totalAPagarDeclarado }) => ({ id, archivo, cuando, periodo, rectificativa, estado, motivos, impuestoDeterminadoTotal, totalAPagarDeclarado })));
       if (ruta === 'GET /api/importaciones') return json(res, 200, listarImportaciones(outDir).map(({ id, archivo, cuando, concepto, filas, duplicadas, descartadas, porMes, incluyeIva }) => ({ id, archivo, cuando, concepto, conceptoNombre: CONCEPTOS[concepto]?.nombre ?? concepto, filas, duplicadas, descartadas, porMes, incluyeIva })));
       if (req.method === 'POST') {
         const cuerpo = await leerCuerpo(req);
@@ -73,6 +75,8 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         if (ruta === 'POST /api/importar/confirmar') return json(res, 200, confirmarImportacion(outDir, cuerpo));
         if (ruta === 'POST /api/manuales/guardar') return json(res, 200, guardarManual(outDir, cuerpo));
         if (ruta === 'POST /api/manuales/eliminar') return json(res, 200, eliminarManual(outDir, String(cuerpo.id ?? '')));
+        if (ruta === 'POST /api/cm03/importar') return json(res, 200, await importarCm03(outDir, { nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null }));
+        if (ruta === 'POST /api/cm03/eliminar') return json(res, 200, eliminarCm03(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/importaciones/eliminar') return json(res, 200, eliminarImportacion(outDir, String(cuerpo.id ?? '')));
       }
       return json(res, 404, { error: 'no existe' });

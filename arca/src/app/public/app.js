@@ -86,6 +86,20 @@ async function cargarMes(mes) {
   }
 }
 
+/** Sube el PDF de una CM03 (el «Reporte» de SIFERE). `mes`: el período que se espera (null: el que diga el PDF). */
+async function subirCm03(file, mes, msg) {
+  msg.textContent = `Leyendo ${file.name}…`;
+  try {
+    const b64 = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => mal(r.error); r.readAsDataURL(file); });
+    const c = await api('/api/cm03/importar', { nombre: file.name, contenido: b64, mes });
+    msg.textContent = c.estado === 'valida'
+      ? `${c.yaImportado ? 'Ya estaba importada. ' : ''}CM03 ${c.periodo.slice(5)}/${c.periodo.slice(0, 4)} ${c.rectificativa ? `rectificativa ${c.rectificativa}` : 'original'}: impuesto determinado ${fmt(c.impuestoDeterminadoTotal)}, total a pagar ${fmt(c.totalAPagarDeclarado)} (${c.jurisdicciones.length} jurisdicciones). Presentarla no es pagarla.`
+      : `El PDF quedó en revisión y no se usa: ${c.motivos.join('; ')}`;
+    await renderPendientes(); if (estado.mes) await cargarMes(estado.mes);
+    if ($('#cm03-lista')) await listarCm03();
+  } catch (e) { msg.textContent = e.message; }
+}
+
 // ---------------- Pendientes de carga (cartel) ----------------
 /** Lo que ARCA no entrega sola: se pide con un cartel hasta que esté cargado (importe acá o archivo en «Importar»). */
 async function renderPendientes() {
@@ -95,19 +109,26 @@ async function renderPendientes() {
   if (!lista.length) { poner(cont); return; }
   const item = (x) => {
     const msg = h('span', { class: 'nota', role: 'status' });
-    let form = null;
-    if (x.accion.tipo === 'cargar') {
+    const formCarga = (accion, conImportar) => {
       const imp = h('input', { type: 'text', inputmode: 'decimal', placeholder: 'Importe (ej. 1.234.567,89)', 'aria-label': `Importe: ${x.titulo}` });
-      const fp = x.accion.conFecha ? h('input', { type: 'date', 'aria-label': `Fecha de pago: ${x.titulo}`, title: 'Fecha en que se pagó' }) : null;
+      const fp = accion.conFecha ? h('input', { type: 'date', 'aria-label': `Fecha de pago: ${x.titulo}`, title: 'Fecha en que se pagó' }) : null;
       const guardar = async () => {
         try {
-          await api('/api/manuales/guardar', { mes: x.accion.mes, concepto: x.accion.concepto, importe: imp.value, fuente: 'cartel de pendientes', nota: x.titulo, fechaPago: fp?.value || null });
+          await api('/api/manuales/guardar', { mes: accion.mes, concepto: accion.concepto, importe: imp.value, fuente: 'cartel de pendientes', nota: x.titulo, fechaPago: fp?.value || null });
           await renderPendientes(); if (estado.mes) await cargarMes(estado.mes);
         } catch (e) { msg.textContent = e.message; }
       };
       imp.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
-      form = h('div', { class: 'carga' }, imp, fp ? h('label', { class: 'nota' }, 'pagado el ', fp) : null, h('button', { class: 'primario', onclick: guardar }, 'Guardar'),
-        h('button', { onclick: () => document.querySelector('[data-pestana=importar]').click() }, 'Importar archivo'), msg);
+      return h('div', { class: 'carga' }, imp, fp ? h('label', { class: 'nota' }, 'pagado el ', fp) : null, h('button', { class: accion === x.accion ? 'primario' : '', onclick: guardar }, 'Guardar'),
+        conImportar ? h('button', { onclick: () => document.querySelector('[data-pestana=importar]').click() }, 'Importar archivo') : null);
+    };
+    let form = null;
+    if (x.accion.tipo === 'cargar') form = h('div', {}, formCarga(x.accion, true), msg);
+    if (x.accion.tipo === 'cm03') {
+      const entrada = h('input', { type: 'file', accept: '.pdf,application/pdf', hidden: true, 'aria-label': `PDF de la CM03: ${x.titulo}` });
+      entrada.addEventListener('change', () => entrada.files[0] && subirCm03(entrada.files[0], x.accion.mes, msg));
+      form = h('div', {}, h('div', { class: 'carga' }, h('button', { class: 'primario', onclick: () => entrada.click() }, 'Subir el PDF de la CM03'), entrada),
+        x.accion.alternativa ? h('details', {}, h('summary', { class: 'nota' }, 'o cargar el importe a mano'), formCarga(x.accion.alternativa, false)) : null, msg);
     }
     return h('li', {}, h('strong', {}, x.titulo), x.estadoPago ? h('span', { class: 'estado pend' }, x.estadoPago) : null,
       h('div', { class: 'nota' }, `Por qué: ${x.porque}.`), h('div', { class: 'nota' }, x.como), form);
@@ -145,8 +166,9 @@ function renderImpuestos() {
       iva.vencimientoPago.fecha ? `Vence el pago: ${fecha(iva.vencimientoPago.fecha)}` : null,
       iva.presentacion.fecha ? `DJ presentada: ${iva.presentacion.fecha}` : null,
     ]),
-    tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
-      iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo desde el cartel de pendientes',
+    tarjeta('Ingresos Brutos', iibb.aPagar.valor != null ? iibb.aPagar : iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
+      iibb.aPagar.valor != null ? 'A pagar según la CM03' : iibb.declarado.valor != null ? 'Impuesto determinado (falta el total a pagar de la CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: subila desde el cartel de pendientes',
+      iibb.aPagar.valor != null && iibb.declarado.valor != null ? `Impuesto determinado: ${fmt(iibb.declarado.valor)} (la carga del mes, no lo que se paga)` : null,
       iibb.volantesSinPago?.length ? `${iibb.volantesSinPago.length} volante(s) de SIFERE generado(s) sin estado de pago: no se descuentan` : null,
       iibb.presentacion?.fecha ? `CM03 presentada: ${fecha(iibb.presentacion.fecha)} (${iibb.presentacion.nota.replace(/^CM03 /, '').replace(/ presentada.*/, '')}, SIFERE)` : null,
     ]),
@@ -232,7 +254,7 @@ function renderImpuestos() {
         celdaCifra(o.declarado), celdaCifra(o.pagos),
         h('td', { 'data-rotulo': 'Estado' }, h('span', { class: `estado ${claseEstado(o.estado)}` }, o.estado)),
         h('td', { 'data-rotulo': 'Vence' }, o.vencimiento?.fecha ? fecha(o.vencimiento.fecha) : '—'))))));
-  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloqueTerceros, bloquePfos(p));
+  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), bloqueIibb(p), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloqueTerceros, bloquePfos(p));
 }
 
 // ---------------- Cargas a mano (pagos que no están en ARCA) ----------------
@@ -289,6 +311,28 @@ function bloquePagos(p) {
 }
 
 /** Lo que el mes deja para pagar más adelante. */
+/** Ingresos Brutos según la CM03: por jurisdicción, sin compensar saldos a favor de una con lo que se debe en otra. */
+function bloqueIibb(p) {
+  const i = p.iibb; const js = i.porJurisdiccion;
+  const fila = (nombre, c) => h('tr', {}, h('td', {}, nombre), h('td', { class: 'num', title: [c?.fuente, c?.nota].filter(Boolean).join(' · ') || null },
+    c?.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(c.valor), badge(c?.nivel ?? 'faltante'), c?.valor == null && c?.nota ? h('div', { class: 'nota' }, c.nota) : null));
+  return h('div', { class: 'caja' }, h('h2', {}, `Ingresos Brutos (Convenio Multilateral) · ${nombreMes(p.mes)}`),
+    h('table', {}, h('tbody', {},
+      fila('Impuesto determinado (la carga del mes)', i.declarado),
+      fila('Total a pagar según la CM03', i.aPagar),
+      fila('Saldos a favor del contribuyente', i.aFavorContribuyente),
+      fila('Pagos comprobados del período', i.pagos),
+      fila('Saldo', i.saldoPendiente))),
+    js ? h('table', { class: 'apilable' },
+      h('thead', {}, h('tr', {}, ...['Jurisdicción', 'Determinado', 'A favor contribuyente', 'A favor fisco', 'A pagar'].map((x, k) => h('th', { class: k ? 'num' : '' }, x)))),
+      h('tbody', {}, ...js.map((j) => h('tr', {}, h('td', { 'data-rotulo': 'Jurisdicción' }, `${j.codigo ? `${j.codigo} · ` : ''}${j.jurisdiccion}`),
+        ...[['determinado', 'Determinado'], ['aFavorContribuyente', 'A favor contribuyente'], ['aFavorFisco', 'A favor fisco'], ['aPagar', 'A pagar']].map(([k, rot]) => h('td', { class: 'num', 'data-rotulo': rot }, fmt(j[k]))))))) : null,
+    h('p', { class: 'nota' }, 'Presentar la CM03 no es pagarla. Un saldo a favor de una jurisdicción no cancela lo que se debe en otra; los pagos no dicen a qué jurisdicción van.'),
+    i.cm03?.vigente?.detalles?.length ? h('details', {}, h('summary', { class: 'nota' }, 'Determinación del anticipo (detalle del PDF, no se suma)'),
+      ...i.cm03.vigente.detalles.map((d) => h('div', {}, h('strong', {}, d.jurisdiccion), h('table', {}, h('tbody', {}, ...d.conceptos.map((c) => h('tr', {}, h('td', {}, c.concepto), h('td', { class: 'num' }, fmt(c.importe))))))))) : null,
+    i.avisos?.length ? h('div', {}, ...i.avisos.map((a) => h('div', { class: 'aviso' }, a))) : null);
+}
+
 function bloqueDeja(p) {
   return h('div', { class: 'caja' }, h('h2', {}, `Lo que ${nombreMes(p.mes)} deja para pagar más adelante`),
     h('table', { class: 'apilable' }, h('tbody', {}, ...p.deja.map((o) => h('tr', {},
@@ -348,21 +392,44 @@ function renderObligaciones() {
 // ---------------- Importar ----------------
 const imp = { archivo: null, previa: null };
 function renderImportar() {
-  const entrada = h('input', { type: 'file', accept: '.csv,.txt,.tsv,.xlsx', id: 'archivo', hidden: true });
-  const zona = h('div', { class: 'soltar' }, 'Arrastrá acá un CSV o Excel (.xlsx), o ', h('button', { onclick: () => entrada.click() }, 'elegí un archivo'),
-    h('div', { class: 'nota' }, 'Por ejemplo: el reporte mensual de ventas o de cargos de Mercado Libre, tus gastos, el costo de la mercadería vendida, la DJ de Ingresos Brutos.'));
+  const entrada = h('input', { type: 'file', accept: '.csv,.txt,.tsv,.xlsx,.pdf', id: 'archivo', hidden: true });
+  const zona = h('div', { class: 'soltar' }, 'Arrastrá acá un CSV, Excel (.xlsx) o el PDF de una CM03, o ', h('button', { onclick: () => entrada.click() }, 'elegí un archivo'),
+    h('div', { class: 'nota' }, 'Por ejemplo: el «Reporte» en PDF de la CM03 (SIFERE), los anticipos o pagos de impuestos, la cuota de autónomos o el resultado comercial que calcula PFOS.'));
   zona.addEventListener('dragover', (e) => { e.preventDefault(); zona.classList.add('encima'); });
   zona.addEventListener('dragleave', () => zona.classList.remove('encima'));
   zona.addEventListener('drop', (e) => { e.preventDefault(); zona.classList.remove('encima'); if (e.dataTransfer.files[0]) subir(e.dataTransfer.files[0]); });
   entrada.addEventListener('change', () => entrada.files[0] && subir(entrada.files[0]));
   poner($('#importar'), 
     h('div', { class: 'caja' }, h('h2', {}, 'Importar archivo'), zona, entrada, h('div', { id: 'imp-trabajo' })),
+    h('div', { class: 'caja' }, h('h2', {}, 'CM03 importadas (PDF)'), h('div', { id: 'cm03-lista' }, 'Cargando…')),
     h('div', { class: 'caja' }, h('h2', {}, 'Importaciones hechas'), h('div', { id: 'imp-lista' }, 'Cargando…')));
-  listarImportaciones();
+  listarImportaciones(); listarCm03();
+}
+
+async function listarCm03() {
+  const cont = $('#cm03-lista');
+  try {
+    const xs = await api('/api/cm03');
+    if (!xs.length) { poner(cont, h('p', { class: 'nota' }, 'Todavía no importaste ninguna CM03 en PDF.')); return; }
+    poner(cont, h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Período', 'Versión', 'Estado', 'Determinado', 'A pagar', 'Archivo', ''].map((x, k) => h('th', { class: k === 3 || k === 4 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...xs.slice().reverse().map((c) => h('tr', {},
+        h('td', { 'data-rotulo': 'Período' }, c.periodo ? nombreMes(c.periodo) : '—'),
+        h('td', { 'data-rotulo': 'Versión' }, c.rectificativa == null ? '—' : c.rectificativa ? `rectificativa ${c.rectificativa}` : 'original'),
+        h('td', { 'data-rotulo': 'Estado', title: c.motivos?.join('; ') || null }, h('span', { class: `estado ${c.estado === 'valida' ? 'ok' : 'alerta'}` }, c.estado === 'valida' ? 'leída' : 'en revisión'),
+          c.estado !== 'valida' ? h('div', { class: 'nota' }, c.motivos.join('; ')) : null),
+        h('td', { class: 'num', 'data-rotulo': 'Determinado' }, fmt(c.impuestoDeterminadoTotal)), h('td', { class: 'num', 'data-rotulo': 'A pagar' }, fmt(c.totalAPagarDeclarado)),
+        h('td', { 'data-rotulo': 'Archivo' }, c.archivo),
+        h('td', {}, h('button', { onclick: async () => { if (!confirm(`¿Quitar la CM03 "${c.archivo}"? El PDF queda guardado.`)) return; try { await api('/api/cm03/eliminar', { id: c.id }); await listarCm03(); await cargarMes(estado.mes); await renderPendientes(); } catch (e) { alert(e.message); } } }, 'Quitar')))))));
+  } catch (e) { poner(cont, h('div', { class: 'error' }, e.message)); }
 }
 
 async function subir(file) {
   const trabajo = $('#imp-trabajo');
+  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+    const msg = h('div', { class: 'nota', role: 'status' });
+    poner(trabajo, msg);
+    return subirCm03(file, null, msg);
+  }
   poner(trabajo, h('div', { class: 'cargando' }, `Leyendo ${file.name}…`));
   try {
     const b64 = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => mal(r.error); r.readAsDataURL(file); });

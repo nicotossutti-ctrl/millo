@@ -226,6 +226,18 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
+- **CM03 en PDF** (Ingresos Brutos, Convenio Multilateral): el «Reporte» que baja SIFERE WEB – Consultas (DDJJ
+  Mensuales > Listado > ícono de impresora) se sube desde el cartel o desde «Importar». Tiene texto: se lee con
+  `pdfjs-dist`, sin OCR. Se guardan, por período y versión (original o rectificativa), las seis columnas de
+  «Jurisdicciones incluidas» de cada jurisdicción, el **impuesto determinado** (la carga del mes, no lo que se paga), el
+  **total a pagar** (después de saldos a favor, retenciones y percepciones) y los **saldos a favor**, cada uno por
+  jurisdicción y sin compensar unos con otros; las páginas «Determinación del anticipo» quedan como evidencia, sin
+  sumarse. Las filas tienen que cerrar con TOTALES y con el «Total a pagar», y el período con el mes; si algo no se
+  entiende, la CM03 queda **en revisión** y no se usa (nunca se completa con 0). El mismo PDF no se importa dos veces,
+  una rectificativa posterior no se reemplaza por una anterior y otra copia de la misma versión con otros importes se
+  rechaza. El saldo de IIBB es el total a pagar menos los pagos comprobados del período; con varias jurisdicciones a
+  pagar y un pago que no cubre el total, queda «sin conciliar». Presentar la CM03 no es pagarla. Todo queda en
+  `out/importados/cm03/` (el PDF original incluido), fuera del repositorio.
 - **Pagos**: cada pago cargado a mano lleva el *período* al que corresponde y su *fecha de pago*: el período descuenta
   esa obligación y la fecha lo ubica en la caja del mes en que salió (el CM03 de septiembre pagado en octubre sale de la
   caja de octubre). Un pago cargado que coincide con uno de ARCA o de SIFERE no se suma dos veces; uno sin fecha que puede
@@ -237,9 +249,11 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   nacionales del período: IVA, retenciones como agente, cargas sociales, y la DJ anual de Ganancias) y la lista de CM03
   de SIFERE (con su rectificativa). Esas listas no traen el impuesto determinado de IIBB ni de Ganancias: se pide en el
   cartel, ya diciendo cuál DJ presentada hay que mirar.
-- **Pendientes de carga** (cartel arriba de todo): lo que ARCA no entrega sola, por mes cerrado (CM03 de SIFERE y su pago,
-  cuota de autónomos sin pagos en ARCA) y una vez por año (impuesto determinado de la DJ de Ganancias). Se carga el
-  importe ahí mismo o el archivo en «Importar»; el pedido desaparece cuando está cargado.
+- **Pendientes de carga** (cartel arriba de todo): lo que ARCA no entrega sola, por mes cerrado (la CM03 de SIFERE, mejor
+  su PDF, y el pago de su total a pagar; la cuota de autónomos sin pagos en ARCA) y una vez por año (impuesto determinado
+  de la DJ de Ganancias). Se sube el PDF o se carga el importe ahí mismo, o el archivo en «Importar»; el pedido
+  desaparece cuando está cargado. Con la CM03 importada sale el pedido de la CM03, pero no el del pago; si SIFERE
+  muestra una rectificativa posterior, se pide su reporte.
 - **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
 - Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
 - **PFOS** (Mercado Libre, solo la cuenta del CUIT del contribuyente): `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`

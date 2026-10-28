@@ -235,6 +235,11 @@ test('cargas manuales: CM03 con corrección e historial, fuente obligatoria; lo 
   assert.throws(() => guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '5', fuente: 'VEP' }), /fecha en que se pagó/, 'un pago nuevo necesita su fecha');
   let p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   assert.equal(p.iibb.declarado.valor, 2500); assert.equal(p.iibb.declarado.nivel, 'manual');
+  // El impuesto determinado no es lo que se paga: sin el total a pagar de la CM03 no hay saldo.
+  assert.equal(p.iibb.estado, 'falta el total a pagar');
+  assert.equal(p.iibb.saldoPendiente.valor, null);
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-a-pagar-segun-cm03', importe: '2.500,00', fuente: 'CM03 presentado' });
+  p = panelMes(out, '2026-09', { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
   assert.equal(p.iibb.estado, 'pago no encontrado (sin cobertura)', 'sin pago registrado: falta evidencia, no «impago»');
   assert.equal(p.deja.find((o) => o.impuesto === 'Ingresos Brutos').cifra.valor, 2500);
   guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: '1.000', fuente: 'VEP', fechaPago: '2026-10-20' });
@@ -419,6 +424,8 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
   assert.ok(!de('2025-12', '2026-06-15').includes('ganancias-determinado'), 'la DJ anual se pide desde julio');
   // CM03 cargado: se pide el pago sin decir que está impago; un pago parcial no lo saca del cartel.
   guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: '1.234.567,89', fuente: 'cartel de pendientes' });
+  assert.deepEqual(de('2026-09'), ['iibb-a-pagar-segun-cm03', 'autonomos-cuota'], 'el determinado no es lo que se paga: se pide el total a pagar');
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-a-pagar-segun-cm03', importe: '1.234.567,89', fuente: 'cartel de pendientes' });
   let pago = pendientesDeCarga(out, '2026-10-28', op).find((x) => x.clave === 'iibb-pagado:2026-09');
   assert.equal(pago.estadoPago, 'pago no encontrado (sin cobertura)');
   assert.match(pago.porque, /no prueba que esté impago/);
@@ -497,7 +504,7 @@ function conPagosCt(out, ventanas) {
 test('pagos: el CM03 de septiembre pagado el 20/10 baja la obligación de septiembre y sale de la caja de octubre, nunca de la de septiembre', async () => {
   const { guardarManual } = await import('../src/app/manuales.js');
   const out = escenario(); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-a-pagar-segun-cm03', importe: 2500, fuente: 'CM03' });
   guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 2500, fuente: 'VEP', fechaPago: '2026-10-20' });
   // Anticipo de Ganancias del período fiscal 2026 pagado en octubre: caja de octubre.
   guardarManual(out, { mes: '2026-08', concepto: 'ganancias-anticipo', importe: 4000, fuente: 'VEP anticipo 1', fechaPago: '2026-10-05' });
@@ -546,8 +553,8 @@ test('pagos de IIBB: un volante de SIFERE solo cuenta si está pagado; el mismo 
     ['Acciones', 'Anticipo', 'Fecha Generación', 'Monto Total', 'Medio de Pago', 'Estado'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
   fs.writeFileSync(path.join(d, 'sifere-consultas-volantes-pago', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['v.csv'] } }));
   assert.deepEqual(volantesSifere(d, '2026-09').map((v) => v.pagado), [false]);
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
-  guardarManual(out, { mes: '2026-08', concepto: 'iibb-declarado', importe: 3000, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-a-pagar-segun-cm03', importe: 2500, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-08', concepto: 'iibb-a-pagar-segun-cm03', importe: 3000, fuente: 'CM03' });
   let sep = panelMes(out, '2026-09', op);
   assert.equal(sep.iibb.estado, 'pago no encontrado (sin cobertura)', 'volante generado: no es un pago');
   assert.match(sep.iibb.volantesSinPago[0].nota, /pago sin verificar/);
@@ -655,7 +662,7 @@ test('volantes de SIFERE: «NO PAGADO» e «Impagado» no descuentan la obligaci
   fs.writeFileSync(path.join(d, 'sifere-consultas-volantes-pago', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['v.csv'] } }));
   assert.deepEqual(volantesSifere(d, '2026-09').map((v) => v.pagado), [false, false, false]);
   const { guardarManual } = await import('../src/app/manuales.js');
-  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-a-pagar-segun-cm03', importe: 2500, fuente: 'CM03' });
   const sep = panelMes(out, '2026-09', { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') });
   assert.equal(sep.iibb.estado, 'pago no encontrado (sin cobertura)');
   assert.equal(sep.iibb.volantesSinPago.length, 3);

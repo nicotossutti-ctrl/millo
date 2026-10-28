@@ -38,7 +38,10 @@ export const CONCEPTOS = {
   // De PFOS, para la proyección de Ganancias: el resultado comercial del mes ANTES de impuestos (ventas − mercadería −
   // cargos de ML − publicidad − logística − gastos generales), tal como lo calcula PFOS.
   'resultado-comercial': { nombre: 'Resultado comercial del mes (de PFOS, antes de impuestos)', grupo: 'pfos' },
-  'iibb-declarado': { nombre: 'Ingresos Brutos: impuesto declarado', grupo: 'impuesto', impuesto: 'iibb', tipo: 'declarado' },
+  // De la CM03: el impuesto determinado (la carga del mes) y el total a pagar (después de saldos a favor, retenciones y
+  // percepciones) son cosas distintas. Lo mejor es importar el PDF de la CM03, que trae los dos por jurisdicción.
+  'iibb-declarado': { nombre: 'Ingresos Brutos: impuesto determinado (CM03)', grupo: 'impuesto', impuesto: 'iibb', tipo: 'declarado' },
+  'iibb-a-pagar-segun-cm03': { nombre: 'Ingresos Brutos: total a pagar según la CM03', grupo: 'impuesto', impuesto: 'iibb', tipo: 'a-pagar' },
   'iibb-pagado': { nombre: 'Ingresos Brutos: pagos', grupo: 'impuesto', impuesto: 'iibb', tipo: 'pagado' },
   'ganancias-anticipo': { nombre: 'Ganancias: anticipos pagados', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'pagado' },
   autonomos: { nombre: 'Autónomos: pagos', grupo: 'impuesto', impuesto: 'autonomos', tipo: 'pagado' },

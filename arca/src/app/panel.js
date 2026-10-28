@@ -26,6 +26,7 @@ import { leerFotos } from '../pfos/fotos.js';
 import { integraciones } from './integraciones.js';
 import { cm03Sifere, djAnualGanancias, djDelPeriodo } from './presentaciones.js';
 import { conciliarPagos, pagosCargadosEnCaja, pagosCargadosDelPeriodo, pagosSinFecha } from './pagos.js';
+import { cm03DelPeriodo } from './cm03.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -266,27 +267,48 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   }
 
   // ---------- Ingresos Brutos ----------
+  // Tres cosas distintas: el impuesto DETERMINADO (la carga del mes), el TOTAL A PAGAR de la CM03 (lo que queda después
+  // de saldos a favor, retenciones y percepciones, jurisdicción por jurisdicción) y los PAGOS comprobados. Presentar la
+  // CM03 no es pagarla; un saldo a favor de una jurisdicción no cancela lo que se debe en otra.
   const alic = contrib ? alicuotaIIBB(contrib) : 0;
   const ip = pagosIibbDelPeriodo(outDir, datosDir, mes);
   const iibbPagos = ip.computados.map((x) => cifra(x.importe, x.nivel, x.fuente, x.fecha ? `pagado el ${fechaDma(x.fecha)}` : null));
-  const iibbDeclarado = importado('iibb-declarado') ?? faltante('cargá el impuesto determinado del CM03 del mes (SIFERE no se lee todavía)');
+  const cm = cm03DelPeriodo(outDir, mes); const cmv = cm.vigente;
+  const listaSifere = cm03Sifere(datosDir, mes);
+  const fuenteCm = cmv ? `CM03 ${cmv.rectificativa ? `rectificativa ${cmv.rectificativa}` : 'original'} (PDF de SIFERE${cmv.fechaPresentacion ? `, presentada el ${fechaDma(cmv.fechaPresentacion.slice(0, 10))}` : ''})` : null;
+  const iibbAvisos = [];
+  const detManual = importado('iibb-declarado'); const aPagarManual = importado('iibb-a-pagar-segun-cm03');
+  const iibbDeclarado = cmv ? cifra(cmv.impuestoDeterminadoTotal, 'importado', fuenteCm, 'impuesto determinado de todas las jurisdicciones: es la carga del mes, no lo que se paga')
+    : detManual ?? faltante('importá el PDF de la CM03 del mes (SIFERE: DDJJ Mensuales > Listado > «Reporte») o cargá su impuesto determinado');
+  const iibbAPagar = cmv ? cifra(cmv.totalAPagarDeclarado, 'importado', fuenteCm, 'lo que queda para pagar después de saldos a favor, retenciones y percepciones, sumando solo las jurisdicciones con saldo a pagar')
+    : aPagarManual ?? faltante('falta el total a pagar de la CM03: el impuesto determinado no es lo que se paga');
+  if (cmv && detManual && Math.abs(detManual.valor - cmv.impuestoDeterminadoTotal) > 1) iibbAvisos.push(`la carga del impuesto determinado (${detManual.valor}) no coincide con la CM03 importada (${cmv.impuestoDeterminadoTotal}): se usa la CM03`);
+  if (cmv && aPagarManual && Math.abs(aPagarManual.valor - cmv.totalAPagarDeclarado) > 1) iibbAvisos.push(`la carga del total a pagar (${aPagarManual.valor}) no coincide con la CM03 importada (${cmv.totalAPagarDeclarado}): se usa la CM03`);
+  const ultimaSifere = listaSifere?.presentada?.rectificativa;
+  if (cmv && ultimaSifere != null && ultimaSifere > cmv.rectificativa) iibbAvisos.push(`SIFERE muestra presentada la rectificativa ${ultimaSifere} y la CM03 importada es la ${cmv.rectificativa ? `rectificativa ${cmv.rectificativa}` : 'original'}: importá el reporte de la rectificativa ${ultimaSifere}`);
+  for (const r of cm.enRevision) iibbAvisos.push(`el PDF «${r.archivo}» quedó en revisión y no se usa: ${r.motivos.join('; ')}`);
   const iibbEstimado = em && alic > 0 ? cifra(em.netoGravado * alic, 'estimado', 'facturación neta × alícuota efectiva', `alícuota efectiva ${r2(alic * 100)}% (params/contribuyente.json)`)
     : faltante(em ? 'configurá las jurisdicciones y alícuotas en params/contribuyente.json' : 'faltan los comprobantes emitidos del mes');
   const iibbPagado = iibbPagos.length ? cifra(iibbPagos.reduce((n, c) => n + c.valor, 0), iibbPagos.every((c) => c.nivel === 'verificado') ? 'verificado' : iibbPagos[0].nivel, iibbPagos.map((c) => c.fuente).join(' + ')) : faltante('sin pagos de IIBB registrados ni cargados');
   const iibb = {
-    impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, estimado: iibbEstimado, pagos: iibbPagado,
-    saldoPendiente: iibbDeclarado.valor != null ? cifra(Math.max(0, iibbDeclarado.valor - (iibbPagado.valor ?? 0)), iibbDeclarado.nivel, 'declarado − pagos', iibbPagado.valor == null ? 'sin pagos registrados' : null) : faltante('falta lo declarado'),
-    // Presentación: la lista de DJ CM03 de SIFERE (fecha y rectificativa). No trae el impuesto determinado.
+    impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, aPagar: iibbAPagar, estimado: iibbEstimado, pagos: iibbPagado,
+    aFavorContribuyente: cmv ? cifra(cmv.aFavorContribuyenteTotal, 'importado', fuenteCm, 'saldos a favor de cada jurisdicción: no cancelan lo que se debe en otras') : faltante('sin la CM03 importada'),
+    porJurisdiccion: cmv ? cmv.jurisdicciones.map(({ jurisdiccion, codigo, determinado, aFavorContribuyente, aFavorFisco, aPagar }) => ({ jurisdiccion, codigo: codigo ?? null, determinado, aFavorContribuyente, aFavorFisco, aPagar })) : null,
+    saldoPendiente: saldoIibb(iibbAPagar, iibbPagos, cmv?.jurisdicciones ?? null),
+    // Presentación: la lista de DJ CM03 de SIFERE (fecha y rectificativa) o el reporte importado.
     presentacion: (() => {
-      const c = cm03Sifere(datosDir, mes);
+      const c = listaSifere;
       if (c?.presentada) return { fecha: fechaIso(String(c.presentada.fechaPresentacion ?? '').slice(0, 10)), nivel: 'verificado', fuente: c.fuente,
         nota: `CM03 ${c.presentada.rectificativa ? `rectificativa ${c.presentada.rectificativa}` : 'original'} presentada${c.presentada.resultado ? ` (${c.presentada.resultado})` : ''}` };
+      if (cmv) return { fecha: cmv.fechaPresentacion ? cmv.fechaPresentacion.slice(0, 10) : null, nivel: 'importado', fuente: fuenteCm, nota: `CM03 ${cmv.rectificativa ? `rectificativa ${cmv.rectificativa}` : 'original'} presentada (reporte importado)` };
       return { fecha: null, nivel: 'faltante', nota: c ? `la lista de SIFERE conservada no tiene la CM03 de ${mes} presentada${c.borradores.length ? ' (hay un borrador)' : ''}` : 'no hay listas de SIFERE conservadas' };
     })(),
     vencimientoPresentacion: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
     vencimientoPago: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
-    estado: iibbDeclarado.valor != null ? estadoPago(iibbDeclarado.valor, iibbPagos) : iibbEstimado.valor != null ? 'solo estimado' : 'sin datos',
-    volantesSinPago: ip.volantesSinPago, pagosNoSumados: [...ip.duplicados, ...ip.inciertos],
+    estado: iibbAPagar.valor != null ? estadoPago(iibbAPagar.valor, iibbPagos) : iibbDeclarado.valor != null ? 'falta el total a pagar' : iibbEstimado.valor != null ? 'solo estimado' : 'sin datos',
+    volantesSinPago: ip.volantesSinPago, pagosNoSumados: [...ip.duplicados, ...ip.inciertos], avisos: iibbAvisos,
+    cm03: { vigente: cmv ? { id: cmv.id, archivo: cmv.archivo, rectificativa: cmv.rectificativa, fechaPresentacion: cmv.fechaPresentacion, avisos: cmv.avisos, detalles: cmv.detalles } : null,
+      anteriores: cm.anteriores.map((c) => ({ id: c.id, archivo: c.archivo, rectificativa: c.rectificativa })), enRevision: cm.enRevision.map((c) => ({ id: c.id, archivo: c.archivo, motivos: c.motivos })) },
   };
 
   // ---------- Ganancias (provisión del mes) ----------
@@ -304,7 +326,8 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
       if (!em) sinFacturacion.push(m);
       if (!rc) sinResultado.push(m);
       // IIBB y autónomos reales del mes cuando existen (CM03 cargado; cuota cargada o pagos de ARCA imputados al período).
-      const iibbM = manualesDelMes(outDir, m)['iibb-declarado'] ?? importadoDelMes(outDir, m)['iibb-declarado'];
+      const cmM = cm03DelPeriodo(outDir, m).vigente;
+      const iibbM = cmM ? { importe: cmM.impuestoDeterminadoTotal } : manualesDelMes(outDir, m)['iibb-declarado'] ?? importadoDelMes(outDir, m)['iibb-declarado'];
       const autM = manualesDelMes(outDir, m)['autonomos-cuota'] ?? importadoDelMes(outDir, m)['autonomos-cuota'];
       const autCt = pagosDelPeriodo(datosDir, m, 'autonomos');
       const autonomosReal = autM ? autM.importe : autCt.length ? suma(autCt) : null;
@@ -363,8 +386,9 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     { impuesto: 'IVA', cifra: iva.saldoPendiente.valor != null ? iva.saldoPendiente : iva.declarado, vence: iva.vencimientoPago.fecha,
       nota: iva.saldoPendiente.nivel === 'verificado' && inf.conciliacion.saldoPendiente != null ? 'saldo exigible confirmado (deuda registrada en Cuentas Tributarias)'
         : iva.vencimientoPago.fecha && iva.vencimientoPago.fecha >= hoy ? 'no vencido (régimen del contribuyente)' : iva.vencimientoPago.fecha ? 'vencido' : null },
-    { impuesto: 'Ingresos Brutos', cifra: iibb.saldoPendiente.valor != null ? iibb.saldoPendiente : iibb.estimado, vence: null,
-      nota: iibb.saldoPendiente.valor != null ? `declarado − pagos (${iibb.estado})` : 'estimado: falta lo declarado' },
+    { impuesto: 'Ingresos Brutos', cifra: iibb.saldoPendiente.valor != null ? iibb.saldoPendiente : iibb.saldoPendiente.diferencia != null ? cifra(iibb.saldoPendiente.diferencia, 'estimado', 'a pagar según CM03 − pagos', 'saldo sin conciliar') : iibb.estimado, vence: null,
+      nota: iibb.saldoPendiente.valor != null ? `a pagar según CM03 − pagos (${iibb.estado})` : iibb.saldoPendiente.diferencia != null ? iibb.saldoPendiente.nota
+        : iibb.declarado.valor != null ? 'falta el total a pagar de la CM03 (el impuesto determinado no es lo que se paga): se muestra la estimación' : 'estimado: falta la CM03' },
     { impuesto: 'Ganancias', cifra: ganEstimado, vence: null, nota: 'provisión estimada; se paga con la DJ anual y sus anticipos' },
   ];
 
@@ -389,6 +413,24 @@ export function estadoPago(declarado, pagos = []) {
   if (!pagos.length || total <= 0) return 'pago no encontrado (sin cobertura)';
   if (total < declarado - 1) return 'pago parcial: falta conciliar';
   return pagos.every((c) => c.nivel === 'verificado') ? 'pagado verificado' : 'pago cargado a mano';
+}
+
+/**
+ * Saldo de IIBB del período: el TOTAL A PAGAR de la CM03 menos los pagos comprobados del período. Nunca el impuesto
+ * determinado menos los pagos (los saldos a favor, retenciones y percepciones ya están descontados en la CM03). Los pagos
+ * no dicen a qué jurisdicción van: con una sola jurisdicción a pagar el pago es de ella; con varias y un pago que no cubre
+ * el total, el saldo queda «sin conciliar» (valor null y la diferencia aparte), sin afirmar cuánto se debe en cada una.
+ */
+export function saldoIibb(aPagar, pagos = [], jurisdicciones = null) {
+  if (aPagar?.valor == null) return faltante('sin el total a pagar de la CM03 no se puede saber el saldo: el impuesto determinado no es lo que se paga');
+  if (aPagar.valor <= 0) return cifra(0, aPagar.nivel, aPagar.fuente, 'la CM03 no deja saldo a pagar');
+  const pagado = r2(pagos.reduce((n, c) => n + (c.valor ?? 0), 0));
+  const nivelPagos = pagos.every((c) => c.nivel === 'verificado') ? aPagar.nivel : 'manual';
+  if (pagado <= 0) return cifra(aPagar.valor, aPagar.nivel, 'a pagar según CM03', 'sin pagos encontrados: no prueba que esté impago');
+  if (pagado >= aPagar.valor - 1) return cifra(0, nivelPagos, 'a pagar según CM03 − pagos', pagado > aPagar.valor + 1 ? `los pagos (${pagado}) superan lo a pagar: revisalos` : 'cubierto por los pagos del período');
+  const conSaldo = (jurisdicciones ?? []).filter((j) => j.aPagar > 0);
+  if (conSaldo.length === 1) return cifra(aPagar.valor - pagado, nivelPagos, 'a pagar según CM03 − pagos', `queda de ${conSaldo[0].jurisdiccion} (la única jurisdicción con saldo a pagar)`);
+  return { ...faltante(`saldo sin conciliar: pagos por ${pagado} de ${aPagar.valor} a pagar${conSaldo.length ? ` en ${conSaldo.length} jurisdicciones` : ''}; los pagos no dicen a qué jurisdicción corresponden`), diferencia: r2(aPagar.valor - pagado) };
 }
 
 /**
