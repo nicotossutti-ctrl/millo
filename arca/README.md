@@ -238,6 +238,14 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   rechaza. El saldo de IIBB es el total a pagar menos los pagos comprobados del período; con varias jurisdicciones a
   pagar y un pago que no cubre el total, queda «sin conciliar». Presentar la CM03 no es pagarla. Todo queda en
   `out/importados/cm03/` (el PDF original incluido), fuera del repositorio.
+- **DJ anual de Ganancias en PDF** (F.2711 simplificada o F.711, como la descarga ARCA): su texto viene en fuentes Type3
+  «dibujadas» (cada letra es un dibujo y su código es el orden en que apareció), así que la extracción común devuelve
+  basura. `src/app/glifos.js` reconoce cada letra por su dibujo contra un diccionario de formas
+  (`src/app/glifos-arca.json`, solo formas de letras): primero por dibujo exacto y, si no, por parecido con umbral
+  estricto; lo dudoso queda «?» y la DJ en revisión. Se guardan el impuesto determinado, los pagos a cuenta, el saldo a
+  favor de ARCA o del contribuyente, el año, la secuencia y la fecha; la DJ es válida solo si determinado − pagos a
+  cuenta = saldo, al centavo. El saldo es el que declaró la DJ, no la deuda de hoy: se concilia con los pagos de Cuentas
+  Tributarias imputados a ese año desde la presentación, y sin ellos queda «sin conciliar». En `out/importados/ganancias/`.
 - **Pagos**: cada pago cargado a mano lleva el *período* al que corresponde y su *fecha de pago*: el período descuenta
   esa obligación y la fecha lo ubica en la caja del mes en que salió (el CM03 de septiembre pagado en octubre sale de la
   caja de octubre). Un pago cargado que coincide con uno de ARCA o de SIFERE no se suma dos veces; uno sin fecha que puede

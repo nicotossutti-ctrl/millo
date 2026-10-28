@@ -13,7 +13,8 @@
  *    falta de evidencia, no prueba de que esté impago; un pago parcial no silencia el pedido.
  *  - Autónomos: la cuota del mes, si ARCA no tiene pagos imputados al período y no está configurada.
  *  - F.931 (empleador) y F.744 / SICORE (agente), si su DJ figura presentada: el total declarado y, después, el pago.
- * Una vez por año (desde julio): el impuesto determinado de la DJ anual de Ganancias del año anterior.
+ * Una vez por año (desde julio): la DJ anual de Ganancias del año anterior, mejor su PDF (F.2711 o F.711), que trae el
+ * impuesto determinado, los pagos a cuenta y el saldo; si no, su impuesto determinado a mano.
  */
 import path from 'node:path';
 import { leerManifiesto } from '../portal/misComprobantes.js';
@@ -22,6 +23,7 @@ import { importadoDelMes, CONCEPTOS } from './importar.js';
 import { mesAnterior, pagosDelPeriodo, contribuyente, estadoPago, cifra, pagosIibbDelPeriodo, obligacionesDeTerceros, TERCEROS } from './panel.js';
 import { cm03Sifere, djAnualGanancias } from './presentaciones.js';
 import { cm03DelPeriodo } from './cm03.js';
+import { ddjjGananciasDelAnio } from './ddjjGanancias.js';
 
 export const MESES_REVISADOS = 6;
 const NOMBRE_MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -127,12 +129,14 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
   }
   // Ganancias: la DJ anual del año anterior, una vez por año (desde julio; las prórrogas de ARCA la corren a veces).
   const anio = Number(hoy.slice(0, 4)) - 1;
-  if (hoy.slice(5, 7) >= '07' && !cargado(outDir, `${anio}-12`, 'ganancias-determinado')) {
+  const djPdf = ddjjGananciasDelAnio(outDir, anio);
+  if (hoy.slice(5, 7) >= '07' && !djPdf.vigente && !cargado(outDir, `${anio}-12`, 'ganancias-determinado')) {
     const dj = djAnualGanancias(datosDir, anio);
-    out.push({ clave: `ganancias-determinado:${anio}`, mes: `${anio}-12`, titulo: `Ganancias ${anio}: impuesto determinado de la DJ anual${dj ? ` · F.${dj.formulario} presentada el ${dj.fecha}` : ''}`,
-      porque: 'de esa DJ salen los anticipos que se pagan este año; los pagos ya se leen solos de Cuentas Tributarias',
-      como: `En ARCA, «Ganancias Personas Humanas» (o el F.711 que presentó tu contador): el impuesto determinado del período fiscal ${anio}.`,
-      accion: { tipo: 'cargar', concepto: 'ganancias-determinado', mes: `${anio}-12` } });
+    const revision = djPdf.enRevision.length ? ` Hay ${djPdf.enRevision.length} PDF(s) en revisión que no se usan (${djPdf.enRevision.map((r) => r.motivos[0]).join('; ')}).` : '';
+    out.push({ clave: `ganancias-determinado:${anio}`, mes: `${anio}-12`, titulo: `Ganancias ${anio}: DJ anual${dj ? ` · F.${dj.formulario} presentada el ${dj.fecha}` : ''}`,
+      porque: `de esa DJ salen el saldo a pagar y los anticipos de este año; los pagos ya se leen solos de Cuentas Tributarias.${revision}`,
+      como: `Subí el PDF de la DJ del período fiscal ${anio} (el F.2711 o F.711 que descarga ARCA): FiscalOS lee el impuesto determinado, los pagos a cuenta y el saldo. Si no lo tenés, cargá el impuesto determinado a mano.`,
+      accion: { tipo: 'ddjj-ganancias', anio: String(anio), alternativa: { tipo: 'cargar', concepto: 'ganancias-determinado', mes: `${anio}-12` } } });
   }
   return out.map((x) => ({ ...x, concepto: x.accion.concepto ? CONCEPTOS[x.accion.concepto].nombre : null }));
 }

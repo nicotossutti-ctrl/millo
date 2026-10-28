@@ -27,6 +27,7 @@ import { integraciones } from './integraciones.js';
 import { cm03Sifere, djAnualGanancias, djDelPeriodo } from './presentaciones.js';
 import { conciliarPagos, pagosCargadosEnCaja, pagosCargadosDelPeriodo, pagosSinFecha } from './pagos.js';
 import { cm03DelPeriodo } from './cm03.js';
+import { ddjjGananciasDelAnio } from './ddjjGanancias.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -155,6 +156,48 @@ export function pagosDelPeriodo(datosDir, mes, clave) {
     }
   }
   return out;
+}
+
+/** Pagos de Cuentas Tributarias de un impuesto imputados al período fiscal ANUAL `anio` (Ganancias: anticipos y saldo). */
+export function pagosDelAnio(datosDir, anio, clave) {
+  const out = []; const vistos = new Set();
+  for (const v of vigentes(datosDir, 'ct-pagos')) {
+    for (const t of v.tablas) {
+      const ii = col(t.headers, /impuesto/); const im = col(t.headers, /importe/); const fe = col(t.headers, /fecha/); const ip = col(t.headers, /periodo/);
+      for (const f of t.rows) {
+        const per = periodoFiscal(f[ip]);
+        if (clasificarImpuesto(f[ii]).clave !== clave || per?.tipo !== 'anual' || per.anio !== String(anio)) continue;
+        const k = f.join('|'); if (vistos.has(k)) continue; vistos.add(k);
+        out.push({ fecha: fechaIso(f[fe]), importe: importeDe(f[im]) });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * DJ anual de Ganancias de `anio` leída de su PDF, con el saldo que DECLARÓ y los pagos de Cuentas Tributarias imputados
+ * a ese período con fecha desde la presentación (los anticipos anteriores ya son «pagos a cuenta» de la DJ). El saldo
+ * declarado no es la deuda de hoy: «restante» es una conciliación con lo bajado, no un saldo exigible confirmado (puede
+ * haber planes de pago o pagos fuera de la cobertura de lo bajado). null si no hay DJ leída.
+ */
+export function djAnualLeida(outDir, datosDir, anio) {
+  const d = ddjjGananciasDelAnio(outDir, anio).vigente;
+  if (!d) return null;
+  const fuente = `F.${d.formulario} ${d.anio} ${d.secuencia ? `rectificativa ${d.secuencia}` : 'original'} (PDF${d.fechaPresentacion ? `, presentada el ${fechaDma(d.fechaPresentacion)}` : ''})`;
+  const saldo = r2((d.saldoAFavorArca ?? 0) - (d.saldoAFavorContribuyente ?? 0));
+  const posteriores = d.fechaPresentacion ? pagosDelAnio(datosDir, anio, 'ganancias').filter((p) => p.fecha && p.fecha >= d.fechaPresentacion) : [];
+  const pagado = suma(posteriores) ?? 0;
+  return {
+    anio: d.anio, formulario: d.formulario, secuencia: d.secuencia, fecha: d.fechaPresentacion, fuente,
+    determinado: cifra(d.impuestoDeterminado, 'importado', fuente, 'impuesto determinado del año: base de los anticipos del año siguiente'),
+    pagosACuenta: cifra(d.pagosACuenta, 'importado', fuente, 'anticipos, retenciones y percepciones computados en la DJ'),
+    saldoDeclarado: cifra(saldo, 'importado', fuente, saldo >= 0 ? 'saldo a favor de ARCA que declaró la DJ: no es necesariamente la deuda de hoy' : 'saldo a favor del contribuyente que declaró la DJ'),
+    pagosPosteriores: posteriores.length ? cifra(pagado, 'verificado', 'Cuentas Tributarias', `${posteriores.length} pago(s) imputados al período ${anio} desde la presentación`) : faltante(`sin pagos imputados al período ${anio} desde la presentación en lo bajado de Cuentas Tributarias (no prueba que esté impago: puede haber un plan de pagos)`),
+    restante: saldo <= 0 ? cifra(0, 'importado', fuente, 'la DJ no dejó saldo a pagar') : pagado >= saldo - 1 ? cifra(0, 'verificado', 'saldo de la DJ − pagos posteriores', 'cubierto por los pagos registrados en Cuentas Tributarias')
+      : { ...faltante(pagado ? `saldo sin conciliar: la DJ declaró ${saldo} y se encontraron pagos posteriores por ${pagado}`
+        : `saldo sin conciliar: la DJ declaró ${saldo} y no se encontraron pagos posteriores imputados al período (no prueba que esté impago: puede haber un plan de pagos o pagos fuera de lo bajado)`), diferencia: r2(saldo - pagado) },
+  };
 }
 
 /**
@@ -352,11 +395,14 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const deCaja = (clave) => pagos.filas.filter((x) => x.computado && x.clave === clave);
   const ganPagosMes = deCaja('ganancias');
   // DJ anual del año anterior (de ella salen los anticipos de este año): la carga el contribuyente, una vez por año.
+  // Primero la DJ leída de su PDF (determinado, pagos a cuenta y saldo); si no, la carga a mano del determinado.
+  const djLeida = djAnualLeida(outDir, datosDir, Number(anio) - 1);
   const djAnt = manualesDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'] ?? importadoDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'];
   const ganancias = {
     impuesto: 'Ganancias', periodo: mes, declarado: faltante('es anual: la DJ de Ganancias (F.711) no se lee todavía'), estimado: ganEstimado,
     djAnteriorPresentada: (() => { const d = djAnualGanancias(datosDir, Number(anio) - 1); return d ? { fecha: d.fechaIso, formulario: d.formulario, version: d.version, nivel: 'verificado', fuente: d.fuente } : null; })(),
-    djAnterior: djAnt ? cifra(djAnt.importe, djAnt.cargas ? 'manual' : 'importado', `DJ ${Number(anio) - 1}`, 'impuesto determinado del año anterior: base de los anticipos de este año') : faltante(`falta la DJ ${Number(anio) - 1} (cargala desde el cartel de pendientes)`),
+    djAnual: djLeida,
+    djAnterior: djLeida ? djLeida.determinado : djAnt ? cifra(djAnt.importe, djAnt.cargas ? 'manual' : 'importado', `DJ ${Number(anio) - 1}`, 'impuesto determinado del año anterior: base de los anticipos de este año') : faltante(`falta la DJ ${Number(anio) - 1} (cargala desde el cartel de pendientes)`),
     pagos: faltante('impuesto anual: los pagos no se atribuyen a un mes'),
     pagosEnElMes: ganPagosMes.length ? cifra(ganPagosMes.reduce((n, x) => n + (x.importe ?? 0), 0), ganPagosMes.every((x) => x.nivel === 'verificado') ? 'verificado' : 'manual',
       [...new Set(ganPagosMes.map((x) => x.fuente))].join(' + '), ganPagosMes.map((x) => `${fechaDma(x.fecha)}: ${x.corresponde}`).join(' · ') || null) : null,

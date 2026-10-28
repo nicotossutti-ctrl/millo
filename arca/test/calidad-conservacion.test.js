@@ -241,9 +241,9 @@ test('conservarIntento: guarda cada intento aparte y la corrida mala no pisa la 
 
 test('conservarIntento sanea el resumen guardado (CUIT e importes)', () => {
   const datosDir = tmp();
-  conservarIntento({ datosDir, id: 'x', cuando: 'c1', clave: null, resultado: { estado: 'error', filas: 0, error: 'CUIT 20353544773 total $ 63.871.446,29' } });
+  conservarIntento({ datosDir, id: 'x', cuando: 'c1', clave: null, resultado: { estado: 'error', filas: 0, error: 'CUIT 20111111112 total $ 12.345.678,90' } });
   const txt = fs.readFileSync(path.join(datosDir, 'x', 'intentos', 'c1', 'intento.json'), 'utf8') + fs.readFileSync(path.join(datosDir, 'x', 'intentos.jsonl'), 'utf8');
-  assert.doesNotMatch(txt, /20353544773|871\.446/);
+  assert.doesNotMatch(txt, /20111111112|345\.678/);
 });
 
 // Caso pedido en la revisión: Cuenta Corriente que lee por accidente los 5 vencimientos de la home.

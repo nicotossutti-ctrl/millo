@@ -86,17 +86,21 @@ async function cargarMes(mes) {
   }
 }
 
-/** Sube el PDF de una CM03 (el «Reporte» de SIFERE). `mes`: el período que se espera (null: el que diga el PDF). */
-async function subirCm03(file, mes, msg) {
+/**
+ * Sube el PDF de una DJ: la CM03 (el «Reporte» de SIFERE) o la DJ anual de Ganancias (F.2711 / F.711). `tipo`: 'cm03',
+ * 'ddjj-ganancias' o null (lo reconoce el servidor); `mes` / `anio`: el período que se espera (null: el que diga el PDF).
+ */
+async function subirPdf(file, { tipo = null, mes = null, anio = null }, msg) {
   msg.textContent = `Leyendo ${file.name}…`;
   try {
     const b64 = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => mal(r.error); r.readAsDataURL(file); });
-    const c = await api('/api/cm03/importar', { nombre: file.name, contenido: b64, mes });
-    msg.textContent = c.estado === 'valida'
-      ? `${c.yaImportado ? 'Ya estaba importada. ' : ''}CM03 ${c.periodo.slice(5)}/${c.periodo.slice(0, 4)} ${c.rectificativa ? `rectificativa ${c.rectificativa}` : 'original'}: impuesto determinado ${fmt(c.impuestoDeterminadoTotal)}, total a pagar ${fmt(c.totalAPagarDeclarado)} (${c.jurisdicciones.length} jurisdicciones). Presentarla no es pagarla.`
-      : `El PDF quedó en revisión y no se usa: ${c.motivos.join('; ')}`;
+    const c = await api('/api/pdf/importar', { tipo, nombre: file.name, contenido: b64, mes, anio });
+    const ya = c.yaImportado ? 'Ya estaba importada. ' : '';
+    if (c.estado !== 'valida') msg.textContent = `El PDF quedó en revisión y no se usa: ${c.motivos.join('; ')}`;
+    else if (c.documento === 'cm03') msg.textContent = `${ya}CM03 ${c.periodo.slice(5)}/${c.periodo.slice(0, 4)} ${c.rectificativa ? `rectificativa ${c.rectificativa}` : 'original'}: impuesto determinado ${fmt(c.impuestoDeterminadoTotal)}, total a pagar ${fmt(c.totalAPagarDeclarado)} (${c.jurisdicciones.length} jurisdicciones). Presentarla no es pagarla.`;
+    else msg.textContent = `${ya}DJ de Ganancias ${c.anio} (F.${c.formulario}, ${c.secuencia ? `rectificativa ${c.secuencia}` : 'original'}): impuesto determinado ${fmt(c.impuestoDeterminado)}, pagos a cuenta ${fmt(c.pagosACuenta)}, saldo declarado ${fmt((c.saldoAFavorArca ?? 0) - (c.saldoAFavorContribuyente ?? 0))}. Es el saldo de la DJ, no necesariamente la deuda de hoy.`;
     await renderPendientes(); if (estado.mes) await cargarMes(estado.mes);
-    if ($('#cm03-lista')) await listarCm03();
+    if ($('#pdf-lista')) await listarPdfs();
   } catch (e) { msg.textContent = e.message; }
 }
 
@@ -124,10 +128,11 @@ async function renderPendientes() {
     };
     let form = null;
     if (x.accion.tipo === 'cargar') form = h('div', {}, formCarga(x.accion, true), msg);
-    if (x.accion.tipo === 'cm03') {
-      const entrada = h('input', { type: 'file', accept: '.pdf,application/pdf', hidden: true, 'aria-label': `PDF de la CM03: ${x.titulo}` });
-      entrada.addEventListener('change', () => entrada.files[0] && subirCm03(entrada.files[0], x.accion.mes, msg));
-      form = h('div', {}, h('div', { class: 'carga' }, h('button', { class: 'primario', onclick: () => entrada.click() }, 'Subir el PDF de la CM03'), entrada),
+    if (x.accion.tipo === 'cm03' || x.accion.tipo === 'ddjj-ganancias') {
+      const cual = x.accion.tipo === 'cm03' ? 'de la CM03' : 'de la DJ';
+      const entrada = h('input', { type: 'file', accept: '.pdf,application/pdf', hidden: true, 'aria-label': `PDF ${cual}: ${x.titulo}` });
+      entrada.addEventListener('change', () => entrada.files[0] && subirPdf(entrada.files[0], { tipo: x.accion.tipo, mes: x.accion.mes ?? null, anio: x.accion.anio ?? null }, msg));
+      form = h('div', {}, h('div', { class: 'carga' }, h('button', { class: 'primario', onclick: () => entrada.click() }, `Subir el PDF ${cual}`), entrada),
         x.accion.alternativa ? h('details', {}, h('summary', { class: 'nota' }, 'o cargar el importe a mano'), formCarga(x.accion.alternativa, false)) : null, msg);
     }
     return h('li', {}, h('strong', {}, x.titulo), x.estadoPago ? h('span', { class: 'estado pend' }, x.estadoPago) : null,
@@ -138,7 +143,7 @@ async function renderPendientes() {
     h('summary', {}, h('strong', {}, `Te falta cargar ${lista.length === 1 ? '1 dato' : `${lista.length} datos`} de ARCA y SIFERE`),
       h('span', { class: 'nota' }, ' · lo que ARCA no entrega sola; el cartel desaparece cuando está cargado')),
     ...grupos.map(([mes, xs], n) => h('details', { open: n === 0 },
-      h('summary', {}, h('strong', {}, mes.endsWith('-12') && xs.every((x) => x.accion.concepto === 'ganancias-determinado') ? `Ganancias ${mes.slice(0, 4)} (anual)` : nombreMes(mes)), h('span', { class: 'nota' }, ` · ${xs.length} pendiente(s)`)),
+      h('summary', {}, h('strong', {}, mes.endsWith('-12') && xs.every((x) => x.clave.startsWith('ganancias-determinado')) ? `Ganancias ${mes.slice(0, 4)} (anual)` : nombreMes(mes)), h('span', { class: 'nota' }, ` · ${xs.length} pendiente(s)`)),
       h('ul', { class: 'lista' }, ...xs.map(item)))))));
 }
 
@@ -176,6 +181,7 @@ function renderImpuestos() {
       ganancias.estimado.valor != null ? 'Provisión estimada del mes' : 'Sin provisión (faltan datos)',
       ganancias.pagosEnElMes ? `Pagado en el mes: ${fmt(ganancias.pagosEnElMes.valor)} (de otro período, ver abajo)` : null,
       ganancias.djAnterior?.valor != null ? `${ganancias.djAnterior.fuente}: impuesto determinado ${fmt(ganancias.djAnterior.valor)}` : null,
+      ganancias.djAnual ? `Saldo declarado en esa DJ: ${fmt(ganancias.djAnual.saldoDeclarado.valor)} (${ganancias.djAnual.restante.valor === 0 ? 'cubierto por pagos registrados' : 'sin conciliar con los pagos posteriores'})` : null,
       ganancias.djAnteriorPresentada ? `DJ anual del año anterior presentada: ${fecha(ganancias.djAnteriorPresentada.fecha)} (F.${ganancias.djAnteriorPresentada.formulario})` : null,
     ]),
     tarjeta('Autónomos', autonomos.declarado, null, [autonomos.pagos.valor != null ? `Pagado en el mes: ${fmt(autonomos.pagos.valor)}` : 'Sin pagos registrados en el mes']),
@@ -401,25 +407,26 @@ function renderImportar() {
   entrada.addEventListener('change', () => entrada.files[0] && subir(entrada.files[0]));
   poner($('#importar'), 
     h('div', { class: 'caja' }, h('h2', {}, 'Importar archivo'), zona, entrada, h('div', { id: 'imp-trabajo' })),
-    h('div', { class: 'caja' }, h('h2', {}, 'CM03 importadas (PDF)'), h('div', { id: 'cm03-lista' }, 'Cargando…')),
+    h('div', { class: 'caja' }, h('h2', {}, 'DJ importadas en PDF (CM03 y Ganancias)'), h('div', { id: 'pdf-lista' }, 'Cargando…')),
     h('div', { class: 'caja' }, h('h2', {}, 'Importaciones hechas'), h('div', { id: 'imp-lista' }, 'Cargando…')));
-  listarImportaciones(); listarCm03();
+  listarImportaciones(); listarPdfs();
 }
 
-async function listarCm03() {
-  const cont = $('#cm03-lista');
+async function listarPdfs() {
+  const cont = $('#pdf-lista');
   try {
-    const xs = await api('/api/cm03');
-    if (!xs.length) { poner(cont, h('p', { class: 'nota' }, 'Todavía no importaste ninguna CM03 en PDF.')); return; }
-    poner(cont, h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Período', 'Versión', 'Estado', 'Determinado', 'A pagar', 'Archivo', ''].map((x, k) => h('th', { class: k === 3 || k === 4 ? 'num' : '' }, x)))),
+    const xs = await api('/api/pdf');
+    if (!xs.length) { poner(cont, h('p', { class: 'nota' }, 'Todavía no importaste ninguna DJ en PDF.')); return; }
+    poner(cont, h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['DJ', 'Período', 'Versión', 'Estado', 'Determinado', 'A pagar / saldo', 'Archivo', ''].map((x, k) => h('th', { class: k === 4 || k === 5 ? 'num' : '' }, x)))),
       h('tbody', {}, ...xs.slice().reverse().map((c) => h('tr', {},
-        h('td', { 'data-rotulo': 'Período' }, c.periodo ? nombreMes(c.periodo) : '—'),
-        h('td', { 'data-rotulo': 'Versión' }, c.rectificativa == null ? '—' : c.rectificativa ? `rectificativa ${c.rectificativa}` : 'original'),
+        h('td', { 'data-rotulo': 'DJ' }, c.documento === 'cm03' ? 'CM03 (IIBB)' : `Ganancias${c.formulario ? ` F.${c.formulario}` : ''}`),
+        h('td', { 'data-rotulo': 'Período' }, c.periodo ? (c.documento === 'cm03' ? nombreMes(c.periodo) : c.periodo) : '—'),
+        h('td', { 'data-rotulo': 'Versión' }, c.version == null ? '—' : c.version ? `rectificativa ${c.version}` : 'original'),
         h('td', { 'data-rotulo': 'Estado', title: c.motivos?.join('; ') || null }, h('span', { class: `estado ${c.estado === 'valida' ? 'ok' : 'alerta'}` }, c.estado === 'valida' ? 'leída' : 'en revisión'),
           c.estado !== 'valida' ? h('div', { class: 'nota' }, c.motivos.join('; ')) : null),
-        h('td', { class: 'num', 'data-rotulo': 'Determinado' }, fmt(c.impuestoDeterminadoTotal)), h('td', { class: 'num', 'data-rotulo': 'A pagar' }, fmt(c.totalAPagarDeclarado)),
+        h('td', { class: 'num', 'data-rotulo': 'Determinado' }, fmt(c.determinado)), h('td', { class: 'num', 'data-rotulo': 'A pagar / saldo' }, fmt(c.aPagar)),
         h('td', { 'data-rotulo': 'Archivo' }, c.archivo),
-        h('td', {}, h('button', { onclick: async () => { if (!confirm(`¿Quitar la CM03 "${c.archivo}"? El PDF queda guardado.`)) return; try { await api('/api/cm03/eliminar', { id: c.id }); await listarCm03(); await cargarMes(estado.mes); await renderPendientes(); } catch (e) { alert(e.message); } } }, 'Quitar')))))));
+        h('td', {}, h('button', { onclick: async () => { if (!confirm(`¿Quitar "${c.archivo}"? El PDF queda guardado.`)) return; try { await api('/api/pdf/eliminar', { documento: c.documento, id: c.id }); await listarPdfs(); await cargarMes(estado.mes); await renderPendientes(); } catch (e) { alert(e.message); } } }, 'Quitar')))))));
   } catch (e) { poner(cont, h('div', { class: 'error' }, e.message)); }
 }
 
@@ -428,7 +435,7 @@ async function subir(file) {
   if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
     const msg = h('div', { class: 'nota', role: 'status' });
     poner(trabajo, msg);
-    return subirCm03(file, null, msg);
+    return subirPdf(file, {}, msg);
   }
   poner(trabajo, h('div', { class: 'cargando' }, `Leyendo ${file.name}…`));
   try {

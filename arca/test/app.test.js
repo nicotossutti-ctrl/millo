@@ -159,16 +159,16 @@ function escenario({ conDeuda = true } = {}) {
 
 test('DJ: manda el rótulo de pantalla; el JSON corrobora (crédito y percepciones ya no quedan ambiguos)', () => {
   const conceptos = [
-    { concepto: 'Total del crédito fiscal del período', importe: 30157579.95 },
-    { concepto: 'json dj debito credito fiscal total debito fiscal', importe: 37445589.63 },
-    { concepto: 'json dj determinacion impuesto total credito fiscal', importe: 30157579.95 },
-    { concepto: 'Total de retenciones, percepciones y pagos a cuenta neto de restituciones', importe: 3602044.66 },
-    { concepto: 'json dj determinacion impuesto total retenciones percepciones', importe: 3615310.54 },
+    { concepto: 'Total del crédito fiscal del período', importe: 1234567.89 },
+    { concepto: 'json dj debito credito fiscal total debito fiscal', importe: 2345678.91 },
+    { concepto: 'json dj determinacion impuesto total credito fiscal', importe: 1234567.89 },
+    { concepto: 'Total de retenciones, percepciones y pagos a cuenta neto de restituciones', importe: 345678.12 },
+    { concepto: 'json dj determinacion impuesto total retenciones percepciones', importe: 345999.01 },
   ];
   const id = identificarConceptosIva(conceptos);
-  assert.equal(id.creditoFiscal.importe, 30157579.95);
+  assert.equal(id.creditoFiscal.importe, 1234567.89);
   assert.equal(id.creditoFiscal.json, 'coincide');
-  assert.equal(id.retencionesPercepciones.importe, 3602044.66);
+  assert.equal(id.retencionesPercepciones.importe, 345678.12);
   assert.equal(id.retencionesPercepciones.json, 'difiere', 'se informa que el JSON trae otro subtotal');
   // Sin pantalla, el JSON solo: si da valores distintos, sigue ambiguo.
   assert.ok(identificarConceptosIva(conceptos.filter((c) => c.concepto.startsWith('json'))).creditoFiscal.ambiguo);

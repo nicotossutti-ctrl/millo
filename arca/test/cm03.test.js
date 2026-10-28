@@ -66,6 +66,15 @@ test('CM03 en revisión (nunca se completa con 0): totales que no cierran, celda
   assert.match(motivo({ titulos: cambiado }), /orden esperado/);
 });
 
+test('CM03: la fecha con el rótulo del reporte real («Datos Presentación Arca: DDJJ presentada el …»)', () => {
+  const r = leerCm03(lineas([[['Período: 202609', 10]], [['Original', 10]], [['Estado: PRESENTADA', 10]],
+    [['Datos Presentación Arca: DDJJ presentada el 14/10/2026 - 09:08:07 ante ARCA', 10]], ...TITULOS,
+    fila('901 - Uno', ['10,00', '0,00', '0,00', '0,00', '10,00', '10,00']), fila('TOTALES', ['10,00', '0,00', '0,00', '0,00', '10,00', '10,00']), [['Total a pagar: $ 10,00', 10]]]));
+  assert.equal(r.estado, 'valida', r.motivos.join('; '));
+  assert.equal(r.fechaPresentacion, '2026-10-14 09:08:07');
+  assert.deepEqual(r.avisos, []);
+});
+
 test('CM03 rectificativa: el número sale de la carátula', () => {
   const r = leerCm03(lineas([[['Período: 202609', 10]], [['Rectificativa: 2', 10]], [['Estado: PRESENTADA', 10]], ...TITULOS,
     fila('901 - Uno', ['10,00', '0,00', '0,00', '0,00', '10,00', '10,00']), fila('TOTALES', ['10,00', '0,00', '0,00', '0,00', '10,00', '10,00'])]));

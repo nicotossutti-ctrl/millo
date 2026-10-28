@@ -94,12 +94,12 @@ test('correrUno sanea el CUIT y datos sensibles en el error antes de guardarlo',
   const outDir = dirTmp();
   const r = await correrUno(sesionFalsa, { id: 'y', nombre: 'Y', fuente: 7 }, {
     baseDir: outDir,
-    runner: async () => { throw new Error('fallo con CUIT 20353544773 y total $ 63.871.446,29'); },
+    runner: async () => { throw new Error('fallo con CUIT 20111111112 y total $ 12.345.678,90'); },
   });
-  assert.doesNotMatch(r.error, /20353544773|871\.446/);
-  assert.match(r.error, /20-XXXXXXXX-3/);
+  assert.doesNotMatch(r.error, /20111111112|345\.678/);
+  assert.match(r.error, /20-XXXXXXXX-2/);
   const guardado = fs.readFileSync(path.join(outDir, 'y', 'error.txt'), 'utf8');
-  assert.doesNotMatch(guardado, /20353544773|871\.446/);
+  assert.doesNotMatch(guardado, /20111111112|345\.678/);
 });
 
 test('clasificarRelevamiento detecta datos, exportacion y si esta listo para extractor', () => {

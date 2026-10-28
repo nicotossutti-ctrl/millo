@@ -134,7 +134,9 @@ export function leerCm03(paginas, { mes = null } = {}) {
 
   const estadoDj = /\bpresentada\b/.test(plano) ? 'PRESENTADA' : null;
   if (!estadoDj) motivos.push('el reporte no dice PRESENTADA (puede ser un borrador)');
-  m = plano.match(/fecha\s*(?:de\s*)?presentacion\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?/);
+  // «Fecha de Presentación: dd/mm/aaaa hh:mm» o, como rotula el reporte real, «DDJJ presentada el dd/mm/aaaa - hh:mm:ss».
+  m = plano.match(/fecha\s*(?:de\s*)?presentacion\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?/)
+    ?? plano.match(/ddjj\s+presentada\s+el\s+(\d{2})\/(\d{2})\/(\d{4})(?:\s*-?\s*(\d{2}:\d{2}(?::\d{2})?))?/);
   const fechaPresentacion = m ? `${m[3]}-${m[2]}-${m[1]}${m[4] ? ` ${m[4]}` : ''}` : null;
   if (!fechaPresentacion) avisos.push('no se encontró la fecha de presentación');
 

@@ -10,21 +10,21 @@ import { sanitizarHtml, sanitizarUrl, sanitizarTexto } from '../src/portal/diagn
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('el HTML saneado no conserva scripts, valores de inputs, ViewState, CUIT ni importes', () => {
-  const html = `<html><script>var token="abc"</script><form><input name="javax.faces.ViewState" value="-123:-456"><input id="F1:password" value="secreta"><td>20-35354477-3</td><td>$ 63.871.446,29</td><td>CUIT 20353544773</td></form></html>`;
+  const html = `<html><script>var token="abc"</script><form><input name="javax.faces.ViewState" value="-123:-456"><input id="F1:password" value="secreta"><td>20-11111111-2</td><td>$ 12.345.678,90</td><td>CUIT 20111111112</td></form></html>`;
   const out = sanitizarHtml(html);
-  assert.doesNotMatch(out, /abc|secreta|-123:-456|35354477|871\.446/);
-  assert.match(out, /20-XXXXXXXX-3/);
+  assert.doesNotMatch(out, /abc|secreta|-123:-456|11111111|345\.678/);
+  assert.match(out, /20-XXXXXXXX-2/);
   assert.match(out, /\[importe\]/);
   assert.match(out, /value="\[omitido\]"/);
 });
 
 test('las URLs de red se guardan sin query string', () => {
-  assert.equal(sanitizarUrl('https://fes.afip.gob.ar/mcmp/jsp/x.do?token=abc&cuit=20353544773'), 'https://fes.afip.gob.ar/mcmp/jsp/x.do');
+  assert.equal(sanitizarUrl('https://fes.afip.gob.ar/mcmp/jsp/x.do?token=abc&cuit=20111111112'), 'https://fes.afip.gob.ar/mcmp/jsp/x.do');
   assert.equal(sanitizarUrl('no es url'), '[url]');
 });
 
 test('el texto de estructura enmascara CUIT', () => {
-  assert.equal(sanitizarTexto('Representado: 20353544773'), 'Representado: 20-XXXXXXXX-3');
+  assert.equal(sanitizarTexto('Representado: 20111111112'), 'Representado: 20-XXXXXXXX-2');
   assert.equal(sanitizarTexto(null), null);
 });
 
