@@ -52,7 +52,7 @@ test('el .gitignore declara cada ruta sensible (no requiere git)', () => {
 // ---------------- Muestra de filas en el relevamiento (navegador real, si hay) ----------------
 test('relevamiento: muestra enmascarada de las primeras filas y de las acciones de cada fila', async (t) => {
   const { relevarPagina, enmascararMuestra, resumenRelevamiento } = await import('../src/portal/relevar.js');
-  assert.equal(enmascararMuestra('$ 45.000,00 · 1234,56 · 20-12345678-3 · 14/10/2026 · 202609 · Trans 1199249012'), '[importe] · [importe] · 20-XXXXXXXX-3 · 14/10/2026 · 202609 · Trans [número]');
+  assert.equal(enmascararMuestra('$ 45.000,00 · 1234,56 · 20-12345678-3 · 14/10/2026 · 202609 · Trans 1234567890'), '[importe] · [importe] · 20-XXXXXXXX-3 · 14/10/2026 · 202609 · Trans [número]');
   let chromium;
   try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
   let b;
