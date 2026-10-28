@@ -146,11 +146,13 @@ function renderImpuestos() {
     ]),
     tarjeta('Ingresos Brutos', iibb.declarado.valor != null ? iibb.declarado : iibb.estimado, iibb.estado, [
       iibb.declarado.valor != null ? 'Declarado (CM03)' : iibb.estimado.valor != null ? 'Estimado' : 'Sin CM03: cargalo desde el cartel de pendientes',
+      iibb.presentacion?.fecha ? `CM03 presentada: ${fecha(iibb.presentacion.fecha)} (${iibb.presentacion.nota.replace(/^CM03 /, '').replace(/ presentada.*/, '')}, SIFERE)` : null,
     ]),
     tarjeta('Ganancias', ganancias.estimado, ganancias.estado, [
       ganancias.estimado.valor != null ? 'Provisión estimada del mes' : 'Sin provisión (faltan datos)',
       ganancias.pagosEnElMes ? `Pagado en el mes: ${fmt(ganancias.pagosEnElMes.valor)} (de otro período, ver abajo)` : null,
       ganancias.djAnterior?.valor != null ? `${ganancias.djAnterior.fuente}: impuesto determinado ${fmt(ganancias.djAnterior.valor)}` : null,
+      ganancias.djAnteriorPresentada ? `DJ anual del año anterior presentada: ${fecha(ganancias.djAnteriorPresentada.fecha)} (F.${ganancias.djAnteriorPresentada.formulario})` : null,
     ]),
     tarjeta('Autónomos', autonomos.declarado, null, [autonomos.pagos.valor != null ? `Pagado en el mes: ${fmt(autonomos.pagos.valor)}` : 'Sin pagos registrados en el mes']),
   );
@@ -213,7 +215,13 @@ function renderImpuestos() {
   const config = !p.configuracion.contribuyente
     ? h('div', { class: 'aviso' }, 'Para estimar Ingresos Brutos, Ganancias y autónomos falta params/contribuyente.json (copiá params/contribuyente.example.json y completalo con los datos de tu contador).')
     : null;
-  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), h('div', { class: 'columnas' }, bloqueDeja(p), bloquePfos(p)));
+  const djs = p.djDelPeriodo ?? [];
+  const bloqueDj = h('div', { class: 'caja' }, h('h2', {}, `Declaraciones juradas presentadas del período ${p.mes.slice(5)}/${p.mes.slice(0, 4)}`),
+    h('p', { class: 'nota' }, 'Según las DJ de Cuentas Tributarias ya bajadas (todas las nacionales: IVA, retenciones como agente, cargas sociales…). Una DJ que no figura puede no estar en lo bajado.'),
+    djs.length ? h('table', { class: 'apilable' }, h('thead', {}, h('tr', {}, ...['Presentada', 'Formulario', 'Impuesto', 'Versión'].map((x) => h('th', {}, x)))),
+      h('tbody', {}, ...djs.map((d) => h('tr', {}, h('td', { 'data-rotulo': 'Presentada' }, d.fecha ?? '—'), h('td', { 'data-rotulo': 'Formulario' }, `F.${d.formulario}`),
+        h('td', { 'data-rotulo': 'Impuesto' }, d.impuesto), h('td', { 'data-rotulo': 'Versión' }, d.version ?? '—'))))) : h('p', { class: 'no-disponible' }, 'No hay DJ de este período en lo bajado de Cuentas Tributarias.'));
+  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloquePfos(p));
 }
 
 // ---------------- Cargas a mano (pagos que no están en ARCA) ----------------

@@ -78,12 +78,31 @@ function relevarEnDocumento() {
       const filas = esComp
         ? [...e.querySelectorAll('[role=row]')].filter((r) => r.querySelector('[role=gridcell], [role=cell], .e-rowcell')).length
         : e.querySelectorAll('tbody tr').length;
-      return { id: e.id || null, cls: e.className?.toString?.().slice(0, 100) || null, visible: vis(e), tipo: esComp ? 'componente' : 'table', encabezados, filas };
+      // Muestra de las primeras filas (todas, también las de encabezado sin <th>, como en CCMA): el texto de cada celda y
+      // sus controles (enlaces, imágenes, botones) con su título. Sirve para escribir el extractor sin adivinar qué columna
+      // es cuál ni qué acción tiene cada fila (p. ej. «Ver» en la lista de DJ de SIFERE). Se enmascara en sanear().
+      const filasMuestra = (esComp ? [...e.querySelectorAll('[role=row]')] : [...e.querySelectorAll('tr')]).slice(0, 6);
+      const control = (c) => ({ tag: c.tagName.toLowerCase(), texto: (c.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40) || null,
+        title: c.getAttribute('title'), alt: c.getAttribute('alt'), ariaLabel: c.getAttribute('aria-label'), onclick: c.hasAttribute('onclick') || undefined,
+        src: c.tagName === 'IMG' ? (c.getAttribute('src') || '').split('/').pop().slice(0, 40) : undefined });
+      const muestra = filasMuestra.map((r) => [...r.querySelectorAll(esComp ? '[role=gridcell], [role=cell], [role=columnheader], .e-rowcell' : ':scope > td, :scope > th')].slice(0, 20).map((c) => ({
+        texto: txt(c) || null,
+        controles: [...c.querySelectorAll('a, img, button, input[type=image], input[type=button], input[type=submit], [onclick]')].slice(0, 6).map(control),
+      })));
+      return { id: e.id || null, cls: e.className?.toString?.().slice(0, 100) || null, visible: vis(e), tipo: esComp ? 'componente' : 'table', encabezados, filas, muestra };
     }), 30),
     paginacion: lim(todos.filter((x) => es(x, '.dataTables_info, .dataTables_paginate, .dataTables_length, .pagination, [class*="pagin" i], [id*="pagin" i], [class*="_info"], [id*="_info"], select[name*="length"]') && vis(x.e)).map(desc), 30),
     mensajes: lim(todos.filter((x) => es(x, '.alert, .mensaje, .error, .warning, [role=alert], .dataTables_empty, .text-danger, .text-warning') && vis(x.e)).map((x) => (x.e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 160)).filter(Boolean), 20),
   };
 }
+
+// En la muestra de filas van datos reales: además del CUIT y los importes con miles, se ocultan los importes con
+// decimales y los números largos (transacciones, documentos). Quedan fechas y períodos, que hacen falta para el extractor.
+export function enmascararMuestra(t) {
+  return t == null ? t : sanitizarTexto(String(t)).replace(/-?\d+[.,]\d{2}(?!\d)/g, '[importe]').replace(/\d{9,}/g, '[número]');
+}
+const sanearMuestra = (m) => (Array.isArray(m) ? m.map(sanearMuestra) : m && typeof m === 'object'
+  ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === 'string' ? enmascararMuestra(v) : sanearMuestra(v)])) : m);
 
 function sanear(obj) {
   if (obj == null) return obj;
@@ -91,7 +110,7 @@ function sanear(obj) {
   if (Array.isArray(obj)) return obj.map(sanear);
   if (typeof obj === 'object') {
     const o = {};
-    for (const [k, v] of Object.entries(obj)) o[k] = (k === 'href' || k === 'src' || k === 'url' || k === 'action') && typeof v === 'string' && /^https?:/i.test(v) ? sanitizarUrl(v) : sanear(v);
+    for (const [k, v] of Object.entries(obj)) o[k] = k === 'muestra' ? sanearMuestra(v) : (k === 'href' || k === 'src' || k === 'url' || k === 'action') && typeof v === 'string' && /^https?:/i.test(v) ? sanitizarUrl(v) : sanear(v);
     return o;
   }
   return obj;
@@ -142,7 +161,12 @@ export function resumenRelevamiento(rel) {
     for (const i of f.iframes) l.push(`  iframe ${attrs(i)} src=${i.src ?? ''}`);
     for (const m of f.menus.slice(0, 10)) l.push(`  menú   ${attrs(m)}: ${m.items.slice(0, 25).join(' | ')}`);
     if (f.textosVisibles.length) l.push(`  títulos: ${f.textosVisibles.slice(0, 30).join(' | ')}`);
-    for (const t of f.tablas ?? []) l.push(`  tabla  ${attrs(t)} ${t.visible ? 'visible' : 'oculta'} · ${t.filas} filas · columnas: ${t.encabezados.join(' | ')}`);
+    for (const t of f.tablas ?? []) {
+      l.push(`  tabla  ${attrs(t)} ${t.visible ? 'visible' : 'oculta'} · ${t.filas} filas · columnas: ${t.encabezados.join(' | ')}`);
+      for (const fila of (t.muestra ?? []).slice(0, 4)) {
+        l.push(`    fila: ${fila.map((c) => [c.texto ?? '', ...(c.controles ?? []).map((x) => `[${x.tag}${x.title || x.alt || x.ariaLabel || x.texto ? `: ${x.title || x.alt || x.ariaLabel || x.texto}` : ''}]`)].join(' ').trim()).join(' | ')}`);
+      }
+    }
     for (const pg of f.paginacion ?? []) l.push(`  paginación ${attrs(pg)}: ${JSON.stringify(pg.text ?? '')}`);
     for (const m of f.mensajes ?? []) l.push(`  mensaje: ${JSON.stringify(m)}`);
   }

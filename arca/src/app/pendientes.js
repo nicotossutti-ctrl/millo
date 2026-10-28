@@ -16,6 +16,7 @@ import { leerManifiesto } from '../portal/misComprobantes.js';
 import { manualesDelMes } from './manuales.js';
 import { importadoDelMes, CONCEPTOS } from './importar.js';
 import { mesAnterior, pagosDelPeriodo, volantesSifere, contribuyente, estadoPago, cifra } from './panel.js';
+import { cm03Sifere, djAnualGanancias } from './presentaciones.js';
 
 export const MESES_REVISADOS = 6;
 const NOMBRE_MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -59,9 +60,11 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
     }
     const iibb = cargado(outDir, mes, 'iibb-declarado');
     if (!iibb) {
-      out.push({ clave: `iibb-declarado:${mes}`, mes, titulo: `Ingresos Brutos de ${n}: impuesto determinado (CM03)`,
+      const cm = cm03Sifere(datosDir, mes)?.presentada;
+      const cual = cm ? `la CM03 ${cm.rectificativa ? `rectificativa ${cm.rectificativa}` : 'original'} presentada el ${cm.fechaPresentacion}` : `la DJ CM03 del período ${mes.slice(5)}/${mes.slice(0, 4)}`;
+      out.push({ clave: `iibb-declarado:${mes}`, mes, titulo: `Ingresos Brutos de ${n}: impuesto determinado (CM03)${cm ? ` · presentada el ${String(cm.fechaPresentacion).slice(0, 10)}` : ''}`,
         porque: 'es el impuesto de IIBB del mes; sin él solo hay una estimación',
-        como: `En SIFERE Web (Convenio Multilateral), la DJ CM03 del período ${mes.slice(5)}/${mes.slice(0, 4)}: el total de impuesto determinado de todas las jurisdicciones. Cargá ese número acá, o el archivo en «Importar archivo».`,
+        como: `En SIFERE Web (Convenio Multilateral), ${cual}: el total de impuesto determinado de todas las jurisdicciones. Cargá ese número acá, o el archivo en «Importar archivo».`,
         accion: { tipo: 'cargar', concepto: 'iibb-declarado', mes } });
     } else if (iibb.importe > 0) {
       const volantes = volantesSifere(datosDir, mes);
@@ -87,7 +90,8 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
   // Ganancias: la DJ anual del año anterior, una vez por año (desde julio; las prórrogas de ARCA la corren a veces).
   const anio = Number(hoy.slice(0, 4)) - 1;
   if (hoy.slice(5, 7) >= '07' && !cargado(outDir, `${anio}-12`, 'ganancias-determinado')) {
-    out.push({ clave: `ganancias-determinado:${anio}`, mes: `${anio}-12`, titulo: `Ganancias ${anio}: impuesto determinado de la DJ anual`,
+    const dj = djAnualGanancias(datosDir, anio);
+    out.push({ clave: `ganancias-determinado:${anio}`, mes: `${anio}-12`, titulo: `Ganancias ${anio}: impuesto determinado de la DJ anual${dj ? ` · F.${dj.formulario} presentada el ${dj.fecha}` : ''}`,
       porque: 'de esa DJ salen los anticipos que se pagan este año; los pagos ya se leen solos de Cuentas Tributarias',
       como: `En ARCA, «Ganancias Personas Humanas» (o el F.711 que presentó tu contador): el impuesto determinado del período fiscal ${anio}.`,
       accion: { tipo: 'cargar', concepto: 'ganancias-determinado', mes: `${anio}-12` } });

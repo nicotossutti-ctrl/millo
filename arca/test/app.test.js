@@ -434,3 +434,49 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
   assert.equal(panelMes(out, '2026-09', { hoy: '2026-10-28', ...op }).ganancias.djAnterior.valor, 5000000);
   assert.match(pendientesDeCarga(out, '2026-10-28', op).find((x) => x.accion.tipo === 'arca').como, /fiscalos\.ps1 correr/);
 });
+
+// ---------------- DJ presentadas (Cuentas Tributarias y SIFERE) ----------------
+test('DJ presentadas: Cuentas Tributarias (todas las nacionales del período, F.711 anual) y CM03 de SIFERE con su rectificativa', async () => {
+  const { djDelPeriodo, djAnualGanancias, cm03Sifere } = await import('../src/app/presentaciones.js');
+  const { pendientesDeCarga } = await import('../src/app/pendientes.js');
+  const out = escenario(); const d = path.join(out, 'datos');
+  const vig = (id, nombre, headers, rows) => {
+    fs.mkdirSync(path.join(d, id, 'vigente', 'acumulado'), { recursive: true });
+    fs.writeFileSync(path.join(d, id, 'vigente', 'acumulado', nombre), toCsv(rows, headers.map((h, i) => ({ header: h, value: (r) => r[i] }))));
+    fs.writeFileSync(path.join(d, id, 'vigente.json'), JSON.stringify({ acumulado: { cuando: '2026-10-25T14-00-00', nivel: 'validado', archivos: [nombre] } }));
+  };
+  // Estructura de las grillas reales (diagnóstico del 25/10), con datos inventados.
+  vig('ct-ddjj', 'dj.csv', ['Fecha Operación', 'Est.', 'Formulario', 'Versión', 'Impuesto', 'Periodo', 'Descripción', 'Observaciones'], [
+    ['16/10/2026 14:55', '0', '2051', '101', '30 - IVA', '20260900', 'Comprobante general', 'VALIDO'],
+    ['09/10/2026 10:35', '0', '744', '900', '220 - PRESENTAC. DJ RET. Y/O PERCEP', '20260900', 'Contribuyente No Inscripto en el Impuesto', 'VALIDO'],
+    ['05/10/2026 10:26', '0', '931', '4700', '301 - EMPLEADOR-APORTES SEG. SOCIAL', '20260900', 'Comprobante general', 'VALIDO'],
+    ['16/09/2026 12:32', '0', '2051', '101', '30 - IVA', '20260800', 'Comprobante general', 'VALIDO'],
+    ['23/06/2026 11:06', '0', '711', '2800', '11 - GANANCIAS PERSONAS FISICAS', '20250000', 'Comprobante general', 'VALIDO'],
+    ['01/06/2026 10:00', '0', '711', '2800', '11 - GANANCIAS PERSONAS FISICAS', '20250000', 'Comprobante general', 'RECHAZADO'],
+  ]);
+  vig('sifere-consultas-ddjj-mensuales', 'cm03.csv', ['Acciones', 'Anticipo', 'Estado', 'Fecha Creación', 'Fecha y Hora Presentación', 'Resultado Presentación'], [
+    ['', '202609 - 0', '4 - PRESENTADA', '14/10/2026', '14/10/2026 12:50:50', 'OK Transacción: 1'],
+    ['', '202605 - 1', '4 - PRESENTADA', '24/06/2026', '24/06/2026 14:43:10', 'OK Transacción: 2'],
+    ['', '202605 - 0', '4 - PRESENTADA', '17/06/2026', '17/06/2026 15:19:20', 'OK Transacción: 3'],
+    ['', '202605 - 2', '1 - BORRADOR', '17/06/2026', '', ''],
+  ]);
+  assert.deepEqual(djDelPeriodo(d, '2026-09').map((x) => x.formulario), ['2051', '744', '931']);
+  const gan = djAnualGanancias(d, 2025);
+  assert.deepEqual([gan.formulario, gan.fecha, gan.fechaIso], ['711', '23/06/2026 11:06', '2026-06-23'], 'la rechazada no cuenta');
+  assert.equal(djAnualGanancias(d, 2024), null);
+  assert.equal(cm03Sifere(d, '2026-09').presentada.rectificativa, 0);
+  const may = cm03Sifere(d, '2026-05');
+  assert.equal(may.presentada.rectificativa, 1, 'la rectificativa presentada más alta; el borrador no');
+  assert.equal(may.borradores.length, 1);
+  assert.equal(cm03Sifere(d, '2026-07').presentada, null);
+  // En el panel y en el cartel.
+  const p = panelMes(out, '2026-09', { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.iibb.presentacion.fecha, '2026-10-14'); assert.equal(p.iibb.presentacion.nivel, 'verificado');
+  assert.match(p.iibb.presentacion.nota, /original/);
+  assert.equal(p.ganancias.djAnteriorPresentada.formulario, '711');
+  assert.equal(p.djDelPeriodo.length, 3);
+  const pend = pendientesDeCarga(out, '2026-10-28', { paramsFile: path.join(out, 'x.json') });
+  assert.match(pend.find((x) => x.clave === 'iibb-declarado:2026-09').titulo, /presentada el 14\/10\/2026/);
+  assert.match(pend.find((x) => x.clave === 'iibb-declarado:2026-05').como, /rectificativa 1 presentada el 24\/06\/2026/);
+  assert.match(pend.find((x) => x.clave === 'ganancias-determinado:2025').titulo, /F\.711 presentada el 23\/06\/2026/);
+});

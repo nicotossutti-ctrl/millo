@@ -57,8 +57,8 @@ Informes (sin abrir ARCA, con los datos conservados en out/datos):
                                 Genera la clave del rol de solo lectura de PFOS (criptográfica), la guarda en .env y
                                 muestra su verificador SCRAM para el SQL de acceso. La clave real no se muestra.
   pfos:actualizar --periodo AAAA-MM[,AAAA-MM]
-                                Lee PFOS en solo lectura (solo la cuenta del contribuyente, verificada contra tus
-                                comprobantes emitidos de ARCA) y guarda la foto del mes para Rentabilidad.
+                                Lee de PFOS lo fiscal, en solo lectura (solo la cuenta del contribuyente, verificada
+                                por CAE contra tus comprobantes emitidos): ventas como control y retenciones de MP.
   dj:iva --periodo AAAA-MM      Vuelve a interpretar la DJ de IVA del mes con la última captura ya bajada
                                 (vista + JSON de Portal IVA), sin abrir ARCA. Si queda validada, se conserva.
 

@@ -226,6 +226,10 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
   importa dos veces y las filas ya importadas se omiten. Cada importación se puede deshacer.
+- **DJ presentadas**: el estado de presentación sale de lo ya bajado: las DJ de Cuentas Tributarias (todas las
+  nacionales del período: IVA, retenciones como agente, cargas sociales, y la DJ anual de Ganancias) y la lista de CM03
+  de SIFERE (con su rectificativa). Esas listas no traen el impuesto determinado de IIBB ni de Ganancias: se pide en el
+  cartel, ya diciendo cuál DJ presentada hay que mirar.
 - **Pendientes de carga** (cartel arriba de todo): lo que ARCA no entrega sola, por mes cerrado (CM03 de SIFERE y su pago,
   cuota de autónomos sin pagos en ARCA) y una vez por año (impuesto determinado de la DJ de Ganancias). Se carga el
   importe ahí mismo o el archivo en «Importar»; el pedido desaparece cuando está cargado.

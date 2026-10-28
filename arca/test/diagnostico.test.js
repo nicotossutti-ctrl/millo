@@ -48,3 +48,25 @@ test('el .gitignore declara cada ruta sensible (no requiere git)', () => {
   });
   for (const r of RUTAS_SENSIBLES) assert.ok(cubre(r), `${r} no está cubierto por .gitignore`);
 });
+
+// ---------------- Muestra de filas en el relevamiento (navegador real, si hay) ----------------
+test('relevamiento: muestra enmascarada de las primeras filas y de las acciones de cada fila', async (t) => {
+  const { relevarPagina, enmascararMuestra, resumenRelevamiento } = await import('../src/portal/relevar.js');
+  assert.equal(enmascararMuestra('$ 45.000,00 · 1234,56 · 20-12345678-3 · 14/10/2026 · 202609 · Trans 1199249012'), '[importe] · [importe] · 20-XXXXXXXX-3 · 14/10/2026 · 202609 · Trans [número]');
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  let b;
+  try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
+  try {
+    const pg = await b.newPage();
+    // Como CCMA (sin <th>: el encabezado es la primera fila) y como la lista de DJ de SIFERE (acciones con imágenes).
+    await pg.setContent(`<table id="cc"><tr><td>Período</td><td>Concepto</td><td>Debe</td></tr><tr><td>09/2026</td><td>Cuota</td><td>95000,00</td></tr></table>
+      <table id="dj"><thead><tr><th>Acciones</th><th>Anticipo</th></tr></thead><tbody><tr><td><a href="#"><img src="/img/lupa.gif" title="Ver DDJJ"></a><img src="x/imprimir.png" alt="Imprimir"></td><td>202609 - 0</td></tr></tbody></table>`);
+    const rel = await relevarPagina(pg);
+    const [cc, dj] = rel.frames[0].tablas;
+    assert.deepEqual(cc.muestra.map((f) => f.map((c) => c.texto)), [['Período', 'Concepto', 'Debe'], ['09/2026', 'Cuota', '[importe]']]);
+    const acciones = dj.muestra[1][0].controles;
+    assert.deepEqual(acciones.filter((x) => x.tag === 'img').map((x) => x.title ?? x.alt), ['Ver DDJJ', 'Imprimir']);
+    assert.ok(resumenRelevamiento(rel).some((l) => /fila: .*\[img: Ver DDJJ\]/.test(l)));
+  } finally { await b.close(); }
+});

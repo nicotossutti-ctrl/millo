@@ -24,6 +24,7 @@ import { manualesDelMes, listarManuales } from './manuales.js';
 import { comprobantesMes } from './comprobantes.js';
 import { leerFotos } from '../pfos/fotos.js';
 import { integraciones } from './integraciones.js';
+import { cm03Sifere, djAnualGanancias, djDelPeriodo } from './presentaciones.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -40,7 +41,7 @@ export function mesAnterior(hoy) {
 }
 
 /** Vigentes de una fuente con sus tablas: [{ clave, entrada, tablas: [{ nombre, headers, rows }] }]. */
-function vigentes(datosDir, id) {
+export function vigentes(datosDir, id) {
   return Object.entries(leerVigente(datosDir, id)).map(([clave, entrada]) => ({
     clave, entrada,
     tablas: (entrada.archivos ?? []).map((nombre) => {
@@ -252,6 +253,13 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const iibb = {
     impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, estimado: iibbEstimado, pagos: iibbPagado,
     saldoPendiente: iibbDeclarado.valor != null ? cifra(Math.max(0, iibbDeclarado.valor - (iibbPagado.valor ?? 0)), iibbDeclarado.nivel, 'declarado − pagos', iibbPagado.valor == null ? 'sin pagos registrados' : null) : faltante('falta lo declarado'),
+    // Presentación: la lista de DJ CM03 de SIFERE (fecha y rectificativa). No trae el impuesto determinado.
+    presentacion: (() => {
+      const c = cm03Sifere(datosDir, mes);
+      if (c?.presentada) return { fecha: fechaIso(String(c.presentada.fechaPresentacion ?? '').slice(0, 10)), nivel: 'verificado', fuente: c.fuente,
+        nota: `CM03 ${c.presentada.rectificativa ? `rectificativa ${c.presentada.rectificativa}` : 'original'} presentada${c.presentada.resultado ? ` (${c.presentada.resultado})` : ''}` };
+      return { fecha: null, nivel: 'faltante', nota: c ? `la lista de SIFERE conservada no tiene la CM03 de ${mes} presentada${c.borradores.length ? ' (hay un borrador)' : ''}` : 'no hay listas de SIFERE conservadas' };
+    })(),
     vencimientoPresentacion: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
     vencimientoPago: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
     estado: iibbDeclarado.valor != null ? estadoPago(iibbDeclarado.valor, iibbPagos) : iibbEstimado.valor != null ? 'solo estimado' : 'sin datos',
@@ -291,6 +299,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   const djAnt = manualesDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'] ?? importadoDelMes(outDir, `${Number(anio) - 1}-12`)['ganancias-determinado'];
   const ganancias = {
     impuesto: 'Ganancias', periodo: mes, declarado: faltante('es anual: la DJ de Ganancias (F.711) no se lee todavía'), estimado: ganEstimado,
+    djAnteriorPresentada: (() => { const d = djAnualGanancias(datosDir, Number(anio) - 1); return d ? { fecha: d.fechaIso, formulario: d.formulario, version: d.version, nivel: 'verificado', fuente: d.fuente } : null; })(),
     djAnterior: djAnt ? cifra(djAnt.importe, djAnt.cargas ? 'manual' : 'importado', `DJ ${Number(anio) - 1}`, 'impuesto determinado del año anterior: base de los anticipos de este año') : faltante(`falta la DJ ${Number(anio) - 1} (cargala desde el cartel de pendientes)`),
     pagos: faltante('impuesto anual: los pagos no se atribuyen a un mes'),
     pagosEnElMes: ganPagosMes.length || ganImp ? cifra((ganPagosMes.reduce((n, x) => n + (x.importe ?? 0), 0)) + (ganImp?.valor ?? 0), ganImp && !ganPagosMes.length ? 'importado' : 'verificado',
@@ -327,7 +336,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
   ];
 
   return {
-    mes, hoy, iva, iibb, ganancias, autonomos, pagos, deja, pagosDelMes: pagosMes,
+    mes, hoy, iva, iibb, ganancias, autonomos, pagos, deja, pagosDelMes: pagosMes, djDelPeriodo: djDelPeriodo(datosDir, mes),
     manuales: listarManuales(outDir).filter((c) => c.mes === mes),
     obligaciones: obligaciones(datosDir, hoy),
     importado: Object.fromEntries(Object.entries(imp).map(([k, v]) => [k, { ...v, nombre: CONCEPTOS[k]?.nombre ?? k }])),
