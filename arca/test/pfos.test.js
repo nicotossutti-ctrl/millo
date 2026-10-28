@@ -10,14 +10,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fotosDesde } from '../src/pfos/actualizar.js';
 import { controlarRol } from '../src/pfos/lectura.js';
-import { proponerMapeo, listaParaVenta, costoLinea } from '../src/pfos/costos.js';
-import { enArgentina, cargosMes, vigentesConciliacion, coberturaReportes, corteDelMes, diasCubiertos, adsMes, viajesSinDuplicar, logisticaReportesMes } from '../src/pfos/calculo.js';
+import { enArgentina, retencionesMes, vigentesConciliacion, corteDelMes, diasCubiertos } from '../src/pfos/calculo.js';
 import { clavesArca, verificarCuenta, titularidad } from '../src/pfos/cuenta.js';
-import { compararAlCorte } from '../src/pfos/comparar.js';
-import { armarMes } from '../src/pfos/mes.js';
 import { dirFotos } from '../src/pfos/fotos.js';
-import { obtenerPfos, integraciones } from '../src/app/integraciones.js';
-import { resultadoOperativo } from '../src/app/rentabilidad.js';
+import { integraciones } from '../src/app/integraciones.js';
+import { panelMes } from '../src/app/panel.js';
 import { verificadorScram, generarClave, scramClaves } from '../src/pfos/clave.js';
 import { controlarConfiguracion } from '../src/pfos/actualizar.js';
 import { urlDesdeEntorno } from '../src/pfos/lectura.js';
@@ -145,53 +142,27 @@ function outConArca() {
   return out;
 }
 
-conPg('PFOS de punta a punta: solo la cuenta propia, costo con lista posterior, cargos netos, devoluciones y cobertura', async () => {
+conPg('PFOS de punta a punta: solo lo fiscal de la cuenta propia (CAE, ventas como control, retenciones de MP)', async () => {
   const db = await armarBase();
   await db.exec('SET ROLE fiscalos_lectura');
   const [sep, oct] = await fotosDesde(comoPg(db), { meses: ['2026-09', '2026-10'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
-  // Cuenta verificada por identificadores (punto de venta + número / CAE en los emitidos de ARCA).
+  // Cuenta verificada por CAE en los emitidos de ARCA; octubre no tiene emitidos para comparar.
   assert.equal(sep.cuenta.verificada, true);
   assert.equal(sep.cuenta.encontrados, 25);
-  assert.equal(oct.cuenta.verificada, false, 'octubre no tiene emitidos de ARCA para comparar: no se usan sus datos');
-  // Ventas: la del 30/09 23:30 es de septiembre; la cancelada aparte; la otra cuenta no existe.
+  assert.equal(oct.cuenta.verificada, false);
+  assert.equal(oct.cuenta.estado, 'sin evidencia');
+  // Ventas como control: la del 30/09 23:30 es de septiembre; la cancelada aparte; la otra cuenta no existe.
   assert.equal(sep.ventas.ordenes, 3);
   assert.equal(sep.ventas.canceladas, 1);
   assert.equal(sep.ventas.totalConIva, 20000);
   assert.equal(oct.ventas.ordenes, 1);
-  // Costo: ME23 x2 automático (2 × 1000 × 0,7125) + TE251C confirmado (2 × 2000 × 0,665); ZZ99 sin costo; lista posterior.
-  assert.equal(sep.costo.total, 1425 + 2660);
-  assert.equal(sep.costo.unidades, 4);
-  assert.equal(sep.costo.unidadesConCosto, 3);
-  assert.equal(sep.costo.unidadesListaPosterior, 3);
-  assert.equal(sep.costo.unidadesAutomaticas, 1);
-  assert.deepEqual(sep.costo.sinCosto.map((x) => x.sku), ['ZZ99']);
-  assert.deepEqual(sep.costo.motivos, { 'código fuera de la lista': 1 });
-  // Devolución recibida en septiembre: resta el costo de 1 unidad de la orden 1.
-  assert.equal(sep.costo.devoluciones.total, 1425);
-  const cmv = sep.lineas['costo-mercaderia'];
-  // Lo que no tiene costo (ZZ99, 1 u. a $ 1.000) no es cero: sus ventas × la relación costo/venta de lo costeado (4085 / 19000).
-  assert.equal(cmv.conocido, 4085);
-  assert.equal(cmv.estimadoFaltante, 215);
-  assert.equal(cmv.importe, 4085 + 215 - 1425);
-  assert.match(cmv.nota, /215 ESTIMADO para 1 unidad/);
-  assert.equal(cmv.nivel, 'estimado');
-  assert.equal(cmv.completo, false, '75 % de unidades con costo: no alcanza');
-  assert.match(cmv.faltan.join(' '), /75 %/);
-  // Cargos del vendedor con IVA, netos de lo devuelto; retención aparte; el cargo del comprador no cuenta.
-  assert.equal(sep.cargos.comision, 1210 + 121 + (2420 - 242) + 121);
-  assert.equal(sep.cargos.envio, 605);
-  assert.equal(sep.cargos.retencion, 50);
-  assert.equal(sep.lineas['comisiones-ml'].importe, Math.round((3630 / 1.21) * 100) / 100);
-  assert.equal(sep.lineas['comisiones-ml'].completo, true);
-  // Publicidad: nivel campaña de la cuenta propia, 30 días.
-  assert.equal(sep.lineas.publicidad.importe, 3000);
-  assert.equal(sep.lineas.publicidad.completo, true);
-  // Logística: Luma solo cubre la primera quincena y no hay reporte de Full: incompleta, dicho.
-  assert.equal(sep.lineas.logistica.completo, false);
-  assert.match(sep.lineas.logistica.faltan.join(' '), /viajes de Luma: reporte que no cubre todo el mes/);
-  assert.match(sep.lineas.logistica.faltan.join(' '), /cargos de Full: sin reporte/);
-  assert.equal(sep.reportes.bonificacionFlex.total, 121);
-  assert.equal(sep.reportes.cadete.total, 3000);
+  // Retenciones de MP a cargo del vendedor (anticipos), una vez por pago; los cargos comerciales no se calculan acá.
+  assert.equal(sep.retencionesMp.importe, 50);
+  assert.deepEqual(sep.retencionesMp.porNombre, { iibb: 50 });
+  assert.equal(sep.retencionesMp.cobertura, 100);
+  // Nada comercial en la foto.
+  for (const k of ['lineas', 'costo', 'cargos', 'ads', 'reportes', 'porDia']) assert.equal(sep[k], undefined, k);
+  assert.deepEqual([sep.mesCerrado, oct.corte], [true, '2026-10-26']);
 });
 
 conPg('el rol se controla antes de leer: dueño o con acceso directo a tablas de PFOS, no', async () => {
@@ -208,26 +179,18 @@ conPg('el rol se controla antes de leer: dueño o con acceso directo a tablas de
   await assert.rejects(db.query("INSERT INTO fiscalos.ordenes VALUES (1,'x','{}','s',now())"), /read-only|permission denied|cannot insert/);
 });
 
-test('piezas: fecha argentina, propuesta de SKU, lista posterior, cargos por pago, conciliación y cobertura de reportes', () => {
+test('piezas: fecha argentina, retenciones por pago y versiones vigentes de «Conciliación»', () => {
   assert.deepEqual(enArgentina('2026-09-30T23:30:00.000-03:00'), { dia: '2026-09-30', mes: '2026-09' });
   assert.deepEqual(enArgentina('2026-10-01T02:30:00Z'), { dia: '2026-09-30', mes: '2026-09' });
-  const items = [{ row: 1, code: 'ME23C', presentation: 'PAR', price: 1000, price_suggested: 4000, factor: 0.7 }];
-  assert.equal(proponerMapeo({ sku: 'ME23-NEGRO-M-X2', unitPrice: 9000 }, items).components[0].units, 2);
-  assert.equal(proponerMapeo({ sku: 'ME23-NEGRO-M-X2', unitPrice: 100 }, items).estado, 'dudoso', 'precio que no cierra con 2 pares');
-  assert.deepEqual(listaParaVenta([{ id: '1', valid_from: '2026-10-01' }], '2026-09-15').posterior, true);
-  // Un pago que cubre dos órdenes del paquete se cuenta una vez.
+  // Un pago que cubre dos órdenes del paquete se cuenta una vez; solo las retenciones a cargo del vendedor.
   const ord = [{ data: { payments: [{ id: 'p', status: 'approved' }] } }, { data: { payments: [{ id: 'p', status: 'approved' }] } }];
-  const c = cargosMes(ord, new Map([['p', { status: 'approved', charges_details: [cargo('meli_percentage_fee', 'fee', 'collector', 100)] }]]));
-  assert.equal(c.comision, 100); assert.equal(c.cobertura, 100);
+  const r = retencionesMes(ord, new Map([['p', { status: 'approved', charges_details: [cargo('iibb', 'tax', 'collector', 100, 10), cargo('iibb', 'tax', 'payer', 999), cargo('meli_percentage_fee', 'fee', 'collector', 500)] }]]));
+  assert.deepEqual([r.total, r.pagos, r.cobertura], [90, 1, 100]);
   // Conciliación: dos versiones ordenables por frescura → la más nueva; identidad repetida → pendiente (afuera).
-  const f = (key, sha, fr, st = 'identificada', def = 'd') => ({ source: 'full_cargo', identity_key: key, identity_status: st, data_sha: sha, defining_sha: def, import_status: 'cerrada', freshness_at: fr, freshness_origin: 'contenido', data: { monto: sha } });
+  const f = (key, sha, fr, st = 'identificada', def = 'd') => ({ source: 'comprobante', identity_key: key, identity_status: st, data_sha: sha, defining_sha: def, import_status: 'cerrada', freshness_at: fr, freshness_origin: 'contenido', data: { cae: sha } });
   const v = vigentesConciliacion([f('a', '1', '2026-10-01'), f('a', '2', '2026-10-05'), f('b', '3', '2026-10-01', 'pendiente'), { ...f('c', '4', null), import_status: 'abierta' }]);
-  assert.deepEqual(v.porFuente.full_cargo, [{ monto: '2' }]);
-  assert.equal(v.pendientes.full_cargo, 1);
-  // Cobertura de reportes por rango declarado: dos quincenas seguidas cubren el mes.
-  const imps = [{ format: 'luma_viajes', status: 'cerrada', coverage: 'completa', range_from: '2026-09-01', range_to: '2026-09-15' }, { format: 'luma_viajes', status: 'cerrada', coverage: 'completa', range_from: '2026-09-16', range_to: '2026-09-30' }];
-  assert.equal(coberturaReportes(imps, ['luma_viajes'], '2026-09').estado, 'completa');
-  assert.equal(coberturaReportes(imps.slice(0, 1), ['luma_viajes'], '2026-09').estado, 'parcial');
+  assert.deepEqual(v.porFuente.comprobante, [{ cae: '2' }]);
+  assert.equal(v.pendientes.comprobante, 1);
 });
 
 test('titularidad por CAE: punto de venta + número solos nunca validan; CAE con otro número tampoco', () => {
@@ -340,7 +303,7 @@ conPg('el rol no puede crear objetos: con CREATE en un esquema, FiscalOS no lee'
 const correccion = (cuenta) => fs.readFileSync(path.join(RAIZ, 'docs', 'pfos-correccion-1.sql'), 'utf8').replace(/<ID_CUENTA>/g, String(cuenta));
 const sinComentariosSql = (sql) => sql.replace(/--.*$/gm, '');
 
-conPg('Ads: la vista con la «ñ» mal codificada no devuelve filas (publicidad faltante, nunca 0); la corrección puntual la arregla sin tocar PFOS ni permisos', async () => {
+conPg('corrección 1 (Ads): la vista con la «ñ» mal codificada no devuelve filas; el SQL la arregla sin tocar PFOS ni permisos', async () => {
   const db = await armarBase();
   const antes = (await db.query('SELECT count(*)::int AS n, sum((metrics->>\'cost\')::numeric)::text AS s FROM public.pfos_hist_ads_daily')).rows[0];
   // La vista como quedó en la base real: 'campaña' pegado con otra codificación.
@@ -348,13 +311,7 @@ conPg('Ads: la vista con la «ñ» mal codificada no devuelve filas (publicidad 
     SELECT user_id, day, level, key, campaign_id, metrics, quality FROM public.pfos_hist_ads_daily WHERE user_id = ${PROPIA} AND level = 'campaÃ±a'`);
   await db.exec('SET ROLE fiscalos_lectura');
   assert.equal((await db.query('SELECT count(*)::int AS n FROM fiscalos.ads_diario')).rows[0].n, 0);
-  const [mal] = await fotosDesde(comoPg(db), { meses: ['2026-09'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
-  assert.equal(mal.lineas.publicidad.importe, null, 'sin días leídos: sin datos, no $ 0');
-  assert.equal(mal.lineas.publicidad.nivel, 'faltante');
-  assert.equal(mal.lineas.publicidad.completo, false);
-  assert.match(mal.lineas.publicidad.faltan.join(' '), /sin datos de Mercado Ads.*pfos-correccion-1\.sql/);
-  // FiscalOS dejó su sesión en solo lectura: el dueño vuelve a la suya para correr la corrección.
-  await db.exec('RESET ROLE; SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE');
+  await db.exec('RESET ROLE');
   // Con la cuenta equivocada (la otra), la corrección se frena y no cambia nada.
   await assert.rejects(db.exec(correccion(OTRA)), /no es la de las vistas/);
   await db.exec('ROLLBACK').catch(() => {});
@@ -368,9 +325,6 @@ conPg('Ads: la vista con la «ñ» mal codificada no devuelve filas (publicidad 
     WHERE day >= '2026-09-01' AND day < '2026-10-01'`);
   assert.deepEqual(r, { dias: 30, filas: 30, cuentas: 1 }, 'solo nivel campaña y solo la cuenta propia');
   assert.ok((await db.query('SELECT description FROM fiscalos.costos_items LIMIT 1')).rows.length, 'la descripción de la lista ya se puede leer');
-  const [bien] = await fotosDesde(comoPg(db), { meses: ['2026-09'], outDir: outConArca(), cuentaEsperada: String(PROPIA), generado: GENERADO });
-  assert.equal(bien.lineas.publicidad.importe, 3000);
-  assert.equal(bien.lineas.publicidad.completo, true);
   await db.exec('RESET ROLE');
   // Nada de PFOS cambió; el rol no ganó acceso a las tablas.
   assert.deepEqual((await db.query('SELECT count(*)::int AS n, sum((metrics->>\'cost\')::numeric)::text AS s FROM public.pfos_hist_ads_daily')).rows[0], antes);
@@ -395,73 +349,6 @@ test('los SQL no dependen de la codificación del archivo: el código (sin comen
   assert.doesNotMatch(c, /\b(GRANT|REVOKE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|CREATE (TABLE|ROLE|SCHEMA))\b/i);
 });
 
-// ---------------- Costo de la mercadería: reglas de PFOS (3.7) ----------------
-
-test('costos: reglas de PFOS sin inventar cantidades (equivalencias, xN, colores, combos, par o tripack por precio, discontinuados, «a confirmar»)', () => {
-  const it = (row, code, presentation, pairs, price, price_suggested, extra = {}) => ({ row, code, presentation, pairs, price, price_suggested, factor: 0.7125, ...extra });
-  const items = [
-    it(1, 'ME23C', 'PAR', 1, 1000, 4000), it(2, 'TE1C', 'PAR', 1, 1000, 4000), it(3, 'TE1C', 'TRIPACK', 3, 2700, 10000),
-    // Como en la lista real: vinchas, muñequeras, manguitas y pantorrilleras «A CONFIRMAR», sin descripción.
-    it(4, 'VINCHA01', 'A_CONFIRMAR', null, 500, 2000, { code_raw: 'ART. VINCHA01' }), it(5, 'MUÑEQUERA01', 'A_CONFIRMAR', null, 600, 2400, { code_raw: 'ART. MUÑEQUERA01' }),
-    it(6, 'TE75C', 'PAR', 1, 900, 3600), it(7, 'ME62C', 'PAR', 1, 1200, 5000), it(8, 'ME19C', 'PAR', 1, 1100, 4500),
-    it(9, 'MA01C', 'A_CONFIRMAR', null, 800, 3000, { code_raw: 'ART. MA01C' }), it(10, 'PA01C', 'A_CONFIRMAR', null, 900, 3500, { code_raw: 'ART. PA01C' }),
-    it(11, 'XX01', 'A_CONFIRMAR', null, 900, 3500, { description: 'MANGUITAS DE PRUEBA' }), it(20, 'ME40C', 'PAR', 1, 1000, 4000), it(21, 'ME40C', 'A_CONFIRMAR', null, 2500, 9000),
-    it(12, 'DE20C', 'PAR', 1, 700, 3000), it(13, 'DE24C', 'PAR', 1, 700, 3000), it(14, 'DE30C', 'PAR', 1, 900, 3000),
-    it(15, 'TR5', 'TRIPACK', 3, 2700, 10000), it(16, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(17, 'IN04C', 'PAR', 1, 1000, 4000, { size: 'L-XL' }),
-    it(18, 'IN09C', 'PAR', 1, 1000, 4000, { size: 'S-M' }), it(19, 'IN09C', 'PAR', 1, 1200, 4000, { size: 'L-XL' }),
-  ];
-  const p = (sku, unitPrice) => proponerMapeo({ sku, unitPrice }, items);
-  const comp = (r) => r.components.map((c) => `${c.code}×${c.units}`).join(' + ');
-  // Código sin la última letra y xN.
-  assert.equal(comp(p('ME23-NEGRO-M-X2', 9000)), 'ME23C×2');
-  // Equivalencias confirmadas, con la unidad confirmada de cada «A CONFIRMAR» (Nicolás, 28/10): vincha por unidad,
-  // muñequera por par, al precio de la lista.
-  assert.equal(comp(p('VINCHA-ROSA', 2000)), 'VINCHA01×1');
-  assert.equal(p('VINCHA-ROSA', 2000).motivo, '1 unidad(es) de VINCHA01');
-  assert.match(p('VINCHA-ROSA', 2000).reglas.join(), /equivalencia VINCHA = VINCHA01.*VINCHA01 «a confirmar»: por unidad/);
-  assert.equal(comp(p('VINCHA01-ROSA-X2', 4000)), 'VINCHA01×2');
-  assert.equal(comp(p('MUÑE-NEGRO', 2400)), 'MUÑEQUERA01×1');
-  assert.equal(p('MUÑE-NEGRO', 2400).motivo, '1 par(es) de MUÑEQUERA01');
-  assert.equal(costoLinea({ cantidad: 3, componentes: p('VINCHA-ROSA', 2000).components, items }).valor, 3 * 500 * 0.7125);
-  assert.equal(comp(p('TE172-NEGRO-M', 3600)), 'TE75C×1');
-  // Colores con «+»: uno por color.
-  assert.equal(comp(p('ME19-AERO+NEGRO-M', 9000)), 'ME19C×2');
-  // Combos: la suma de sus partes (con «+» y pegados).
-  assert.equal(comp(p('ME62+ME19-AERO+NEGRO-M', 9500)), 'ME62C×1 + ME19C×1');
-  // Manguitas y pantorrilleras «A CONFIRMAR»: por par, reconocidas por CÓDIGO (la descripción real viene vacía).
-  assert.equal(comp(p('MA01PA01-NEGRO-M1-P1', 6500)), 'MA01C×1 + PA01C×1');
-  assert.equal(comp(p('MA01-NEGRO-M1-P1-X2', 6000)), 'MA01C×2');
-  assert.match(p('MA01-NEGRO-M1-P1-X2', 6000).reglas.join(), /MA01C «a confirmar»: por par/);
-  // Un «a confirmar» de otro código queda pendiente, aunque su descripción diga «manguitas».
-  assert.equal(p('XX01-NEGRO', 3500).estado, 'dudoso');
-  assert.equal(p('XX01-NEGRO', 3500).categoria, 'a confirmar en la lista');
-  // Un código con una fila por par y otra «a confirmar»: la venta puede ser la no confirmada; no se elige la otra.
-  assert.equal(p('ME40-NEGRO', 4000).estado, 'dudoso');
-  assert.equal(p('ME40C+ME19-NEGRO+AERO', 9000).estado, 'dudoso', 'tampoco dentro de un combo');
-  // Par o tripack: el precio decide solo si la otra lectura queda claramente lejos.
-  assert.equal(p('TE1-NEGRO-M', 4200).components[0].presentation, 'PAR');
-  assert.equal(p('TE1-NEGRO-M', 10500).components[0].presentation, 'TRIPACK');
-  assert.equal(p('TE1-NEGRO-M', 6500).estado, 'dudoso', 'precio entre un par y un tripack: para revisión');
-  assert.equal(p('TE1-NEGRO-M', 6500).categoria, 'presentación ambigua');
-  assert.equal(p('TE1-NEGRO-M', null).estado, 'dudoso', 'sin precio no se elige entre par y tripack');
-  // xN con un código que solo viene en tripack: 3 pares = 1 tripack (no 3 tripacks), por precio.
-  assert.equal(comp(p('TR5-X3', 10000)), 'TR5×1');
-  assert.equal(comp(p('TR5-X3', 30000)), 'TR5×3');
-  // Discontinuado: entre dos códigos con el mismo precio, presentación y descuento; si los vecinos difieren, no.
-  assert.equal(comp(p('DE22-NEGRO', 3000)), 'DE20C×1');
-  assert.equal(p('DE26-NEGRO', 3000).estado, 'sin datos');
-  // Talles: con el mismo costo da igual; con costos distintos hace falta el talle.
-  assert.equal(p('IN04-NEGRO', 4000).estado, 'automático');
-  assert.equal(p('IN09-NEGRO', 4000).categoria, 'talle');
-  assert.equal(comp(p('IN09-NEGRO-L', 4000)), 'IN09C×1');
-  // Cantidades que no se reparten: para revisión, nunca inventadas.
-  assert.equal(p('ME23-NEGRO-X2-X3', 9000).estado, 'dudoso');
-  assert.equal(p('ME19-AERO+NEGRO+ROJO-X2', 9000).estado, 'dudoso');
-  assert.equal(p('ME62+ME19-NEGRO-X2', 9000).estado, 'dudoso', 'combo con xN');
-  assert.equal(p('ZZ99', 1000).estado, 'sin datos');
-  // El costo de la línea usa la fila elegida (tripack: su precio, no 3 pares).
-  assert.equal(costoLinea({ cantidad: 2, componentes: p('TE1-NEGRO-M', 10500).components, items }).valor, 2 * 2700 * 0.7125);
-});
 
 // ---------------- Mes en curso: corte, cuenta provisoria y comparación ----------------
 
@@ -473,26 +360,6 @@ test('corte: el mes en curso se mide hasta ayer; los días futuros no son atrasa
   const d = diasCubiertos(alc, 'orders', '2026-10', '2026-10-26');
   assert.deepEqual([d.dias, d.diasEsperados, d.faltan.length], [26, 26, 0]);
   assert.equal(diasCubiertos(alc, 'orders', '2026-10').faltan.length, 5, 'sin corte, el mes entero');
-  // Ads: sin días, sin datos (null); con 0 leído, es dato.
-  assert.equal(adsMes([], '2026-10', '2026-10-26').total, null);
-  assert.equal(adsMes([{ day: '2026-10-02', metrics: { cost: 0 } }], '2026-10', '2026-10-26').total, 0);
-  // Reportes: el rango declarado hasta el corte alcanza solo si PFOS validó la cobertura del archivo.
-  const imp = [{ format: 'flex_nc', status: 'cerrada', coverage: 'completa', range_from: '2026-10-01', range_to: '2026-10-26' }];
-  assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10', '2026-10-26').estado, 'completa');
-  assert.equal(coberturaReportes(imp, ['flex_nc'], '2026-10').faltaDesde, '2026-10-27');
-  assert.equal(coberturaReportes([{ ...imp[0], coverage: 'parcial' }], ['flex_nc'], '2026-10', '2026-10-26').estado, 'parcial');
-});
-
-test('Luma: la planilla de detalle no duplica los viajes que ya están en la quincenal', () => {
-  const v = viajesSinDuplicar([
-    { id_viaje: '1', referencia: '2000001', fecha_creacion: '2026-09-02T10:00:00', precio: '3000' },
-    { referencia: '2000001', fecha_estado: '2026-09-02T18:00:00', precio: '3000' },
-    { referencia: '2000002', fecha_estado: '2026-09-03T18:00:00', precio: '3100' },
-  ]);
-  assert.equal(v.viajes.length, 2); assert.equal(v.repetidos, 1);
-  const l = logisticaReportesMes({ porFuente: { flex_viaje: [{ id_viaje: '1', referencia: '2000001', fecha_creacion: '2026-09-02T10:00:00', precio: '3000' },
-    { referencia: '2000001', fecha_estado: '2026-09-02T18:00:00', precio: '3000' }] } }, '2026-09');
-  assert.equal(l.cadete.total, 3000);
 });
 
 test('titularidad: el mes sin comprobantes se apoya en otro mes verificado de la MISMA cuenta; si los CAE no coinciden, nunca', () => {
@@ -506,94 +373,27 @@ test('titularidad: el mes sin comprobantes se apoya en otro mes verificado de la
   assert.equal(titularidad(sep, []).conciliacionFiscal.estado, 'conciliada');
 });
 
-conPg('octubre en curso: rentabilidad operativa provisoria al corte, conciliación fiscal pendiente y comparación con los mismos días de septiembre', async () => {
+conPg('octubre en curso: la cuenta se apoya en septiembre (misma cuenta, verificada por CAE) y la conciliación fiscal de octubre queda pendiente', async () => {
   const db = await armarBase();
-  const ins = (key, data) => db.query(`INSERT INTO pfos_money_records (user_id, source, key, scope, data, sha, fetched_at, first_seen, last_seen)
-    VALUES ($1,'orders',$2,'x',$3,'s',now(),now(),now())`, [PROPIA, key, JSON.stringify(data)]);
-  await ins('6', orden('6', '2026-10-26T12:00:00.000-03:00', 'paid', [['ME23-NEGRO-M-X2', 1, 9000]], [], 9000));
-  await ins('7', orden('7', '2026-10-27T09:00:00.000-03:00', 'paid', [['ME23-NEGRO-M-X2', 1, 9000]], [], 9000)); // hoy: después del corte
-  for (let d = 1; d <= 26; d++) {
-    for (const src of ['orders', 'mp_payments']) {
-      await db.query(`INSERT INTO pfos_money_scopes (user_id, source, scope, family, status, updated_at) VALUES ($1,$2,$3,'ml','completa',now())`, [PROPIA, src, `hist|2026-10-${String(d).padStart(2, '0')}`]);
-    }
-  }
   await db.exec('SET ROLE fiscalos_lectura');
   const out = outConArca();
   const [sep, oct] = await fotosDesde(comoPg(db), { meses: ['2026-09', '2026-10'], outDir: out, cuentaEsperada: String(PROPIA), generado: GENERADO });
-  assert.deepEqual([oct.corte, oct.mesCerrado, sep.mesCerrado], ['2026-10-26', false, true]);
-  assert.equal(oct.ventas.ordenes, 2); assert.equal(oct.ventas.posterioresAlCorte, 1);
-  assert.deepEqual([oct.cobertura.ordenes.diasEsperados, oct.cobertura.ordenes.faltan.length], [26, 0], 'los días 27 a 31 no son atrasados');
-  assert.equal(oct.lineas.publicidad.importe, null, 'octubre sin Ads leídos: faltante');
   fs.mkdirSync(dirFotos(out), { recursive: true });
   for (const f of [sep, oct]) fs.writeFileSync(path.join(dirFotos(out), `${f.mes}.json`), JSON.stringify(f));
-  // Titularidad por septiembre; conciliación fiscal de octubre aparte, pendiente.
   const i = integraciones(out, '2026-10').pfos;
-  assert.deepEqual([i.verificada, i.usable, i.provisoria, i.titularidad.mesVerificado, i.conciliacionFiscal.estado], [false, true, true, '2026-09', 'pendiente']);
-  assert.ok(Object.keys(obtenerPfos(out, '2026-10')).length, 'octubre se puede usar como provisorio');
-  // Rentabilidad operativa provisoria: ventas de PFOS al corte, sin IVA; marcada.
-  const op = resultadoOperativo(out, '2026-10');
-  assert.ok(op.provisional); assert.equal(op.provisional.alCorte, '2026-10-26');
-  assert.equal(op.ventas.cifra.valor, Math.round((18000 / 1.21) * 100) / 100);
-  assert.equal(op.ventas.cifra.nivel, 'estimado');
-  assert.match(op.provisional.nota, /Conciliación fiscal del mes: pendiente/);
-  // Septiembre (mes cerrado, con sus comprobantes) no es provisorio.
-  assert.equal(resultadoOperativo(out, '2026-09').provisional, null);
-  // Comparación entre períodos equivalentes: del 1 al 26 de cada mes.
-  const c = i.comparacion;
-  assert.equal(c.dia, 26);
-  assert.deepEqual([c.anterior.desde, c.anterior.hasta, c.actual.hasta], ['2026-09-01', '2026-09-26', '2026-10-26']);
-  assert.equal(c.anterior.ordenes, 2, 'las del 10 y el 14; la del 30/09 no entra');
-  assert.equal(c.anterior.ads, 2600, '26 días de Ads de septiembre');
-  assert.equal(c.actual.ordenes, 2);
-  assert.equal(c.actual.ads, null);
-  assert.equal(compararAlCorte(oct, { mes: '2026-09' }).motivo.includes('detalle por día'), true);
+  assert.deepEqual([i.verificada, i.usable, i.titularidad.mesVerificado, i.conciliacionFiscal.estado], [false, true, '2026-09', 'pendiente']);
+  assert.equal(i.control.ventasMl, 9000);
+  assert.equal(i.control.facturado, null, 'sin comprobantes emitidos de octubre');
+  const s = integraciones(out, '2026-09').pfos;
+  assert.equal(s.conciliacionFiscal.estado, 'conciliada');
+  assert.equal(s.retencionesMp.importe, 50);
+  // El panel no arma rentabilidad con PFOS: la conciliación va aparte, en lo impositivo.
+  const p = panelMes(out, '2026-10', { hoy: '2026-10-27', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.rentabilidad, undefined);
+  assert.equal(p.integraciones.pfos.conciliacionFiscal.estado, 'pendiente');
+  // Una cuenta cuyos CAE no coinciden no se usa: sus datos no se muestran.
+  fs.writeFileSync(path.join(dirFotos(out), '2026-10.json'), JSON.stringify({ ...oct, cuenta: { verificada: false, estado: 'no coincide', motivo: 'solo 3%' } }));
+  const mala = integraciones(out, '2026-10').pfos;
+  assert.equal(mala.usable, false); assert.equal(mala.control, undefined); assert.equal(mala.retencionesMp, undefined);
 });
 
-test('reportes: completa, parcial y desconocida; las fechas declaradas del mes entero no alcanzan sin cobertura validada', () => {
-  const r = (coverage, desde = '2026-09-01', hasta = '2026-09-30') => ({ format: 'ml_cargos_full', status: 'cerrada', coverage, range_from: desde, range_to: hasta });
-  const est = (imps) => coberturaReportes(imps, ['ml_cargos_full'], '2026-09');
-  assert.equal(est([r('completa')]).estado, 'completa');
-  assert.equal(est([r('parcial')]).estado, 'parcial', 'filas descartadas al leer');
-  assert.equal(est([r('desconocida')]).estado, 'desconocida', 'mes entero declarado, cobertura sin validar');
-  assert.equal(est([r(null)]).estado, 'desconocida', 'sin dato de cobertura');
-  assert.equal(est([r('completa', '2026-09-01', '2026-09-15'), r('desconocida', '2026-09-16', '2026-09-30')]).estado, 'desconocida');
-  assert.equal(est([r('completa', '2026-09-01', '2026-09-15'), r('parcial', '2026-09-16', '2026-09-30')]).estado, 'parcial');
-  assert.equal(est([r('desconocida', '2026-09-01', '2026-09-15')]).estado, 'parcial', 'faltan días: parcial');
-  assert.equal(est([]).estado, 'sin datos');
-  // En la foto: Full con cobertura sin validar deja la logística incompleta, dicho.
-  const datos = { ordenes: [], ordenesDevueltas: [], devoluciones: [], cobros: new Map(), facturas: [], ads: [], alcances: [], conciliacion: [] };
-  const comunes = { listas: [], itemsPorLista: new Map(), mapeos: new Map(),
-    importaciones: ['flex_nc', 'flex_nd', 'luma_viajes'].map((format) => ({ ...r('completa'), format })).concat([r('desconocida')]) };
-  const f = armarMes({ mes: '2026-09', datos, comunes, textosArca: [], generado: GENERADO });
-  assert.equal(f.lineas.logistica.completo, false);
-  assert.match(f.lineas.logistica.faltan.join(' '), /cargos de Full: 1 reporte\(s\) con la cobertura sin validar/);
-});
-
-test('costo con el 95 % de las unidades: lo que falta no es cero; se estima a la vista o no se da por completo', () => {
-  const items = [{ row: 1, code: 'ME23C', presentation: 'PAR', pairs: 1, price: 1000, price_suggested: 4000, factor: 0.7 }];
-  const comunes = { listas: [{ id: '1', valid_from: '2026-01-01' }], itemsPorLista: new Map([['1', items]]), mapeos: new Map(), importaciones: [] };
-  const o = (id, sku, q, precio) => ({ key: id, data: { id, status: 'paid', date_created: '2026-09-10T10:00:00.000-03:00', total_amount: q * (precio ?? 0),
-    order_items: [{ item: { id: 'MLA1', seller_sku: sku }, quantity: q, ...(precio == null ? {} : { unit_price: precio }) }], payments: [] } });
-  const alcances = Array.from({ length: 30 }, (_, i) => ({ source: 'orders', status: 'completa', scope: `hist|2026-09-${String(i + 1).padStart(2, '0')}` }));
-  const datos = (ordenes) => ({ ordenes, ordenesDevueltas: [], devoluciones: [], cobros: new Map(), facturas: [], ads: [], alcances, conciliacion: [] });
-  // 19 unidades costeadas (19 × 700 = 13.300, vendidas a 4.000 c/u) y 1 sin costo vendida a 5.000: 95 %.
-  const base = [o('1', 'ME23-NEGRO', 19, 4000)];
-  const f = armarMes({ mes: '2026-09', datos: datos([...base, o('2', 'ZZ99', 1, 5000)]), comunes, textosArca: [], generado: GENERADO });
-  const l = f.lineas['costo-mercaderia'];
-  assert.equal(f.costo.cobertura, 95);
-  assert.equal(l.conocido, 13300);
-  assert.equal(l.estimadoFaltante, 875, '5.000 × (13.300 / 76.000)');
-  assert.equal(l.importe, 14175, 'el importe incluye lo estimado: nunca el costeado solo');
-  assert.equal(l.nivel, 'estimado');
-  assert.match(l.nota, /875 ESTIMADO para 1 unidad\(es\) sin costo \(ventas de las unidades sin costo × \(costo ÷ ventas de las unidades con costo\)/);
-  assert.equal(l.completo, true, 'con el 95 % costeado y lo demás estimado a la vista');
-  // Si lo que falta no tiene precio, no se puede estimar: el costo no se da por completo.
-  const g = armarMes({ mes: '2026-09', datos: datos([...base, o('2', 'ZZ99', 1, null)]), comunes, textosArca: [], generado: GENERADO });
-  assert.equal(g.lineas['costo-mercaderia'].estimadoFaltante, null);
-  assert.equal(g.lineas['costo-mercaderia'].completo, false);
-  assert.match(g.lineas['costo-mercaderia'].faltan.join(' '), /1 unidad\(es\) sin costo que no se pueden estimar \(1 sin precio de venta\)/);
-  // Todo costeado: sin estimación.
-  const h = armarMes({ mes: '2026-09', datos: datos(base), comunes, textosArca: [], generado: GENERADO });
-  assert.equal(h.lineas['costo-mercaderia'].estimadoFaltante, 0);
-  assert.equal(h.lineas['costo-mercaderia'].importe, 13300);
-});

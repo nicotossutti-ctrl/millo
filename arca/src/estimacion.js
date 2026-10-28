@@ -37,7 +37,8 @@ export function estimar(anio, meses, contribuyente, { proyeccionAnual = null } =
   const autonomos = contribuyente.autonomosMensual ?? 0;
 
   const base = meses.map((m) => {
-    const resultadoBruto = m.ventasNetas - m.gastosNetos;
+    // resultadoBruto: el resultado comercial del mes ya calculado (PFOS); si no viene, ventas − gastos.
+    const resultadoBruto = m.resultadoBruto ?? m.ventasNetas - m.gastosNetos;
     const iibbMes = r2(m.ventasNetas * iibb);
     return { ...m, resultadoBruto: r2(resultadoBruto), iibb: iibbMes, autonomos, antesGanancias: r2(resultadoBruto - iibbMes - autonomos) };
   });

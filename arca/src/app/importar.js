@@ -1,6 +1,6 @@
 /**
- * Importación manual de archivos (CSV o Excel .xlsx) para lo que no conviene automatizar todavía:
- * reportes mensuales de Mercado Libre, gastos, costo de mercadería, Ingresos Brutos, anticipos.
+ * Importación manual de archivos (CSV o Excel .xlsx) para lo que ARCA no entrega sola: Ingresos Brutos (CM03), anticipos
+ * y pagos, autónomos, la DJ anual de Ganancias y el resultado comercial de PFOS para proyectar Ganancias.
  *
  * Flujo (tres pasos, nada se guarda hasta confirmar):
  *   1. analizar: se sube el archivo; queda en out/importados/pendientes/ y se devuelve una vista
@@ -22,20 +22,22 @@ import { periodoDe } from '../portal/ivaDdjj.js';
 
 /**
  * Conceptos que se pueden importar. `grupo` decide cómo los usa el panel:
- *   gasto      -> resta en el resultado económico (se toma el valor absoluto del total del mes:
- *                 los reportes muestran cargos a veces en negativo);
- *   ingreso    -> suma en el resultado económico;
- *   referencia -> se muestra, no se suma (p. ej. ventas de Mercado Libre: ya están en la facturación);
- *   impuesto   -> declarado o pagado de un impuesto (no entra al resultado por sí solo).
+ *   impuesto   -> declarado o pagado de un impuesto;
+ *   pfos       -> resultado comercial ya calculado por PFOS (base de la proyección de Ganancias);
+ *   gasto, ingreso, referencia (legado: true) -> conceptos comerciales viejos: se conservan sus cargas, no se ofrecen.
  */
 export const CONCEPTOS = {
-  'ventas-ml': { nombre: 'Ventas de Mercado Libre', grupo: 'referencia' },
-  'comisiones-ml': { nombre: 'Comisiones y cargos de Mercado Libre', grupo: 'gasto' },
-  publicidad: { nombre: 'Publicidad', grupo: 'gasto' },
-  logistica: { nombre: 'Envíos y logística', grupo: 'gasto' },
-  'costo-mercaderia': { nombre: 'Costo de la mercadería vendida', grupo: 'gasto' },
-  'gastos-operativos': { nombre: 'Gastos operativos', grupo: 'gasto' },
-  'otros-ingresos': { nombre: 'Otros ingresos', grupo: 'ingreso' },
+  // Comerciales: ya no se usan (los calcula PFOS). Quedan definidos para conservar las cargas e importaciones viejas.
+  'ventas-ml': { nombre: 'Ventas de Mercado Libre', grupo: 'referencia', legado: true },
+  'comisiones-ml': { nombre: 'Comisiones y cargos de Mercado Libre', grupo: 'gasto', legado: true },
+  publicidad: { nombre: 'Publicidad', grupo: 'gasto', legado: true },
+  logistica: { nombre: 'Envíos y logística', grupo: 'gasto', legado: true },
+  'costo-mercaderia': { nombre: 'Costo de la mercadería vendida', grupo: 'gasto', legado: true },
+  'gastos-operativos': { nombre: 'Gastos operativos', grupo: 'gasto', legado: true },
+  'otros-ingresos': { nombre: 'Otros ingresos', grupo: 'ingreso', legado: true },
+  // De PFOS, para la proyección de Ganancias: el resultado comercial del mes ANTES de impuestos (ventas − mercadería −
+  // cargos de ML − publicidad − logística − gastos generales), tal como lo calcula PFOS.
+  'resultado-comercial': { nombre: 'Resultado comercial del mes (de PFOS, antes de impuestos)', grupo: 'pfos' },
   'iibb-declarado': { nombre: 'Ingresos Brutos: impuesto declarado', grupo: 'impuesto', impuesto: 'iibb', tipo: 'declarado' },
   'iibb-pagado': { nombre: 'Ingresos Brutos: pagos', grupo: 'impuesto', impuesto: 'iibb', tipo: 'pagado' },
   'ganancias-anticipo': { nombre: 'Ganancias: anticipos pagados', grupo: 'impuesto', impuesto: 'ganancias', tipo: 'pagado' },
@@ -175,6 +177,7 @@ export function vistaPrevia(hojas, hoja = 0, filaEncabezado = null) {
 export function normalizar(hojas, mapeo) {
   const concepto = CONCEPTOS[mapeo.concepto];
   if (!concepto) throw new Error('elegí qué representa el archivo (concepto)');
+  if (concepto.legado) throw new Error(`«${concepto.nombre}» es un dato comercial: lo calcula PFOS, no se importa en FiscalOS`);
   const h = hojas[mapeo.hoja ?? 0] ?? hojas[0];
   const fe = mapeo.filaEncabezado ?? detectarEncabezado(h.filas);
   const datos = h.filas.slice(fe + 1).filter((f) => (f ?? []).some((c) => String(c ?? '').trim()));

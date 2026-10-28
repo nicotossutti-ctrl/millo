@@ -1,39 +1,43 @@
-# FiscalOS ← PFOS: qué se puede obtener, qué falta y cómo se conecta
+# FiscalOS ← PFOS: qué toma FiscalOS, qué no y cómo se conecta
 
-Relevamiento hecho sobre el código y el diseño de PFOS (`pfos-ml` en `7ac8b62`: `lib/money_specs.js`, `lib/money_store.js`,
-`lib/metrics_store.js`, `lib/metrics_costs.js`, `lib/fin_formats.js`, `lib/fin_store.js`, `lib/metrics_adsdaily.js` y
-`docs/rentabilidad-DISENO.md`). **No se modificó PFOS ni su base.** Todavía no hay acceso a los datos reales: la
-cobertura real de septiembre y octubre la mide `fiscalos.ps1 pfos` la primera vez que se corra, y queda a la vista.
+**Separación (decisión de Nicolás, 28/10/2026).** PFOS es la única fuente comercial: ventas, costo de la mercadería,
+equivalencias, packs y variantes, comisiones, Mercado Ads, Flex, Full, logística y la rentabilidad comercial por mes,
+publicación, SKU y variante. FiscalOS es impositivo: IVA, IIBB, Ganancias, autónomos, DDJJ, retenciones, percepciones,
+anticipos, pagos, deudas y vencimientos, y la **conciliación** de lo fiscal con PFOS. FiscalOS no tiene un segundo motor
+de costos ni de rentabilidad. **No se modificó PFOS ni su base.**
 
-## 1. Qué aporta PFOS, concepto por concepto (solo PALERMO FITNESS)
+## 1. Qué toma FiscalOS de PFOS (solo PALERMO FITNESS)
 
-| Concepto en FiscalOS | De dónde lo saca PFOS | Estado conocido | Qué falta o se verifica al conectar |
-|---|---|---|---|
-| Ventas (control; los ingresos salen de ARCA) | `orders` en `pfos_money_records`: fecha, estado, líneas con SKU, cantidad y precio, pagos | PFOS lo verificó el 25/10 con el reporte de ML del 22 al 30/09 | Días del mes con recolección completa (alcances `hist|día`): se miden |
-| **Costo de la mercadería vendida** | Unidades vendidas × lista de costos (`pfos_cost_lists/items`) × factor de descuento, con el mapeo SKU → artículo confirmado en PFOS (`pfos_cost_sku_map`) o, si no hay, las reglas de PFOS (sección 8) | Hay **una** lista, vigente desde el 01/10 | Septiembre usa esa lista **marcada «posterior a la venta»** (lo prevé el diseño de PFOS, 13). Unidades sin costo: listadas por SKU y por motivo; las ambiguas, «para revisión». No se aplica nada por suposición |
-| Mercadería que volvió | `claim_returns` entregadas, por la cantidad devuelta, al costo de la venta original | Recolectado desde la v39 | Se resta en el mes en que se cierra la devolución |
-| **Comisiones y cargos de ML** | Cobro de MP de cada venta (`mp_payments.charges_details`): cargo por vender, costo fijo, cuotas y cupones a cargo del vendedor, netos de lo devuelto | Verificado por PFOS el 25/10 (97–100 %) | Vienen **con IVA**: el neto (÷ 1,21) queda *estimado* hasta cotejarlo con las facturas de ML que ARCA tiene en tus comprobantes recibidos |
-| **Logística** | Envío a cargo del vendedor (cobro de MP) + Full (`full_cargo`) − bonificación Flex (`flex_bonificacion`) + anulaciones + cadete de Luma (`flex_viaje`) | Full, Flex y Luma salen de los **reportes mensuales** cargados en «Conciliación» de PFOS mientras PFOS no los traiga solo | Cobertura por rango declarado de cada reporte, hasta el corte, **y** con la cobertura que PFOS validó para cada archivo: un archivo con filas descartadas deja el mes «parcial» y uno con cobertura sin validar, «desconocida» (nunca completo solo por las fechas); los registros pendientes o en conflicto también dejan la línea incompleta, dicho. Luma: las dos planillas no se suman dos veces (la de detalle solo agrega ventas que la quincenal no tiene); su IVA no está verificado (se toma el importe entero) |
-| **Publicidad** | Inversión diaria por campaña de Mercado Ads (`pfos_hist_ads_daily`, nivel campaña) | Recolectada desde la v37 | Días del mes con dato. **Sin ningún día leído es «sin datos», nunca $ 0.** El IVA de la factura de Ads está pendiente en PFOS (1,19 no cierra con 21 %) |
-| Retenciones de MP | `charges_details` de tipo impuesto | — | Se muestran como **anticipos**, nunca como costo |
+| Dato | De dónde (vistas de `fiscalos`) | Para qué |
+|---|---|---|
+| Titularidad de la cuenta | Facturas a clientes con su CAE (`conciliacion`, fuente `comprobante`; `facturas_clientes`) | Verificar que la cuenta de Mercado Libre es del CUIT: el CAE tiene que estar en tus comprobantes emitidos de ARCA (sección 4) |
+| Ventas del mes con IVA | `ordenes` (fecha de venta en hora de Argentina; canceladas aparte) | **Control** contra la facturación de ARCA (facturado − ventas de ML). No reemplaza a los comprobantes emitidos |
+| Retenciones de Mercado Pago | `cobros_mp`: `charges_details` de tipo impuesto a cargo del vendedor, una vez por pago | Anticipos de impuestos para conciliar con IIBB y Mis Retenciones |
+| Cobertura | `cobertura` (días del mes con recolección completa) | Saber si las cifras del mes están completas al corte |
 
-## 2. Qué no da PFOS (y queda en FiscalOS)
+**Para proyectar Ganancias**, FiscalOS necesita el *resultado comercial* de cada mes, **antes de impuestos** (ventas −
+mercadería − cargos de ML − publicidad − logística − gastos generales), tal como lo calcula PFOS. Hasta que PFOS lo
+exponga consolidado (con período, cuenta, fuente, versión y cobertura), se carga a mano o por archivo en FiscalOS
+(concepto «Resultado comercial del mes»). FiscalOS le resta IIBB y autónomos y aplica la escala; sin el resultado de algún
+mes del año, la provisión dice «no estimable». La proyección nunca es la DJ anual (F.711), ni un anticipo, ni un saldo.
 
-- Gastos operativos (contador, alquiler, etc.): proveedores clasificados en ARCA o carga manual.
-- Ingresos Brutos determinado (CM03), cuota de autónomos y parámetros de Ganancias.
+**Las demás vistas** del esquema (`ads_diario`, `devoluciones`, `importaciones`, `costos_*`) quedan instaladas y sin uso.
+Cuando PFOS exponga sus resultados consolidados, el acceso se simplifica a esa interfaz (se plantea antes, como cambio
+aparte).
+
+## 2. Qué no toma FiscalOS de PFOS
+
+- Costos, comisiones, publicidad, logística, Full, Flex y rentabilidad: los calcula PFOS.
+- Ingresos Brutos determinado (CM03), cuota de autónomos y DJ anual de Ganancias: salen de ARCA o SIFERE (o se cargan
+  desde el cartel de pendientes).
 - La otra cuenta de Mercado Libre: **no se lee** (otro CUIT).
 
-## 3. Cómo se evita contar dos veces
+## 3. Lo comercial que FiscalOS ya no hace
 
-- **Una sola fuente por concepto y mes:** carga manual firme > archivo importado > PFOS **completo** > carga manual
-  *estimada* > facturas de ARCA. Las otras fuentes quedan al lado como referencia y no se suman.
-- PFOS **incompleto** (por ejemplo, ventas de algunos días sin recolectar) nunca es la fuente: se ve como referencia,
-  con lo que le falta.
-- Las facturas de **Mercado Libre** y de **Luma** en ARCA quedan como control cuando la fuente es PFOS. Si un mes mezcla
-  PFOS y facturas de ML en ARCA para cargos y logística, la app lo avisa.
-- Las facturas de **SOX** son compras de mercadería: van a stock y no son el costo de lo vendido.
-- **Septiembre:** tu costo estimado de $66.500.000 sin IVA se mantiene como fuente mientras PFOS no esté completo para el
-  mes. El costo reconstruido por PFOS se muestra al lado, con su cobertura, **sin forzar coincidencias**.
+Hasta el 28/10 FiscalOS tenía una pestaña «Rentabilidad» con costos y cargos calculados desde PFOS. Se sacó: sus cargas
+manuales e importaciones viejas (por ejemplo, el costo estimado de septiembre de $ 66.500.000) se **conservan** en
+`out/importados/` y se pueden ver, corregir o borrar, pero no se crean nuevas. La clasificación de proveedores
+(`out/importados/proveedores.json`) también se conserva sin uso.
 
 ## 4. Separación de cuentas (solo PALERMO)
 
@@ -107,71 +111,28 @@ cobertura real de septiembre y octubre la mide `fiscalos.ps1 pfos` la primera ve
    - `FISCALOS_PFOS_EXCLUIDAS` (la otra cuenta).
 6. **Prueba.** `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`. La consola dice:
    - qué rol se usó y que pasó los controles;
-   - si la cuenta quedó verificada por CAE en cada mes;
-   - cada concepto con su cobertura;
-   - las unidades sin costo.
+   - si la cuenta quedó verificada por CAE en cada mes (o en otro mes, con la conciliación fiscal pendiente);
+   - las ventas del mes con IVA y las retenciones de Mercado Pago, con su cobertura.
 
 ## 7. Corrección 1 (sobre la instalación ya hecha; no se reinstala nada)
 
-**Qué corrige.** Al pegar `pfos-acceso.sql`, la «ñ» de `'campaña'` llegó con otra codificación y la vista de Mercado Ads
-quedó vacía (`'campaÃ±a'`). FiscalOS la leía como $ 0: ahora la muestra como **sin datos**, y la corrección escribe la ñ
-como `U&'campa\00F1a'`, que es solo ASCII y no depende de la codificación. De paso suma a `fiscalos.costos_items` la
-descripción y el código como figura en la lista (solo informativos: en la lista real la descripción viene vacía, y las
-reglas reconocen los artículos por código).
+**Qué corrigió.** Al pegar `pfos-acceso.sql`, la «ñ» de `'campaña'` llegó con otra codificación y la vista de Mercado Ads
+quedó vacía (`'campaÃ±a'`). La corrección escribe la ñ como `U&'campa\00F1a'` (solo ASCII, no depende de la
+codificación) y suma a `fiscalos.costos_items` la descripción y el código como figura en la lista.
 
-**Estado (27/10):** ya aplicada en la base real (revisión de la PR #2): Ads devuelve septiembre 30 días y octubre 26 días.
-No hace falta volver a correrla.
+**Estado:** aplicada en la base real el 27/10 (revisión de la PR #2): Ads devuelve septiembre 30 días y octubre 26 días.
+No hace falta volver a correrla. FiscalOS ya no lee esas dos vistas (Ads y costos son de PFOS); el archivo queda para
+instalaciones que no la tengan. `pfos-acceso.sql` ya trae la forma corregida.
 
-**Qué hay que ejecutar:**
-1. En Neon, proyecto de PFOS Mercado Libre, SQL Editor, como dueño: abrir `docs/pfos-correccion-1.sql`, reemplazar
-   `<ID_CUENTA>` por el user_id de PALERMO y correr el bloque 1. Si la cuenta no es la de las vistas, se frena sin cambiar
-   nada. Solo reemplaza dos vistas de `fiscalos`; no toca tablas de PFOS ni permisos.
-2. Las consultas del bloque 2 (solo lectura): la definición tiene que decir `'campaña'`, y septiembre tiene que mostrar
-   sus días de Ads.
-3. En la PC: `fiscalos.ps1 actualizar` y después `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`. La consola dice la
-   inversión de Ads de cada mes (o «SIN DATOS»), la cobertura de costo y las unidades sin costo por motivo.
+## 8. Decisiones de costo confirmadas (para implementar en PFOS, no en FiscalOS)
 
-## 8. Costo de la mercadería: reglas de PFOS (diseño de rentabilidad, 3.7)
-
-Primero manda la decisión confirmada en PFOS (Costos de la mercadería). Si no hay, FiscalOS aplica las reglas de PFOS sin
-pedir confirmación uno por uno para los casos evidentes:
-1. **Equivalencias confirmadas:** VINCHA = VINCHA01, MUÑE = MUÑEQUERA01, TE172 = TE75C, DE160A = DE160C. Dicen qué
-   artículo es, no cuántas unidades de la lista lleva la venta. **Manguitas y pantorrilleras «A CONFIRMAR», por par**,
-   reconocidas por código (MA01C, MA10C, MA20C, MA21C, MA26C; PA01C, PA10C, PA21C, PA26C, FUPA01C, FUPA02C, HOCKEY01, las
-   familias que PFOS tiene confirmadas). **VINCHA01, por unidad, y MUÑEQUERA01, por par** (Nicolás, 28/10), al precio de
-   la lista. Cualquier otro «A CONFIRMAR» queda pendiente (sin costo, listado) hasta confirmarlo.
-2. **Código de la lista** sin la última letra (ME23 = ME23C) o completo.
-3. **X2, X3, X6** multiplican.
-4. **Colores con «+»** en el mismo código: uno por color.
-5. **Combos** (ME62+ME19, MA01PA01): la suma de sus partes, un par de cada una.
-6. **Par o tripack (u otro paquete):** se prueban las lecturas posibles (pares sueltos o paquetes) contra el precio de
-   venta y el sugerido de la lista; se elige solo si la otra queda claramente lejos (1,5 veces más lejos o más). Si dan los
-   mismos pares y casi el mismo costo, da igual cuál.
-7. **Discontinuados:** un código entre dos de la lista (mismas letras, por número) con el mismo precio, presentación y
-   descuento toma ese costo.
-
-Talles: si todas las filas del código cuestan lo mismo, el talle no hace falta. **Queda para revisión** (con su motivo, y
-sin costo): par o tripack que el precio no distingue, más de un xN, colores que no se reparten, combos con xN, un talle
-desconocido con costos distintos, un «A CONFIRMAR» que no es manguita ni pantorrillera, y un código que además de la fila
-por par tiene una fila «A CONFIRMAR» o un paquete sin pares (la venta puede ser esa). Nada se completa con supuestos.
-
-**Lo que queda sin costo no es cero.** El importe suma una estimación explícita: las ventas de esas unidades × la relación
-costo / venta de las unidades costeadas del mismo mes (se ve en la nota: costeado, estimado y método). El costo cuenta como
-completo solo con el 95 % de las unidades costeadas **y** esa estimación calculada (si alguna unidad sin costo no tiene
-precio, no se estima y el costo queda incompleto). Con menos, queda como referencia y **septiembre sigue con tu estimación
-de $ 66.500.000** (sin IVA, marcada «estimado»). Si PFOS llega al 95 %, pasa a ser la fuente de septiembre, con la marca
-«lista posterior a la venta» (la única lista es del 01/10).
-
-## 9. Mes en curso: corte y rentabilidad provisoria
-
-- **Corte.** Un mes terminado se mide entero; el mes en curso, hasta **ayer**. Los días que todavía no pasaron no son
-  «recolección atrasada», y las ventas de hoy quedan afuera (se cuentan aparte).
-- **Comparación al corte.** En el bloque PFOS: del 1 al N de cada mes (octubre al 26 contra septiembre del 1 al 26). La
-  comparación de meses de arriba no calcula variación contra un mes provisorio.
-- **Rentabilidad operativa provisoria.** Sin los comprobantes emitidos del mes, FiscalOS puede usar las ventas y costos
-  de PFOS al corte si la **misma cuenta** (user_id) ya se verificó por CAE en otro mes (septiembre: 7.204 de 7.204). Las
-  ventas van netas de IVA estimadas (÷ 1,21). **La conciliación fiscal del mes queda aparte, «pendiente»**, hasta tener
-  sus comprobantes emitidos; un mes provisorio no entra en la provisión de Ganancias. Si los CAE de un mes no coinciden, ese
-  mes no se usa nunca.
-- Cuando el mes cierre y estén sus comprobantes emitidos, volver a correr `fiscalos.ps1 pfos`: una foto tomada antes del
-  cierre no se mezcla con la facturación del mes completo (queda como referencia).
+Confirmadas por Nicolás durante la revisión de la PR #2 (27 y 28/10/2026). Se dejan anotadas para trabajarlas en PFOS:
+- **VINCHA = VINCHA01**, por unidad; **MUÑE = MUÑEQUERA01**, por par; TE172 = TE75C; DE160A = DE160C.
+- Manguitas (MA01C, MA10C, MA20C, MA21C, MA26C) y pantorrilleras (PA01C, PA10C, PA21C, PA26C, FUPA01C, FUPA02C,
+  HOCKEY01) «A CONFIRMAR»: por par.
+- **PANTU01** por par, con el costo del talle vendido: adulto M/L/XL $ 11.400; niño 1/2 $ 9.600; caminante $ 8.000 (de
+  lista, sin IVA, antes del factor 0,855). Sin talle inequívoco, queda para revisión.
+- **PANTU64**: el mismo costo de fábrica que PANTU01 para el mismo talle; por par.
+- **PIERNA = PIERNA 1** (medias de motocross), $ 12.100 de lista, factor 0,665.
+- Lo que falte costear no es cero: se estima a la vista o el costo no se da por completo. Un reporte con cobertura sin
+  validar no cuenta como completo.

@@ -1,15 +1,15 @@
 /**
- * Cargas manuales y clasificación de proveedores, desde la interfaz (sin editar JSON a mano).
+ * Cargas manuales desde la interfaz (sin editar JSON a mano).
  *
  * Carga manual: un importe por concepto y mes, con su fuente y si es una ESTIMACIÓN (entonces se muestra
  * como estimado, nunca como dato firme), ("planilla de administración", "CM03
  * presentado", ...) y una nota. Se puede corregir o borrar. Para un concepto y mes puede haber varias
- * cargas (p. ej. dos gastos sin factura): se suman entre sí. La carga manual es una FUENTE más del
- * concepto, con prioridad sobre las otras (ver rentabilidad.js): nunca se suma a ellas.
+ * cargas (p. ej. dos pagos): se suman entre sí. La carga manual tiene prioridad sobre un archivo importado del mismo
+ * concepto (ver panel.js): nunca se suma a él. Los conceptos comerciales viejos (legado) se conservan y se pueden
+ * corregir o borrar, pero no se crean nuevos: los calcula PFOS.
  *
- * Clasificación de proveedores: cada emisor de comprobantes recibidos (ARCA) se clasifica UNA vez
- * (mercadería, Mercado Libre, publicidad, logística, gasto operativo, excluir) y la clasificación se
- * aplica a todos los meses. Así los gastos con factura salen de ARCA sin preparar planillas.
+ * La clasificación de proveedores (out/importados/proveedores.json) era de la rentabilidad comercial: el archivo se
+ * conserva, pero FiscalOS ya no la usa.
  *
  * Todo queda en out/importados/ (local, fuera del repositorio).
  */
@@ -37,6 +37,7 @@ export const listarManuales = (outDir) => leerJson(archivoManuales(outDir), []);
 export function guardarManual(outDir, { id = null, mes, concepto, importe, fuente, nota = '', estimado = false }) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(mes))) throw new Error('mes inválido (AAAA-MM)');
   if (!CONCEPTOS[concepto]) throw new Error('concepto desconocido');
+  if (CONCEPTOS[concepto].legado && !id) throw new Error(`«${CONCEPTOS[concepto].nombre}» es un dato comercial: lo calcula PFOS`);
   const t = String(importe ?? '').trim().replace(/\s|\$/g, '');
   // "1234.56" (campo numérico) o "1.234,56" (escrito a mano).
   // "2.500" escrito a mano es dos mil quinientos (punto de miles), no 2,5.
@@ -79,34 +80,4 @@ export function manualesDelMes(outDir, mes) {
     o.importe = r2(o.importe + c.importe); o.cargas.push(c); o.estimado ||= !!c.estimado;
   }
   return out;
-}
-
-// ---------------- clasificación de proveedores ----------------
-
-/** Clases de proveedor y el concepto del resultado al que van sus compras (null = no es gasto del mes). */
-export const CLASES_PROVEEDOR = {
-  mercaderia: { nombre: 'Mercadería para revender', concepto: null, nota: 'va a stock: no es gasto del mes (el costo es el de lo vendido)' },
-  'mercado-libre': { nombre: 'Mercado Libre / Mercado Pago', concepto: 'comisiones-ml' },
-  publicidad: { nombre: 'Publicidad', concepto: 'publicidad' },
-  logistica: { nombre: 'Envíos y logística', concepto: 'logistica' },
-  gasto: { nombre: 'Gasto operativo', concepto: 'gastos-operativos' },
-  excluir: { nombre: 'No va al resultado', concepto: null, nota: 'bienes de uso, gastos personales u otros' },
-};
-
-const archivoProveedores = (outDir) => path.join(dir(outDir), 'proveedores.json');
-export const leerClasificacion = (outDir) => leerJson(archivoProveedores(outDir), {});
-
-export function clasificarProveedor(outDir, { clave, nombre = '', clase }) {
-  if (!clave || String(clave).length > 80) throw new Error('proveedor inválido');
-  const m = leerClasificacion(outDir);
-  if (clase === '' || clase == null) delete m[clave];
-  else if (!CLASES_PROVEEDOR[clase]) throw new Error('clase de proveedor desconocida');
-  else m[clave] = { clase, nombre: String(nombre).slice(0, 120), actualizado: new Date().toISOString() };
-  escribirAtomico(archivoProveedores(outDir), JSON.stringify(m, null, 2));
-  return { clave, clase: m[clave]?.clase ?? null };
-}
-
-/** Sugerencia (no se aplica sola): Mercado Libre / Mercado Pago por la denominación del emisor. */
-export function sugerirClase(nombre) {
-  return /mercado ?libre|mercadolibre|mercado ?pago|mercadopago/i.test(String(nombre ?? '')) ? 'mercado-libre' : null;
 }

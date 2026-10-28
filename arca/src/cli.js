@@ -47,7 +47,7 @@ Comandos:
 
 Aplicación (interfaz en el navegador, local, sin abrir ARCA):
   app [--puerto 4321] [--no-abrir]
-                                Panel fiscal por mes (IVA, IIBB, Ganancias, obligaciones, rentabilidad) con
+                                Panel fiscal por mes (IVA, IIBB, Ganancias, autónomos, pagos, obligaciones) con
                                 los datos conservados e importados; importación de CSV/Excel. Solo 127.0.0.1.
 
 Informes (sin abrir ARCA, con los datos conservados en out/datos):

@@ -1,22 +1,15 @@
 /**
- * Cálculo del mes con los datos de PFOS (solo PALERMO, ya filtrados por las vistas de solo lectura). Funciones puras:
- * reciben filas y devuelven importes CON su cobertura y lo que falta. Reglas de PFOS (docs/rentabilidad-DISENO.md):
- *  - Mes en hora de Argentina (UTC−3) por la fecha de la venta (5.1).
- *  - Cargos de cada venta desde el cobro de MP (charges_details), netos de lo devuelto; pagos rechazados o cancelados no
- *    cuentan; un pago se cuenta una sola vez aunque cubra varias órdenes del paquete (3.2).
- *  - Retenciones de MP (type = tax): anticipos de impuestos, NO costo (4.3).
- *  - Costo de mercadería: lista vigente a la fecha (o la posterior, marcada), mapeo confirmado en PFOS o propuesta
- *    automática; canceladas sin costo; devoluciones recibidas restan en el mes en que se cierran (3.7).
- *  - Reportes de «Conciliación»: solo importaciones cerradas; por identidad, la versión vigente por frescura; pendientes y
- *    conflictos afuera y contados (PFOS finFacts).
- * Los importes de ML/MP vienen CON IVA. PALERMO es responsable inscripto: el neto se informa aparte (÷ 1,21) y marcado
- * como estimado hasta verificarlo contra las facturas de ML en ARCA.
+ * Lo FISCAL que FiscalOS toma de PFOS (solo PALERMO, ya filtrado por las vistas de solo lectura). Funciones puras. No hay
+ * cálculo comercial acá (costos, comisiones, publicidad, logística): eso es de PFOS.
+ *  - Mes en hora de Argentina (UTC−3) por la fecha de la venta; el mes en curso, hasta el corte (ayer).
+ *  - Ventas del mes con IVA, como CONTROL contra la facturación de ARCA (no reemplaza a la facturación).
+ *  - Retenciones de impuestos que Mercado Pago hizo en los cobros de esas ventas (charges_details de tipo «tax» a cargo del
+ *    vendedor): son anticipos de impuestos; cada pago se cuenta una sola vez.
+ *  - Facturas a clientes de «Conciliación» (con su CAE), para verificar que la cuenta es del CUIT.
  */
-import { listaParaVenta, mapeoVigente, proponerMapeo, costoLinea } from './costos.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const num = (v) => { if (v == null || v === '' || v === '•••') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
-export const IVA = 1.21;
 
 /** Fecha y mes en hora de Argentina de una fecha ISO (con o sin zona). */
 export function enArgentina(iso) {
@@ -73,101 +66,6 @@ export function ordenesDelMes(ordenes, mes, corte = finDelMes(mes)) {
   return { vigentes, canceladas, posteriores };
 }
 
-const skuDe = (it) => it?.item?.seller_sku || it?.item?.seller_custom_field || null;
-const variacionDe = (it) => (it?.item?.variation_attributes ?? []).map((a) => a?.value_name).filter(Boolean).join(' ');
-
-/**
- * Costea una línea de venta: mapeo confirmado en PFOS (vigente al día) o propuesta automática; lista vigente o posterior.
- * Devuelve { valor, origen: 'confirmado'|'automático', posterior, motivo }.
- */
-export function costearLinea({ sku, cantidad, precio, variacion, dia }, { listas, itemsPorLista, mapeos }) {
-  const { lista, posterior } = listaParaVenta(listas, dia);
-  if (!lista) return { valor: null, motivo: 'no hay ninguna lista de costos cargada en PFOS' };
-  const items = itemsPorLista.get(String(lista.id)) ?? [];
-  const decision = sku ? mapeoVigente(mapeos.get(sku) ?? [], dia) : null;
-  if (decision?.status === 'excluido') return { valor: null, motivo: 'SKU excluido en PFOS', categoria: 'excluido en PFOS', posterior };
-  let componentes; let origen; let reglas = [];
-  if (decision?.status === 'confirmado' && decision.components?.length) { componentes = decision.components; origen = 'confirmado'; }
-  else {
-    const p = proponerMapeo({ sku, unitPrice: precio, variation: variacion }, items);
-    if (p.estado !== 'automático') return { valor: null, motivo: p.motivo, categoria: p.categoria, revision: p.estado === 'dudoso', posterior };
-    componentes = p.components; origen = 'automático'; reglas = p.reglas;
-  }
-  const c = costoLinea({ cantidad, componentes, items });
-  return c.valor == null ? { valor: null, motivo: c.motivo, categoria: 'fila de la lista', posterior } : { valor: c.valor, porUnidad: c.porUnidad, origen, reglas, posterior };
-}
-
-/** Costo de la mercadería vendida en el mes (sin devoluciones). */
-export function costoVendidoMes(ordenesMes, ctx) {
-  let total = 0; let unidades = 0; let conCosto = 0; let confirmadas = 0; let automaticas = 0; let posteriores = 0; let revision = 0;
-  let ventasConCosto = 0; let ventasSinCosto = 0; let sinPrecio = 0;
-  const sinCosto = new Map(); const porDia = {}; const porRegla = {}; const motivos = {};
-  for (const o of ordenesMes) {
-    const d = (porDia[o.dia] ??= { unidades: 0, conCosto: 0, costo: 0 });
-    for (const it of o.data?.order_items ?? []) {
-      const cantidad = num(it.quantity) ?? 0;
-      unidades += cantidad; d.unidades += cantidad;
-      const sku = skuDe(it);
-      const c = costearLinea({ sku, cantidad, precio: num(it.unit_price), variacion: variacionDe(it), dia: o.dia }, ctx);
-      if (c.valor == null) {
-        const k = sku || '(sin SKU)';
-        const s = sinCosto.get(k) ?? { sku: k, unidades: 0, motivo: c.motivo, categoria: c.categoria ?? 'otro', revision: !!c.revision };
-        s.unidades += cantidad; sinCosto.set(k, s);
-        motivos[s.categoria] = (motivos[s.categoria] ?? 0) + cantidad;
-        if (c.revision) revision += cantidad;
-        const pu = num(it.unit_price);
-        if (pu == null) sinPrecio += cantidad; else ventasSinCosto += pu * cantidad;
-        continue;
-      }
-      total += c.valor; conCosto += cantidad; d.conCosto += cantidad; d.costo = r2(d.costo + c.valor);
-      ventasConCosto += (num(it.unit_price) ?? 0) * cantidad;
-      if (c.origen === 'confirmado') confirmadas += cantidad; else automaticas += cantidad;
-      if (c.posterior) posteriores += cantidad;
-      for (const g of c.reglas ?? []) { const k = g.replace(/^x\d+$/, 'xN').replace(/^\d+ colores.*/, 'colores con «+»'); porRegla[k] = (porRegla[k] ?? 0) + cantidad; }
-    }
-  }
-  // Lo que falta costear NO es cero: se estima con sus propias ventas × la relación costo / venta de lo costeado. Si alguna
-  // línea sin costo no tiene precio, no se puede estimar (queda null y el costo no se da por completo).
-  const sinCostoU = unidades - conCosto;
-  const relacion = ventasConCosto > 0 ? total / ventasConCosto : null;
-  const estimadoFaltante = !sinCostoU ? 0 : sinPrecio || relacion == null ? null : r2(ventasSinCosto * relacion);
-  return {
-    total: r2(total), unidades, unidadesConCosto: conCosto, cobertura: unidades ? r2((conCosto / unidades) * 100) : null,
-    faltante: { unidades: sinCostoU, ventasConIva: r2(ventasSinCosto), unidadesSinPrecio: sinPrecio, estimado: estimadoFaltante,
-      relacionCostoVenta: relacion == null ? null : Math.round(relacion * 10000) / 10000,
-      metodo: 'ventas de las unidades sin costo × (costo ÷ ventas de las unidades con costo) del mismo mes' },
-    unidadesConfirmadas: confirmadas, unidadesAutomaticas: automaticas, unidadesListaPosterior: posteriores, unidadesParaRevision: revision,
-    sinCosto: [...sinCosto.values()].sort((a, b) => b.unidades - a.unidades), motivos, porRegla, porDia,
-  };
-}
-
-/**
- * Mercadería que volvió en el mes: devoluciones entregadas al vendedor (status 'delivered') cerradas en el mes, por la
- * cantidad devuelta, al costo de la línea original. Lo que no se puede costear se lista.
- */
-export function devolucionesMes(devoluciones, ordenesPorId, mes, ctx) {
-  let total = 0; let unidades = 0; let sinCostear = 0; const motivos = [];
-  for (const d of devoluciones) {
-    const x = d.data ?? {};
-    if (x.status !== 'delivered') continue;
-    const f = enArgentina(x.date_closed || x.last_updated);
-    if (f?.mes !== mes) continue;
-    for (const ro of x.orders ?? []) {
-      const q = num(ro.return_quantity) ?? 0;
-      if (!q) continue;
-      unidades += q;
-      const orden = ordenesPorId.get(String(ro.order_id));
-      const linea = orden?.data?.order_items?.find((it) => String(it?.item?.id) === String(ro.item_id) && (!ro.variation_id || String(it?.item?.variation_id) === String(ro.variation_id)));
-      if (!linea) { sinCostear += q; motivos.push(`orden ${ro.order_id}: no está en PFOS`); continue; }
-      const dia = enArgentina(orden.data.date_created)?.dia;
-      const c = costearLinea({ sku: skuDe(linea), cantidad: q, precio: num(linea.unit_price), variacion: variacionDe(linea), dia }, ctx);
-      if (c.valor == null) { sinCostear += q; motivos.push(`orden ${ro.order_id}: ${c.motivo}`); continue; }
-      total += c.valor;
-    }
-  }
-  return { total: r2(total), unidades, sinCostear, motivos: motivos.slice(0, 20) };
-}
-
 /** Clasificación de un cargo del cobro de MP (PFOS 3.2). */
 export function claseCargo(c) {
   if (c?.type === 'tax') return 'retencion';
@@ -180,60 +78,31 @@ export function claseCargo(c) {
 }
 
 /**
- * Cargos al vendedor de las ventas del mes (con IVA, como los informa MP), netos de lo devuelto. Solo los cargos que
- * paga el vendedor (accounts.from = 'collector'). Cada pago, una sola vez.
+ * Retenciones de Mercado Pago en los cobros de las ventas del mes (a cargo del vendedor), por nombre del cargo. Cada pago
+ * una vez. cobertura: % de las ventas con pago cuyo cobro está en PFOS.
  */
-export function cargosMes(ordenesMes, cobrosPorId) {
-  const suma = { comision: 0, cuotas: 0, cupon: 0, envio: 0, retencion: 0, otro: 0 };
-  const otros = {}; const vistos = new Set();
-  let conPago = 0; let pagosFaltantes = 0; const porDia = {};
+export function retencionesMes(ordenesMes, cobrosPorId) {
+  const porNombre = {}; const vistos = new Set(); let total = 0; let conPago = 0; let esperadas = 0;
   for (const o of ordenesMes) {
     const ids = (o.data?.payments ?? []).filter((p) => !['rejected', 'cancelled'].includes(p?.status)).map((p) => String(p.id));
     if (!ids.length) continue;
+    esperadas++;
     let alguno = false;
     for (const id of ids) {
       const pago = cobrosPorId.get(id);
-      if (!pago) { pagosFaltantes++; continue; }
+      if (!pago) continue;
       alguno = true;
       if (vistos.has(id) || ['rejected', 'cancelled'].includes(pago.status)) continue;
       vistos.add(id);
       for (const c of pago.charges_details ?? []) {
-        if (c?.accounts?.from !== 'collector') continue;
+        if (c?.accounts?.from !== 'collector' || claseCargo(c) !== 'retencion') continue;
         const v = (num(c?.amounts?.original) ?? 0) - (num(c?.amounts?.refunded) ?? 0);
-        const k = claseCargo(c);
-        suma[k] += v;
-        if (o.dia && k !== 'retencion' && k !== 'otro') { const d = (porDia[o.dia] ??= { comision: 0, envio: 0 }); const kk = k === 'envio' ? 'envio' : 'comision'; d[kk] = r2(d[kk] + v); }
-        if (k === 'otro') otros[c.name ?? c.type ?? '?'] = r2((otros[c.name ?? c.type ?? '?'] ?? 0) + v);
+        total += v; const k = String(c.name ?? 'sin nombre'); porNombre[k] = r2((porNombre[k] ?? 0) + v);
       }
     }
     if (alguno) conPago++;
   }
-  const conPagos = ordenesMes.filter((o) => (o.data?.payments ?? []).some((p) => !['rejected', 'cancelled'].includes(p?.status))).length;
-  return {
-    ...Object.fromEntries(Object.entries(suma).map(([k, v]) => [k, r2(v)])), otros,
-    pagos: vistos.size, ordenesConPago: conPago, ordenesConPagoEsperado: conPagos, pagosFaltantes,
-    cobertura: conPagos ? r2((conPago / conPagos) * 100) : null, porDia,
-  };
-}
-
-/**
- * Inversión de Mercado Ads del mes hasta el corte (nivel campaña, por día). Sin ningún día leído, el total es null (sin
- * datos), NUNCA 0: un día con inversión 0 leída sí cuenta como dato. diasEsperados: los días hasta el corte.
- */
-export function adsMes(filas, mes, corte = finDelMes(mes)) {
-  const porDia = {}; let total = 0;
-  for (const f of filas) {
-    const dia = String(f.day instanceof Date ? f.day.toISOString() : f.day).slice(0, 10);
-    if (dia.slice(0, 7) !== mes || (corte && dia > corte)) continue;
-    const m = typeof f.metrics === 'string' ? JSON.parse(f.metrics) : f.metrics;
-    const c = num(m?.cost);
-    if (c == null) continue;
-    total += c; porDia[dia] = r2((porDia[dia] ?? 0) + c);
-  }
-  const esperados = diasHasta(mes, corte);
-  const dias = Object.keys(porDia).length;
-  return { total: dias ? r2(total) : null, dias, diasEsperados: esperados.length, diasMes: diasDelMes(mes), corte,
-    faltan: esperados.filter((d) => !(d in porDia)), porDia };
+  return { total: r2(total), porNombre, pagos: vistos.size, cobertura: esperadas ? r2((conPago / esperadas) * 100) : null };
 }
 
 /**
@@ -273,74 +142,6 @@ export function vigentesConciliacion(filas) {
     if (vigente) (porFuente[g.source] ??= []).push(typeof vigente === 'string' ? JSON.parse(vigente) : vigente);
   }
   return { porFuente, conflictos, pendientes, provisionales };
-}
-
-/**
- * Viajes de Luma sin contar dos veces: PFOS guarda las dos planillas (la quincenal, con número de viaje, y la de detalle,
- * con la referencia y la fecha del último estado) como identidades distintas. Si una venta (referencia) está en la quincenal,
- * se usan esos viajes; la de detalle solo suma las referencias que la quincenal no tiene.
- */
-export function viajesSinDuplicar(viajes) {
-  const conId = viajes.filter((d) => d.id_viaje != null && d.id_viaje !== '');
-  const refs = new Set(conId.map((d) => String(d.referencia ?? '')).filter(Boolean));
-  const resto = viajes.filter((d) => !(d.id_viaje != null && d.id_viaje !== ''));
-  const nuevos = resto.filter((d) => !d.referencia || !refs.has(String(d.referencia)));
-  return { viajes: [...conId, ...nuevos], repetidos: resto.length - nuevos.length };
-}
-
-/**
- * Flex (bonificaciones y anulaciones de ML, viajes de Luma) y cargos de Full del mes hasta el corte, por su fecha. Con IVA
- * según el reporte. Cada uno, con su total por día (para comparar períodos equivalentes).
- */
-export function logisticaReportesMes(vigentes, mes, corte = finDelMes(mes)) {
-  const sumar = (filas, campoFecha, campoImporte) => {
-    let total = 0; let n = 0; let sinFecha = 0; const porDia = {};
-    for (const d of filas) {
-      const dia = diaReporte(typeof campoFecha === 'function' ? campoFecha(d) : d[campoFecha]);
-      if (!dia) { sinFecha++; continue; }
-      if (dia.slice(0, 7) !== mes || (corte && dia > corte)) continue;
-      const v = num(d[campoImporte]) ?? 0;
-      total += v; n++; porDia[dia] = r2((porDia[dia] ?? 0) + v);
-    }
-    return { total: r2(total), n, sinFecha, porDia };
-  };
-  const luma = viajesSinDuplicar(vigentes.porFuente.flex_viaje ?? []);
-  return {
-    bonificacionFlex: sumar(vigentes.porFuente.flex_bonificacion ?? [], 'fecha', 'valor'),
-    anulacionFlex: sumar(vigentes.porFuente.flex_anulacion ?? [], 'fecha', 'valor'),
-    cadete: { ...sumar(luma.viajes, (d) => d.fecha_creacion || d.fecha_estado, 'precio'), repetidos: luma.repetidos },
-    full: sumar(vigentes.porFuente.full_cargo ?? [], 'fecha_cargo', 'monto'),
-  };
-}
-
-/**
- * ¿Las importaciones cerradas de un formato cubren el mes hasta el corte? El rango declarado al cargar (desde/hasta) no
- * alcanza: cada archivo tiene que tener la cobertura que PFOS VALIDÓ al cerrarlo. Un archivo con filas descartadas
- * («parcial») deja el mes parcial; uno con cobertura sin validar («desconocida» o sin dato) lo deja «desconocida», aunque
- * sus fechas declaren el mes entero. Devuelve { estado: 'completa' | 'parcial' | 'desconocida' | 'sin datos', rangos,
- * cubreHasta, faltaDesde, descartadas, sinValidar }.
- */
-export function coberturaReportes(importaciones, formatos, mes, corte = finDelMes(mes)) {
-  const ini = `${mes}-01`; const fin = corte ?? finDelMes(mes);
-  const rangos = importaciones.filter((i) => formatos.includes(i.format) && ['cerrada', 'reemplazando'].includes(i.status) && i.range_from && i.range_to)
-    .map((i) => {
-      const hasta = String(i.range_to).slice(0, 10);
-      const h = i.range_to_exclusive ? sumarDias(hasta, -1) : hasta;
-      return { desde: String(i.range_from).slice(0, 10), hasta: h, cobertura: i.coverage ?? 'desconocida' };
-    })
-    .filter((r) => r.desde <= fin && r.hasta >= ini).sort((a, b) => a.desde.localeCompare(b.desde));
-  if (!rangos.length) return { estado: 'sin datos', rangos, cubreHasta: null, faltaDesde: ini, descartadas: 0, sinValidar: 0 };
-  let cubierto = ini; let hueco = null;
-  for (const r of rangos) {
-    if (r.desde > cubierto) { hueco = cubierto; break; }
-    const sig = sumarDias(r.hasta, 1);
-    if (sig > cubierto) cubierto = sig;
-  }
-  const descartadas = rangos.filter((r) => r.cobertura === 'parcial').length;
-  const sinValidar = rangos.filter((r) => r.cobertura !== 'completa' && r.cobertura !== 'parcial').length;
-  const cubreFechas = !hueco && cubierto > fin;
-  const estado = !cubreFechas || descartadas ? 'parcial' : sinValidar ? 'desconocida' : 'completa';
-  return { estado, rangos, cubreHasta: sumarDias(cubierto, -1), faltaDesde: cubreFechas ? null : hueco ?? cubierto, descartadas, sinValidar };
 }
 
 /**

@@ -9,8 +9,8 @@
 #   .\fiscalos.ps1 test           Corre las pruebas automatizadas.
 #   .\fiscalos.ps1 informe-iva -Periodo 2026-09   Informe de IVA del mes con los datos ya conservados (no abre ARCA).
 #   .\fiscalos.ps1 pfos-clave     Genera la clave del acceso de solo lectura a PFOS (queda en .env) y muestra su verificador.
-#   .\fiscalos.ps1 pfos -Periodo 2026-09,2026-10   Lee PFOS (solo lectura) y guarda la rentabilidad de esos meses.
-#   .\fiscalos.ps1 app            Abre FiscalOS en el navegador (panel por mes, rentabilidad, importar archivos).
+#   .\fiscalos.ps1 pfos -Periodo 2026-09,2026-10   Lee de PFOS lo fiscal (solo lectura): cuenta por CAE, ventas como control y retenciones de MP.
+#   .\fiscalos.ps1 app            Abre FiscalOS en el navegador (panel fiscal por mes, pendientes de carga, importar archivos).
 #   .\fiscalos.ps1 acceso-directo Crea un acceso directo "FiscalOS" en el escritorio que abre la app.
 #   .\fiscalos.ps1 reprocesar-dj -Periodo 2026-09 Vuelve a leer la DJ de IVA del mes con la ultima captura ya bajada (no abre ARCA).
 param(
@@ -116,7 +116,7 @@ function Reprocesar-Dj {
 function Pfos {
   if (-not $Periodo) { Fallar 'Indicá los meses con -Periodo AAAA-MM (por ejemplo -Periodo 2026-09,2026-10).' }
   Push-Location $Raiz
-  try { Correr-Paso "PFOS: rentabilidad de $Periodo (solo lectura)" 'npm.cmd' @('run','arca','--','pfos:actualizar','--periodo',$Periodo) } finally { Pop-Location }
+  try { Correr-Paso "PFOS: datos fiscales de $Periodo (solo lectura)" 'npm.cmd' @('run','arca','--','pfos:actualizar','--periodo',$Periodo) } finally { Pop-Location }
 }
 
 function Pfos-Clave {

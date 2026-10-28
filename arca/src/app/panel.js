@@ -1,7 +1,9 @@
 /**
  * Modelo del panel mensual de FiscalOS: arma, para un mes de facturación, cada impuesto (IVA, IIBB,
- * Ganancias, autónomos), las obligaciones registradas en ARCA y la rentabilidad del mes, con los
- * datos YA conservados (out/datos) y los importados a mano (out/importados). No abre ARCA.
+ * Ganancias, autónomos), los pagos de impuestos del mes, lo que deja para pagar y las obligaciones registradas en ARCA,
+ * con los datos YA conservados (out/datos) y los importados o cargados a mano (out/importados). No abre ARCA.
+ * FiscalOS es solo impositivo: no calcula costos ni rentabilidad comercial (eso es de PFOS). Para proyectar Ganancias
+ * recibe el resultado comercial de cada mes ya calculado por PFOS.
  *
  * Cada cifra lleva su NIVEL, que la interfaz muestra siempre:
  *   verificado -> leído de ARCA y validado por FiscalOS (fuente y fecha de consulta);
@@ -19,7 +21,7 @@ import { fechaIso } from '../portal/calidad.js';
 import { estimar, alicuotaIIBB } from '../estimacion.js';
 import { importadoDelMes, mesesImportados, CONCEPTOS } from './importar.js';
 import { manualesDelMes, listarManuales } from './manuales.js';
-import { resultadoOperativo, rentabilidadMes } from './rentabilidad.js';
+import { comprobantesMes } from './comprobantes.js';
 import { leerFotos } from '../pfos/fotos.js';
 import { integraciones } from './integraciones.js';
 
@@ -65,7 +67,7 @@ export function mesesDisponibles(outDir, hoy) {
   for (const id of ['portal-iva-ddjj', 'mis-retenciones']) for (const v of Object.values(leerVigente(datosDir, id))) if (v.desde) s.add(v.desde.slice(0, 7));
   for (const m of mesesImportados(outDir)) s.add(m);
   for (const c of listarManuales(outDir)) if (!CONCEPTOS[c.concepto]?.anual) s.add(c.mes); // lo anual (DJ de Ganancias) no abre un mes
-  for (const f of leerFotos(outDir)) s.add(f.mes); // el mes en curso, con su rentabilidad provisoria
+  for (const f of leerFotos(outDir)) s.add(f.mes); // meses con la conciliación de PFOS
   return [...s].filter((m) => m <= hoy.slice(0, 7)).sort().reverse();
 }
 
@@ -252,36 +254,32 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     saldoPendiente: iibbDeclarado.valor != null ? cifra(Math.max(0, iibbDeclarado.valor - (iibbPagado.valor ?? 0)), iibbDeclarado.nivel, 'declarado − pagos', iibbPagado.valor == null ? 'sin pagos registrados' : null) : faltante('falta lo declarado'),
     vencimientoPresentacion: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
     vencimientoPago: { fecha: null, nivel: 'faltante', nota: 'calendario de Convenio Multilateral no cargado' },
-    estado: iibbDeclarado.valor != null ? (iibbPagado.valor != null && iibbPagado.valor >= iibbDeclarado.valor - 1 ? 'pagado' : 'declarado') : iibbEstimado.valor != null ? 'solo estimado' : 'sin datos',
+    estado: iibbDeclarado.valor != null ? estadoPago(iibbDeclarado.valor, iibbPagos) : iibbEstimado.valor != null ? 'solo estimado' : 'sin datos',
   };
 
   // ---------- Ganancias (provisión del mes) ----------
+  // Proyección impositiva: el resultado comercial de cada mes lo calcula PFOS (antes de impuestos); FiscalOS le aplica lo
+  // fiscal (IIBB y autónomos deducibles, deducciones personales y la escala). Sin el resultado de PFOS de algún mes del
+  // año, NO es estimable: nunca se reconstruye el resultado acá ni se usan las compras.
   let ganEstimado; let iibbParaGanancias = null;
   if (!contrib) ganEstimado = faltante('para estimar Ganancias falta params/contribuyente.json (deducciones, autónomos, IIBB)');
   else {
-    // Base mensual = resultado operativo de cada mes del año (facturación − CMV − gastos). El costo de
-    // la mercadería vendida es OBLIGATORIO: nunca se reemplaza por las compras del mes (con stock son
-    // conceptos distintos y distorsionan la rentabilidad).
-    const meses = []; const sinDatos = []; const sinCmv = []; const conGastosFaltantes = [];
+    const meses = []; const sinFacturacion = []; const sinResultado = [];
     for (let i = 1; i <= Number(mes.slice(5)); i++) {
       const m = `${anio}-${String(i).padStart(2, '0')}`;
-      const op = resultadoOperativo(outDir, m);
-      // Un mes provisorio (ventas de PFOS, sin los comprobantes emitidos de ARCA) no entra: Ganancias es fiscal.
-      if (op.ventas.cifra.valor == null || op.provisional) { sinDatos.push(m); continue; }
-      const cmv = op.lineas.find((l) => l.clave === 'costo-mercaderia');
-      if (cmv.cifra.valor == null) { sinCmv.push(m); continue; }
-      if (op.operativo.faltan.length) conGastosFaltantes.push(m);
-      const otros = op.lineas.find((l) => l.clave === 'otros-ingresos').cifra.valor ?? 0;
-      const gastos = op.lineas.filter((l) => l.signo < 0).reduce((n, l) => n + (l.cifra.valor ?? 0), 0);
-      meses.push({ mes: m, ventasNetas: op.ventas.cifra.valor + otros, gastosNetos: gastos });
+      const em = comprobantesMes(datosDir, 'comprobantes-emitidos', 'emitidos', m);
+      const rc = manualesDelMes(outDir, m)['resultado-comercial'] ?? importadoDelMes(outDir, m)['resultado-comercial'];
+      if (!em) sinFacturacion.push(m);
+      if (!rc) sinResultado.push(m);
+      if (em && rc) meses.push({ mes: m, ventasNetas: em.netoGravado, resultadoBruto: rc.importe, gastosNetos: r2(em.netoGravado - rc.importe) });
     }
-    if (sinDatos.length || sinCmv.length) {
-      ganEstimado = faltante(`Ganancias se provisiona sobre el resultado acumulado del año: ${[sinDatos.length ? `faltan los comprobantes de ${sinDatos.join(', ')}` : null, sinCmv.length ? `falta el costo de mercadería vendida de ${sinCmv.join(', ')}` : null].filter(Boolean).join('; ')}`);
+    if (sinFacturacion.length || sinResultado.length) {
+      ganEstimado = faltante(`no estimable: la provisión se calcula sobre el resultado acumulado del año; ${[sinFacturacion.length ? `faltan los comprobantes emitidos de ${sinFacturacion.join(', ')}` : null, sinResultado.length ? `falta el resultado comercial de PFOS de ${sinResultado.join(', ')}` : null].filter(Boolean).join('; ')}`);
     } else {
       const est = estimar(Number(anio), meses, contrib).at(-1);
       iibbParaGanancias = est.iibb;
       ganEstimado = cifra(est.ganancias, 'estimado', 'escala de Ganancias sobre el resultado proyectado del año',
-        `provisión del mes; base = facturación − costo de mercadería vendida − gastos − IIBB − autónomos de cada mes; proyección anual ${est.proyeccionAnual}${conGastosFaltantes.length ? `; gastos incompletos en ${conGastosFaltantes.join(', ')} (provisión sobreestimada)` : ''}`);
+        `provisión del mes; base = resultado comercial de PFOS − IIBB − autónomos de cada mes; proyección anual ${est.proyeccionAnual}. No es la DJ anual (F.711) ni un anticipo`);
     }
   }
   // Ganancias es ANUAL: un pago con fecha en el mes (anticipo o saldo de DJ) se imputa a un período
@@ -315,11 +313,21 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     pagos: autPagosCt.length ? cifra(suma(autPagosCt), 'verificado', autPagosCt[0].fuente) : autImp ?? faltante('sin pagos registrados en el mes'),
   };
 
-  // ---------- Rentabilidad del mes ----------
-  const rentabilidad = rentabilidadMes(outDir, mes, { iva, iibb, ganancias, autonomos, pagosMes, hoy });
+  // ---------- Pagos de impuestos con fecha en el mes (cualquier período) ----------
+  const pagos = pagosDeCaja(outDir, mes, pagosMes, man, imp);
+
+  // ---------- Lo que el mes deja para pagar más adelante ----------
+  const deja = [
+    { impuesto: 'IVA', cifra: iva.saldoPendiente.valor != null ? iva.saldoPendiente : iva.declarado, vence: iva.vencimientoPago.fecha,
+      nota: iva.saldoPendiente.nivel === 'verificado' && inf.conciliacion.saldoPendiente != null ? 'saldo exigible confirmado (deuda registrada en Cuentas Tributarias)'
+        : iva.vencimientoPago.fecha && iva.vencimientoPago.fecha >= hoy ? 'no vencido (régimen del contribuyente)' : iva.vencimientoPago.fecha ? 'vencido' : null },
+    { impuesto: 'Ingresos Brutos', cifra: iibb.saldoPendiente.valor != null ? iibb.saldoPendiente : iibb.estimado, vence: null,
+      nota: iibb.saldoPendiente.valor != null ? `declarado − pagos (${iibb.estado})` : 'estimado: falta lo declarado' },
+    { impuesto: 'Ganancias', cifra: ganEstimado, vence: null, nota: 'provisión estimada; se paga con la DJ anual y sus anticipos' },
+  ];
 
   return {
-    mes, hoy, iva, iibb, ganancias, autonomos, rentabilidad, pagosDelMes: pagosMes,
+    mes, hoy, iva, iibb, ganancias, autonomos, pagos, deja, pagosDelMes: pagosMes,
     manuales: listarManuales(outDir).filter((c) => c.mes === mes),
     obligaciones: obligaciones(datosDir, hoy),
     importado: Object.fromEntries(Object.entries(imp).map(([k, v]) => [k, { ...v, nombre: CONCEPTOS[k]?.nombre ?? k }])),
@@ -329,36 +337,27 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
 }
 
 /**
- * Comparación de varios meses de facturación: facturación, costo de lo vendido, margen, gastos, impuestos atribuibles
- * (sin IVA) y resultado, cada uno con su estado. La variación entre meses solo se calcula si los dos valores existen, y se
- * marca cuando alguno es parcial o estimado.
+ * Estado del pago de un impuesto declarado. «No encontrado» = falta evidencia, NO prueba que esté impago. Un pago parcial
+ * no silencia la obligación. `pagos`: [cifra] con su nivel ('verificado' = leído de ARCA o SIFERE; si no, cargado a mano).
  */
-export function comparacionMeses(outDir, meses, opciones = {}) {
-  const fila = (valor, estado, nivel = null) => ({ valor: valor ?? null, estado: valor == null ? 'faltante' : estado, nivel });
-  const columnas = meses.map((mes) => {
-    const p = panelMes(outDir, mes, opciones);
-    const r = p.rentabilidad;
-    const L = Object.fromEntries(r.lineas.map((l) => [l.clave, l]));
-    const gastos = ['comisiones-ml', 'publicidad', 'logistica', 'gastos-operativos'].map((k) => L[k]);
-    const gastosFaltan = gastos.filter((g) => g.cifra.valor == null).map((g) => g.nombre);
-    const gastosEst = gastos.some((g) => g.cifra.nivel === 'estimado');
-    const sumaGastos = gastos.reduce((n, g) => n + (g.cifra.valor ?? 0), 0);
-    const ivaCifra = p.iva.declarado.valor != null ? p.iva.declarado : p.iva.estimado;
-    return {
-      mes,
-      facturacion: fila(r.ventas.cifra.valor, r.provisional ? 'con estimaciones' : 'completo', r.ventas.cifra.nivel),
-      costo: fila(L['costo-mercaderia'].cifra.valor, L['costo-mercaderia'].cifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', L['costo-mercaderia'].cifra.nivel),
-      costoFuente: L['costo-mercaderia'].origen,
-      margen: { ...fila(r.margen.estado === 'parcial' ? null : r.margen.valor, r.margen.estado), pct: r.margenPct },
-      gastos: { ...fila(gastos.some((g) => g.cifra.valor != null) ? Math.round(sumaGastos * 100) / 100 : null, gastosFaltan.length ? 'parcial' : gastosEst ? 'con estimaciones' : 'completo'), faltan: gastosFaltan },
-      impuestos: fila(r.impuestos.cargaAtribuible.valor, r.impuestos.cargaAtribuible.nota ? 'parcial' : 'con estimaciones', r.impuestos.cargaAtribuible.nivel),
-      resultado: { ...fila(r.neto.estado === 'parcial' ? null : r.neto.valor, r.neto.estado), parcial: r.neto.estado === 'parcial' ? r.neto.valor : null, faltan: r.neto.faltan },
-      iva: fila(ivaCifra.valor, ivaCifra.nivel === 'estimado' ? 'con estimaciones' : 'completo', ivaCifra.nivel),
-      // Completo solo si alguna consulta conservada de pagos de Cuentas Tributarias cubre el mes entero.
-      pagosImpuestos: fila(r.pagos.propios, Object.values(leerVigente(path.join(outDir, 'datos'), 'ct-pagos')).some((v) => (v.desde ?? '9') <= `${mes}-01` && (v.hasta ?? '') >= finDeMes(mes)) ? 'completo' : 'parcial'),
-      pfos: p.integraciones.pfos.conectado ? (p.integraciones.pfos.verificada ? 'verificada' : p.integraciones.pfos.provisoria ? 'provisoria (conciliación fiscal pendiente)' : 'sin verificar') : 'sin datos',
-      provisional: r.provisional ? (r.provisional.mesCerrado ? 'provisorio' : `provisorio al ${r.provisional.alCorte.split('-').reverse().join('/')}`) : null,
-    };
-  });
-  return { meses, columnas };
+export function estadoPago(declarado, pagos = []) {
+  if (declarado == null) return 'sin declarar';
+  if (declarado <= 0) return 'sin saldo a pagar';
+  const total = pagos.reduce((n, c) => n + (c.valor ?? 0), 0);
+  if (!pagos.length || total <= 0) return 'pago no encontrado (sin cobertura)';
+  if (total < declarado - 1) return 'pago parcial: falta conciliar';
+  return pagos.every((c) => c.nivel === 'verificado') ? 'pagado verificado' : 'pago cargado a mano';
+}
+
+/** Pagos de impuestos con fecha en el mes (ARCA) y los cargados o importados a mano, sin sumar dos veces. */
+function pagosDeCaja(outDir, mes, pagosMes, man, imp) {
+  const filas = pagosMes.map((x) => ({ fecha: x.fecha, impuesto: x.clasificacion.nombre, detalle: x.impuesto, corresponde: x.imputadoA, importe: x.importe, propio: x.clasificacion.propio, nivel: 'verificado', fuente: 'Cuentas Tributarias' }));
+  for (const [k, nombre] of [['iibb-pagado', 'Ingresos Brutos'], ['ganancias-anticipo', 'Ganancias'], ['autonomos', 'Autónomos']]) {
+    const src = man[k] ? { nivel: 'manual', importe: man[k].importe, fuente: 'carga manual' } : imp[k] ? { nivel: 'importado', importe: imp[k].importe, fuente: 'archivo importado' } : null;
+    if (!src) continue;
+    const yaEnArca = filas.some((p) => p.impuesto === nombre && p.nivel === 'verificado');
+    filas.push({ fecha: null, impuesto: nombre, detalle: CONCEPTOS[k].nombre, corresponde: 'según la carga', importe: Math.abs(src.importe), propio: true, nivel: src.nivel, fuente: src.fuente, posibleDuplicado: yaEnArca });
+  }
+  const sumar = (f) => r2(filas.filter(f).reduce((n, p) => n + (p.importe ?? 0), 0));
+  return { filas, propios: sumar((p) => p.propio !== false), comoAgente: sumar((p) => p.propio === false), total: sumar(() => true) };
 }

@@ -2,10 +2,12 @@
  * Pendientes de carga: lo que ARCA no entrega sola y hay que bajar a mano (una vez por mes o por año). La app lo pide con
  * un cartel hasta que esté cargado. Solo datos impositivos; nada comercial (eso es de PFOS).
  *
- * Por cada mes cerrado (los últimos MESES_REVISADOS, hasta el mes anterior a hoy):
+ * Por cada uno de los últimos MESES_REVISADOS meses CALENDARIO cerrados (desde el mes anterior a hoy hacia atrás), tengan
+ * datos guardados o no: un mes sin nada es justamente el que más falta.
  *  - Comprobantes emitidos y recibidos (Mis Comprobantes): se bajan solos con la actualización de ARCA.
  *  - Ingresos Brutos: el impuesto determinado de la DJ CM03 del mes (SIFERE no se lee).
- *  - Ingresos Brutos: el pago, si hay impuesto declarado y no hay pago registrado.
+ *  - Ingresos Brutos: el pago, si hay impuesto declarado y no se encontró un pago que lo cubra. «No encontrado» es falta de
+ *    evidencia, no prueba de que esté impago; un pago parcial no silencia el pedido.
  *  - Autónomos: la cuota del mes, si ARCA no tiene pagos imputados al período y no está configurada.
  * Una vez por año (desde julio): el impuesto determinado de la DJ anual de Ganancias del año anterior.
  */
@@ -13,11 +15,18 @@ import path from 'node:path';
 import { leerManifiesto } from '../portal/misComprobantes.js';
 import { manualesDelMes } from './manuales.js';
 import { importadoDelMes, CONCEPTOS } from './importar.js';
-import { mesAnterior, mesesDisponibles, pagosDelPeriodo, volantesSifere, contribuyente } from './panel.js';
+import { mesAnterior, pagosDelPeriodo, volantesSifere, contribuyente, estadoPago, cifra } from './panel.js';
 
 export const MESES_REVISADOS = 6;
 const NOMBRE_MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const nombreMes = (m) => `${NOMBRE_MES[Number(m.slice(5)) - 1]} ${m.slice(0, 4)}`;
+const pesos = (n) => `$ ${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Los últimos `n` meses calendario hasta `ultimo` inclusive, del más nuevo al más viejo. */
+export function mesesHacia(ultimo, n) {
+  const out = []; let [y, m] = ultimo.split('-').map(Number);
+  for (let i = 0; i < n; i++) { out.push(`${y}-${String(m).padStart(2, '0')}`); m -= 1; if (!m) { m = 12; y -= 1; } }
+  return out;
+}
 const finDeMes = (mes) => { const [y, m] = mes.split('-'); return new Date(Date.UTC(+y, +m, 0)).toISOString().slice(0, 10); };
 
 /** ¿Hay un tramo apto de Mis Comprobantes que cubra el mes entero? */
@@ -39,7 +48,7 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
   const datosDir = path.join(outDir, 'datos');
   const contrib = contribuyente(paramsFile);
   const ultimo = mesAnterior(hoy);
-  const meses = mesesDisponibles(outDir, hoy).filter((m) => m <= ultimo).slice(0, MESES_REVISADOS);
+  const meses = mesesHacia(ultimo, MESES_REVISADOS);
   const out = [];
   for (const mes of meses) {
     const n = nombreMes(mes);
@@ -54,10 +63,19 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
         porque: 'es el impuesto de IIBB del mes; sin él solo hay una estimación',
         como: `En SIFERE Web (Convenio Multilateral), la DJ CM03 del período ${mes.slice(5)}/${mes.slice(0, 4)}: el total de impuesto determinado de todas las jurisdicciones. Cargá ese número acá, o el archivo en «Importar archivo».`,
         accion: { tipo: 'cargar', concepto: 'iibb-declarado', mes } });
-    } else if (iibb.importe > 0 && !cargado(outDir, mes, 'iibb-pagado') && !volantesSifere(datosDir, mes).length) {
-      out.push({ clave: `iibb-pagado:${mes}`, mes, titulo: `Ingresos Brutos de ${n}: pago`,
-        porque: 'hay impuesto declarado y no hay ningún pago registrado (si todavía no lo pagaste, dejalo pendiente)',
-        como: 'El importe pagado del VEP o del volante de SIFERE de ese período.', accion: { tipo: 'cargar', concepto: 'iibb-pagado', mes } });
+    } else if (iibb.importe > 0) {
+      const volantes = volantesSifere(datosDir, mes);
+      const manual = cargado(outDir, mes, 'iibb-pagado');
+      const pagos = [...(volantes.length ? [cifra(volantes.reduce((x, v) => x + (v.importe ?? 0), 0), 'verificado')] : []), ...(manual ? [cifra(manual.importe, 'manual')] : [])];
+      const estado = estadoPago(iibb.importe, pagos);
+      if (estado === 'pago no encontrado (sin cobertura)' || estado === 'pago parcial: falta conciliar') {
+        const pagado = pagos.reduce((x, c) => x + c.valor, 0);
+        out.push({ clave: `iibb-pagado:${mes}`, mes, titulo: `Ingresos Brutos de ${n}: pago`, estadoPago: estado,
+          porque: estado === 'pago parcial: falta conciliar'
+            ? `hay pagos por ${pesos(pagado)} de ${pesos(iibb.importe)} declarados: falta conciliar ${pesos(iibb.importe - pagado)}`
+            : 'no encontramos el pago en SIFERE ni en tus cargas. Eso no prueba que esté impago: si lo pagaste, cargá el importe; si todavía no, queda pendiente',
+          como: 'El importe pagado del VEP o del volante de SIFERE de ese período.', accion: { tipo: 'cargar', concepto: 'iibb-pagado', mes } });
+      }
     }
     if (!cargado(outDir, mes, 'autonomos-cuota') && !pagosDelPeriodo(datosDir, mes, 'autonomos').length && !contrib?.autonomosMensual) {
       out.push({ clave: `autonomos-cuota:${mes}`, mes, titulo: `Autónomos de ${n}: cuota del mes`,

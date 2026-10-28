@@ -13,9 +13,10 @@
  * Además, la sesión se pone en «solo lectura» y cada fila leída tiene que ser de la cuenta configurada.
  */
 
-export const VISTAS = ['ordenes', 'cobros_mp', 'devoluciones', 'facturas_clientes', 'cobertura', 'ads_diario', 'conciliacion', 'importaciones',
-  'costos_listas', 'costos_items', 'costos_sku', 'costos_sku_componentes'];
-const CON_CUENTA = ['ordenes', 'cobros_mp', 'devoluciones', 'facturas_clientes', 'cobertura', 'ads_diario', 'conciliacion', 'importaciones', 'costos_sku', 'costos_sku_componentes'];
+// Las vistas que FiscalOS lee (lo fiscal). Las demás del esquema (Ads, costos, devoluciones) quedan instaladas sin uso
+// hasta simplificar el acceso cuando PFOS exponga sus resultados consolidados.
+export const VISTAS = ['ordenes', 'cobros_mp', 'facturas_clientes', 'cobertura', 'conciliacion'];
+const CON_CUENTA = VISTAS;
 
 /**
  * Cadena de conexión desde arca\.env. Preferido: FISCALOS_PFOS_HOST + FISCALOS_PFOS_BASE + FISCALOS_PFOS_CLAVE (la arma
@@ -104,59 +105,22 @@ const ts = (campo) => `(CASE WHEN ${campo} ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN (${ca
 const lotes = (xs, n = 1000) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 const json = (x) => (typeof x === 'string' ? JSON.parse(x) : x);
 
-/** Lee todo lo que hace falta para un mes. Solo SELECT sobre las vistas de «fiscalos». */
+/** Lee lo fiscal de un mes. Solo SELECT sobre las vistas de «fiscalos». */
 export async function leerMes(db, mes) {
   const [desde, hasta] = limites(mes);
   const ordenes = (await q(db, `SELECT key, data FROM fiscalos.ordenes
     WHERE ${ts("data->>'date_created'")} >= $1::timestamptz AND ${ts("data->>'date_created'")} < $2::timestamptz`, [desde, hasta]))
     .map((r) => ({ key: r.key, data: json(r.data) }));
-  const devoluciones = (await q(db, `SELECT key, data FROM fiscalos.devoluciones
-    WHERE ${ts("COALESCE(data->>'date_closed', data->>'last_updated')")} >= $1::timestamptz
-      AND ${ts("COALESCE(data->>'date_closed', data->>'last_updated')")} < $2::timestamptz`, [desde, hasta])).map((r) => ({ key: r.key, data: json(r.data) }));
-  // Órdenes de otros meses que tuvieron una devolución en este (para costear lo que vuelve).
-  const conocidas = new Set(ordenes.map((o) => String(o.key)));
-  const otras = [...new Set(devoluciones.flatMap((d) => (d.data.orders ?? []).map((o) => String(o.order_id))))].filter((k) => !conocidas.has(k));
-  const ordenesDevueltas = [];
-  for (const l of lotes(otras)) ordenesDevueltas.push(...(await q(db, 'SELECT key, data FROM fiscalos.ordenes WHERE key = ANY($1)', [l])).map((r) => ({ key: r.key, data: json(r.data) })));
   const idsPago = [...new Set(ordenes.flatMap((o) => (o.data.payments ?? []).map((p) => String(p.id))))];
   const cobros = new Map();
   for (const l of lotes(idsPago)) for (const r of await q(db, 'SELECT key, data FROM fiscalos.cobros_mp WHERE key = ANY($1)', [l])) cobros.set(String(r.key), json(r.data));
   const facturas = (await q(db, `SELECT data FROM fiscalos.facturas_clientes
     WHERE ${ts("data->>'issued_date'")} >= $1::timestamptz AND ${ts("data->>'issued_date'")} < $2::timestamptz`, [desde, hasta])).map((r) => json(r.data));
-  const ads = await q(db, `SELECT day::text AS day, metrics FROM fiscalos.ads_diario WHERE day >= $1::date AND day < $2::date`, [desde.slice(0, 10), hasta.slice(0, 10)]);
   const alcances = await q(db, `SELECT source, scope, status FROM fiscalos.cobertura WHERE scope LIKE $1`, [`hist|${mes}-%`]);
-  // «Conciliación»: por la fecha de cada fuente (fechas canónicas AAAA-MM-DD…). Se trae ±1 mes para no partir versiones.
+  // Facturas a clientes del reporte de «Conciliación» (con su CAE), por fecha de emisión. Se trae ±1 mes para no partir versiones.
   const conciliacion = (await q(db, `SELECT source, identity_key, identity_status, data_sha, defining_sha, import_status, freshness_at, freshness_origin, data
-    FROM fiscalos.conciliacion WHERE import_status IN ('cerrada','reemplazando')
-      AND COALESCE(data->>'fecha', data->>'fecha_creacion', data->>'fecha_estado', data->>'fecha_cargo', data->>'fecha_emision', data->>'desde') >= $1
-      AND COALESCE(data->>'fecha', data->>'fecha_creacion', data->>'fecha_estado', data->>'fecha_cargo', data->>'fecha_emision', data->>'desde') < $2`,
+    FROM fiscalos.conciliacion WHERE import_status IN ('cerrada','reemplazando') AND source = 'comprobante'
+      AND data->>'fecha_emision' >= $1 AND data->>'fecha_emision' < $2`,
   [`${mes}-01`, `${hasta.slice(0, 7)}-01`])).map((r) => ({ ...r, data: json(r.data) }));
-  return { mes, ordenes, ordenesDevueltas, devoluciones, cobros, facturas, ads, alcances, conciliacion };
-}
-
-/** Lo que no depende del mes: listas de costos, artículos, mapeos de SKU e importaciones de «Conciliación». */
-export async function leerComunes(db) {
-  const listas = await q(db, 'SELECT id::text AS id, supplier, valid_from::text AS valid_from, valid_to::text AS valid_to, cash_pct, items FROM fiscalos.costos_listas');
-  const itemsPorLista = new Map();
-  for (const r of await q(db, 'SELECT list_id::text AS list_id, row_no, code, size_label, presentation, pairs, price, price_suggested, factor FROM fiscalos.costos_items')) {
-    const it = { row: r.row_no, code: r.code, size: r.size_label, presentation: r.presentation, pairs: r.pairs == null ? null : Number(r.pairs), price: Number(r.price),
-      price_suggested: r.price_suggested == null ? null : Number(r.price_suggested), factor: r.factor == null ? null : Number(r.factor) };
-    if (!itemsPorLista.has(r.list_id)) itemsPorLista.set(r.list_id, []);
-    itemsPorLista.get(r.list_id).push(it);
-  }
-  const comps = new Map();
-  for (const r of await q(db, 'SELECT seller_sku, version, idx, code, presentation, size_label, row_no, units, pairs FROM fiscalos.costos_sku_componentes ORDER BY seller_sku, version, idx')) {
-    const k = `${r.seller_sku}\u0000${r.version}`;
-    if (!comps.has(k)) comps.set(k, []);
-    comps.get(k).push({ code: r.code, presentation: r.presentation, size: r.size_label, row: r.row_no, units: Number(r.units), pairs: r.pairs });
-  }
-  const mapeos = new Map();
-  for (const r of await q(db, 'SELECT seller_sku, version, valid_from::text AS valid_from, status FROM fiscalos.costos_sku')) {
-    if (!mapeos.has(r.seller_sku)) mapeos.set(r.seller_sku, []);
-    mapeos.get(r.seller_sku).push({ version: Number(r.version), valid_from: r.valid_from, status: r.status, components: comps.get(`${r.seller_sku}\u0000${r.version}`) ?? [] });
-  }
-  const importaciones = await q(db, `SELECT format, status, range_from::text AS range_from, range_to::text AS range_to, range_to_exclusive, coverage FROM fiscalos.importaciones`);
-  // Mercado Ads: si la vista no devuelve ninguna fila, la publicidad queda faltante y se avisa (no se toma como 0).
-  const [ads] = await q(db, 'SELECT count(*)::int AS filas, min(day)::text AS desde, max(day)::text AS hasta FROM fiscalos.ads_diario');
-  return { listas, itemsPorLista, mapeos, importaciones, ads };
+  return { mes, ordenes, cobros, facturas, alcances, conciliacion };
 }

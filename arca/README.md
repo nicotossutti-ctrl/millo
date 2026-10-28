@@ -213,22 +213,15 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   *faltante* (y cómo obtenerla). El vencimiento de pago del IVA es el que registra Cuentas
   Tributarias para el régimen del contribuyente (p. ej. IVA diferido a 90 días); no se aplica el
   calendario general.
-- **Rentabilidad** (por mes de facturación), en cuatro bloques separados:
-  1. *Resultado económico*: facturación neta (ARCA) − costo de la mercadería vendida = margen bruto;
-     − cargos de Mercado Libre, publicidad, logística y gastos = resultado operativo; − IIBB y
-     autónomos; − provisión de Ganancias. Cada subtotal dice si está completo, con estimaciones o
-     **parcial** (y qué falta); un resultado parcial nunca se presenta como rentabilidad neta.
-  2. *Impuestos que generó el mes* (el IVA se muestra, pero no es costo).
-  3. *Pagos de impuestos que salieron de caja en el mes*, de cualquier período, separando los
-     propios de las retenciones depositadas como agente.
-  4. *Lo que el mes deja para pagar más adelante* (p. ej. el IVA diferido).
-
-  Reglas: una sola fuente por concepto y mes (carga manual > archivo importado > PFOS > facturas en
-  ARCA); las demás se muestran como referencia y no se suman. El costo de la mercadería vendida
-  nunca se reemplaza por las compras del mes (tampoco al estimar Ganancias). Los proveedores de las
-  facturas recibidas se clasifican una vez (mercadería, Mercado Libre, publicidad, logística, gasto,
-  excluir) y desde ahí sus gastos salen de ARCA. Cualquier importe se carga o corrige desde la
-  interfaz, con su fuente; se guarda el valor anterior.
+  En la misma pestaña: los *pagos de impuestos con fecha en el mes* (de cualquier período, separando los propios de
+  las retenciones depositadas como agente, con los que cargues a mano), *lo que el mes deja para pagar más adelante*
+  (p. ej. el IVA diferido) y la *conciliación con PFOS*. Un impuesto declarado sin pago encontrado dice «pago no
+  encontrado (sin cobertura)»: falta evidencia, no prueba que esté impago; un pago parcial no lo da por pagado.
+- **FiscalOS es solo impositivo.** Ventas, costos, comisiones, publicidad, logística y rentabilidad los calcula PFOS.
+  Para proyectar Ganancias, FiscalOS usa el *resultado comercial* de cada mes ya calculado por PFOS (antes de impuestos;
+  hoy se carga a mano o por archivo, concepto «Resultado comercial del mes»), le resta IIBB y autónomos y aplica la
+  escala; sin ese resultado de algún mes del año, la provisión dice «no estimable». Las cargas e importaciones
+  comerciales viejas se conservan, pero no se crean nuevas.
 - **Obligaciones**: vencimientos y deudas registrados en Cuentas Tributarias.
 - **Importar archivo**: CSV o Excel (.xlsx). Vista previa, elección de columnas y concepto, simulación
   (totales por mes, filas descartadas y **duplicadas**) y confirmación. Un archivo idéntico no se
@@ -239,17 +232,13 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
 - **Simulador**: crédito fiscal y desembolso de una compra real con factura (versión inicial).
 - Estimaciones de IIBB, Ganancias y autónomos: requieren `params/contribuyente.json`.
 - **PFOS** (Mercado Libre, solo la cuenta del CUIT del contribuyente): `fiscalos.ps1 pfos -Periodo "2026-09,2026-10"`
-  lee PFOS en **solo lectura** y guarda una foto por mes en `out/pfos/`, con costo de lo vendido, cargos de ML,
-  logística, publicidad, cobertura de cada fuente y la cuenta verificada contra tus comprobantes emitidos de ARCA.
-  Instalación y seguridad (`docs/pfos-conexion.md`, sección 6): comprobación previa de solo lectura
-  (`docs/pfos-comprobacion.sql`), clave criptográfica con `fiscalos.ps1 pfos-clave` (queda solo en `.env`; el SQL lleva
-  el verificador SCRAM) y acceso (`docs/pfos-acceso.sql`). La cuenta es obligatoria (`FISCALOS_PFOS_CUENTA`) y se
-  verifica por CAE contra tus comprobantes emitidos de ARCA. Sobre una instalación ya hecha, `docs/pfos-correccion-1.sql`
-  corrige la vista de Mercado Ads y suma la descripción de la lista de costos (sección 7 de `docs/pfos-conexion.md`).
-  El mes en curso se mide **al corte** (hasta ayer) y, sin comprobantes emitidos todavía, muestra una rentabilidad
-  operativa **provisoria** apoyada en la cuenta verificada por CAE en otro mes; su conciliación fiscal queda pendiente.
-- **Comparación de meses** (arriba de Rentabilidad): facturación, costo, margen, gastos, impuestos atribuibles,
-  resultado, IVA y pagos de impuestos, con el estado de cada cifra; la variación se marca si alguna es parcial o estimada.
+  lee de PFOS **solo lo fiscal**, en **solo lectura**, y guarda una foto por mes en `out/pfos/`: la cuenta verificada por
+  CAE contra tus comprobantes emitidos de ARCA, las ventas de Mercado Libre con IVA como control contra la facturación y
+  las retenciones de Mercado Pago (anticipos). El mes en curso se mide al corte (hasta ayer); sin sus comprobantes
+  emitidos, la cuenta se apoya en otro mes verificado y la conciliación fiscal del mes queda «pendiente».
+  Instalación y seguridad (`docs/pfos-conexion.md`): comprobación previa de solo lectura (`docs/pfos-comprobacion.sql`),
+  clave criptográfica con `fiscalos.ps1 pfos-clave` (queda solo en `.env`; el SQL lleva el verificador SCRAM) y acceso
+  (`docs/pfos-acceso.sql`). La cuenta es obligatoria (`FISCALOS_PFOS_CUENTA`).
 
 ### Windows: un solo script, sin Git
 

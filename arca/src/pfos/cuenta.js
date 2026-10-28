@@ -89,7 +89,8 @@ export function verificarCuenta(comprobantes, arca, { minimo = 20, umbral = 95 }
  * Titularidad para usar los datos de un mes. El mes verificado por CAE se usa como siempre. Un mes SIN evidencia (por
  * ejemplo, el mes en curso, sin comprobantes emitidos de ARCA todavía) puede apoyarse en OTRO mes ya verificado por CAE con
  * la MISMA cuenta de Mercado Libre (user_id), leída por el mismo acceso filtrado: la titularidad es de la cuenta, no del
- * mes. Así se puede ver la rentabilidad operativa provisoria, pero la conciliación fiscal del mes sigue pendiente. Un mes
+ * mes. Así se pueden mostrar sus datos (retenciones, ventas como control), pero la conciliación fiscal del mes sigue
+ * pendiente hasta tener sus comprobantes emitidos. Un mes
  * cuyos CAE NO coinciden nunca se usa. `otras`: fotos de otros meses ({ mes, cuenta, cuentaPfos }).
  * Devuelve { usable, provisoria, mesVerificado, conciliacionFiscal: { estado, motivo }, motivo }.
  */
