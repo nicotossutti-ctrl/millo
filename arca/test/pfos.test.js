@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fotosDesde } from '../src/pfos/actualizar.js';
+import { fotosDesde, resumenFotoFiscal } from '../src/pfos/actualizar.js';
 import { controlarRol } from '../src/pfos/lectura.js';
 import { enArgentina, retencionesMes, vigentesConciliacion, corteDelMes, diasCubiertos } from '../src/pfos/calculo.js';
 import { clavesArca, verificarCuenta, titularidad } from '../src/pfos/cuenta.js';
@@ -397,3 +397,17 @@ conPg('octubre en curso: la cuenta se apoya en septiembre (misma cuenta, verific
   assert.equal(mala.usable, false); assert.equal(mala.control, undefined); assert.equal(mala.retencionesMp, undefined);
 });
 
+
+test('pfos:actualizar: el resumen de consola usa solo lo fiscal de la foto (cuenta, ventas, retenciones, cobertura)', async () => {
+  const { armarMes } = await import('../src/pfos/mes.js');
+  const foto = armarMes({ mes: '2026-09', datos: { ordenes: [], cobros: [], facturas: [], conciliacion: [], alcances: [] }, textosArca: [], generado: '2026-10-28T12:00:00Z' });
+  const lineas = resumenFotoFiscal(foto);
+  assert.match(lineas[0], /^2026-09 · cuenta NO verificada/);
+  assert.match(lineas.join('\n'), /ventas de Mercado Libre.*0 órdenes/);
+  assert.match(lineas.join('\n'), /retenciones de Mercado Pago/);
+  assert.match(lineas.join('\n'), /cobertura: órdenes faltan 30 de 30/);
+  assert.doesNotMatch(lineas.join('\n'), /costo|rentabilidad|undefined/i);
+  // La consola del comando ya no lee campos comerciales que la foto fiscal no tiene.
+  const cli = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli.js'), 'utf8');
+  assert.doesNotMatch(cli, /f\.lineas|f\.costo|Rentabilidad/);
+});

@@ -2,41 +2,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { impuesto, deduccionesPersonales, liquidacionAnual, provisionMensual, escala as escalaDe } from '../src/ganancias.js';
 
-// Valores tomados de la DDJJ F.2711 período 2025 presentada el 10/07/2026.
-const DDJJ_2025 = {
-  resultadoNeto3ra: 63871446.29,
-  dividendos: 21679.73,
-  deduccionesPersonales: 20283774.84,
-  deduccionesGenerales: 1899716.32,
-  gananciaNetaSujeta: 41687955.13,
-  impuestoEscala: 9283471.07,
-  impuestoDividendos: 1517.58,
-  impuestoDeterminado: 9284988.65,
-  pagosACuenta: 3571906.78,
-  saldo: 5713081.87,
-};
+// Casos INVENTADOS. Los resultados esperados se calcularon a mano con la escala y las deducciones oficiales 2025 de
+// params/ganancias.json (tramo de 23.623.669,56 a 35.435.504,34: fijo 4.156.015,94 + 27 % sobre el excedente). La
+// comparación con una DJ real es una prueba privada (ganancias-privada.test.js), que no lleva datos al repositorio.
 
-test('deducciones personales 2025 = GNI + deducción especial ap. 1, como en la DDJJ', () => {
-  assert.equal(deduccionesPersonales(2025, { deduccionEspecial: 'ap1' }), DDJJ_2025.deduccionesPersonales);
+test('deducciones personales 2025 = ganancia no imponible + deducción especial ap. 1 (valores oficiales)', () => {
+  assert.equal(deduccionesPersonales(2025, { deduccionEspecial: 'ap1' }), 4507505.52 + 15776269.32);
 });
 
-test('impuesto 2025 sobre la ganancia neta sujeta reproduce la DDJJ al centavo', () => {
-  assert.equal(impuesto(2025, DDJJ_2025.gananciaNetaSujeta), DDJJ_2025.impuestoEscala);
+test('impuesto 2025 sobre una ganancia neta sujeta inventada: fijo del tramo + alícuota sobre el excedente', () => {
+  // 4.156.015,94 + (30.000.000 − 23.623.669,56) × 0,27 = 5.877.625,16
+  assert.equal(impuesto(2025, 30000000), 5877625.16);
 });
 
-test('liquidación anual 2025 completa reproduce la DDJJ', () => {
-  const liq = liquidacionAnual(2025, {
-    resultadoNeto: DDJJ_2025.resultadoNeto3ra,
-    deduccionesGenerales: DDJJ_2025.deduccionesGenerales,
-    dividendos: DDJJ_2025.dividendos,
-    pagosACuenta: DDJJ_2025.pagosACuenta,
-  });
-  assert.equal(liq.gananciaNetaSujeta, DDJJ_2025.gananciaNetaSujeta);
-  assert.equal(liq.impuestoEscala, DDJJ_2025.impuestoEscala);
-  assert.equal(liq.impuestoDividendos, DDJJ_2025.impuestoDividendos);
-  assert.equal(liq.impuestoDeterminado, DDJJ_2025.impuestoDeterminado);
-  assert.equal(liq.saldo, DDJJ_2025.saldo);
-  assert.equal(liq.alicuotaMarginal, 0.31);
+test('liquidación anual 2025 de un caso inventado, con la misma estructura que el F.2711', () => {
+  const liq = liquidacionAnual(2025, { resultadoNeto: 55000000, deduccionesGenerales: 2000000, dividendos: 10000, pagosACuenta: 3000000 });
+  assert.equal(liq.gananciaNetaSujeta, 32716225.16); // 55.000.000 − 2.000.000 − 20.283.774,84
+  assert.equal(liq.impuestoEscala, 6611005.95); // 4.156.015,94 + 9.092.555,60 × 0,27
+  assert.equal(liq.impuestoDividendos, 700); // 7 %
+  assert.equal(liq.impuestoDeterminado, 6611705.95);
+  assert.equal(liq.saldo, 3611705.95);
+  assert.equal(liq.alicuotaMarginal, 0.27);
 });
 
 test('bordes de la escala: el fijo de cada tramo coincide con el tope del anterior', () => {
@@ -49,9 +35,9 @@ test('bordes de la escala: el fijo de cada tramo coincide con el tope del anteri
 });
 
 test('provisión mensual: la suma de las provisiones iguala el impuesto del año proyectado', () => {
-  const meses = Array(12).fill(63871446.29 / 12);
-  const prov = provisionMensual(2025, meses, {}, { deduccionesGenerales: DDJJ_2025.deduccionesGenerales });
+  const prov = provisionMensual(2025, Array(12).fill(4500000), {}, { deduccionesGenerales: 2000000 });
   const suma = prov.reduce((s, m) => s + m.provisionMes, 0);
-  assert.ok(Math.abs(suma - DDJJ_2025.impuestoEscala) < 0.1, `suma ${suma}`);
-  assert.equal(prov.at(-1).provisionAcumulada, DDJJ_2025.impuestoEscala);
+  // 54.000.000 − 2.000.000 − 20.283.774,84 = 31.716.225,16 → 4.156.015,94 + 8.092.555,60 × 0,27 = 6.341.005,95
+  assert.ok(Math.abs(suma - 6341005.95) < 0.1, `suma ${suma}`);
+  assert.equal(prov.at(-1).provisionAcumulada, 6341005.95);
 });

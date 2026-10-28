@@ -58,6 +58,22 @@ export async function fotosDesde(db, { meses, outDir, cuentaEsperada, excluidas 
   return fotos;
 }
 
+/**
+ * Resumen de una foto FISCAL de PFOS para la consola: cuenta, ventas como control contra la facturación, retenciones de
+ * Mercado Pago y cobertura de la recolección. Nada comercial (costos ni rentabilidad: eso es de PFOS). Pura.
+ */
+export function resumenFotoFiscal(f) {
+  const pesos = (n) => (n == null ? 'sin dato' : `$ ${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  const faltan = (c) => (c?.faltan?.length ? `faltan ${c.faltan.length} de ${c.diasEsperados} día(s)` : 'completa');
+  const v = f.ventas ?? {}; const cob = f.cobertura ?? {};
+  return [
+    `${f.mes} · cuenta ${f.cuenta?.verificada ? 'VERIFICADA' : 'NO verificada'}: ${f.cuenta?.motivo ?? 'sin dato'}`,
+    `  ventas de Mercado Libre (control contra la facturación): ${v.ordenes ?? 0} órdenes, ${pesos(v.totalConIva)} con IVA${v.completas ? '' : ' (INCOMPLETAS)'}${f.mesCerrado ? '' : ` · corte ${f.corte ?? 'sin dato'}`}`,
+    `  retenciones de Mercado Pago: ${pesos(f.retencionesMp?.importe)}`,
+    `  cobertura: órdenes ${faltan(cob.ordenes)} · cobros ${faltan(cob.cobros)}${cob.conciliacion?.conflictos ? ` · ${cob.conciliacion.conflictos} conflicto(s) de conciliación` : ''}`,
+  ];
+}
+
 /** Comando completo: controla la configuración, conecta (arca\\.env), arma las fotos y las guarda. */
 export async function actualizarPfos({ outDir, meses, cuentaEsperada = process.env.FISCALOS_PFOS_CUENTA,
   excluidas = String(process.env.FISCALOS_PFOS_EXCLUIDAS ?? '').split(/[,\s]+/).filter(Boolean), log = console.error }) {

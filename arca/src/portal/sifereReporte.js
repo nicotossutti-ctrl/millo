@@ -122,10 +122,12 @@ export async function bajarReportesCm03(pagina, { meses, outDir, log = () => {},
     const pdf = await esperarPdf(pagina.context?.(), pagina, clic, esperaMs, obtenerPdf).catch(() => null);
     if (!pdf || pdf.subarray(0, 5).toString('latin1') !== '%PDF-') { reportes.push({ ...base, decision: 'sin PDF', motivo: 'el Reporte no devolvió un PDF', controles }); continue; }
     try {
-      const r = await importarCm03(outDir, { nombre: `cm03-${m[1]}${m[2]}-${m[3]}-sifere.pdf`, contenido: pdf, mes });
+      // El mes y la versión se verifican ANTES de guardar: un PDF de otra versión queda en revisión, nunca vigente.
+      const r = await importarCm03(outDir, { nombre: `cm03-${m[1]}${m[2]}-${m[3]}-sifere.pdf`, contenido: pdf, mes, rectificativaEsperada: rectificativa });
+      // El mismo PDF ya importado antes (p. ej. a mano) vuelve tal como estaba: si es de otra versión, se avisa.
       const coincide = r.estado !== 'valida' || (r.periodo === mes && r.rectificativa === rectificativa);
       reportes.push({ ...base, decision: 'bajada', estado: coincide ? r.estado : 'revision',
-        motivo: r.estado !== 'valida' ? r.motivos.join('; ') : coincide ? (r.yaImportado ? 'ya estaba importado' : 'leída') : `el PDF dice ${r.periodo} rectificativa ${r.rectificativa}, la lista ${base.anticipo}` });
+        motivo: r.estado !== 'valida' ? r.motivos.join('; ') : coincide ? (r.yaImportado ? 'ya estaba importado' : 'leída') : `el PDF (ya importado antes) dice ${r.periodo} rectificativa ${r.rectificativa}, la lista ${base.anticipo}` });
     } catch (e) { reportes.push({ ...base, decision: 'bajada', estado: 'error', motivo: sanitizarTexto(e.message) }); }
   }
   return { reportes, filas: filas.length };

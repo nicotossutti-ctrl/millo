@@ -250,9 +250,10 @@ const importes = (c) => JSON.stringify([c.jurisdicciones, c.totales]);
 /**
  * Lee un PDF de CM03 y lo guarda (con una copia del PDF). Un PDF idéntico no se guarda dos veces. Una CM03 en revisión se
  * guarda como evidencia, pero no se usa. Otra copia de la misma versión con otros importes se rechaza: hay que ver cuál
- * es la correcta.
+ * es la correcta. Con `rectificativaEsperada` (la versión de la fila de SIFERE que se bajó), un PDF de otra versión
+ * queda en revisión.
  */
-export async function importarCm03(outDir, { nombre, contenido, mes = null }) {
+export async function importarCm03(outDir, { nombre, contenido, mes = null, rectificativaEsperada = null }) {
   const buf = Buffer.isBuffer(contenido) ? contenido : Buffer.from(String(contenido ?? ''), 'base64');
   if (!buf.length) throw new Error('el archivo está vacío');
   if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') throw new Error('el archivo no es un PDF: subí el «Reporte» de la CM03 que descarga SIFERE');
@@ -263,6 +264,12 @@ export async function importarCm03(outDir, { nombre, contenido, mes = null }) {
   if (igual) return { ...igual, yaImportado: true };
   let leido;
   try { leido = leerCm03(await lineasDePdf(buf), { mes }); } catch (e) { throw new Error(`no se pudo leer el PDF: ${String(e?.message ?? e).slice(0, 120)}`); }
+  // Bajada de una fila del listado de SIFERE: tiene que ser ESA versión. Otra queda como evidencia en revisión, sin
+  // tocar la vigente (se verifica antes de guardar).
+  const version = (n) => (n ? `rectificativa ${n}` : 'original');
+  if (leido.estado === 'valida' && rectificativaEsperada != null && leido.rectificativa !== Number(rectificativaEsperada)) {
+    leido = { ...leido, estado: 'revision', motivos: [...leido.motivos, `el PDF es la ${version(leido.rectificativa)} y se pidió la ${version(Number(rectificativaEsperada))}`] };
+  }
   if (leido.estado === 'valida') {
     const misma = lista.find((c) => c.estado === 'valida' && c.periodo === leido.periodo && c.rectificativa === leido.rectificativa);
     if (misma && importes(misma) !== importes(leido)) {

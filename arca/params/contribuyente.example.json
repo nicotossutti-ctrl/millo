@@ -3,7 +3,7 @@
   "deduccionEspecial": "ap1",
   "cargasFamilia": { "conyuge": 0, "hijos": 0 },
   "deduccionesGeneralesAnuales": 0,
-  "_deduccionesGeneralesAnuales": "Aportes de autónomos, obra social, etc. que el contador computa. En la DDJJ 2025 fueron 1.899.716,32.",
+  "_deduccionesGeneralesAnuales": "Aportes de autónomos, obra social, etc. que el contador computa.",
   "autonomosMensual": 0,
   "_autonomosMensual": "Cuota mensual de autónomos de la categoría vigente.",
   "ingresosBrutos": [

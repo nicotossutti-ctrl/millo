@@ -61,3 +61,27 @@ test('listado de SIFERE (simulado): baja el Reporte de la CM03 presentada, lo le
     assert.equal(r2.reportes[0].decision, 'ya leída');
   } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
 });
+
+test('listado de SIFERE (simulado): si la fila «202609 - 0» devuelve el PDF de otra versión, queda en revisión y nunca vigente', async (t) => {
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  const pdfR1 = await pdfDeHtml(htmlCm03({ filas: FILAS, rectificativa: 1 }));
+  if (!pdfR1) { t.skip('sin navegador'); return; }
+  const b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {});
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-'));
+  try {
+    const ctx = await b.newContext(); const pg = await ctx.newPage();
+    const lista = `<table><thead><tr><th>Acciones</th><th>Anticipo</th><th>Estado</th></tr></thead><tbody>
+      <tr><td><a href="Reporte.do?id=1" title="Reporte" target="_blank"><i class="fa fa-print"></i></a></td><td>202609 - 0</td><td>Presentada</td></tr></tbody></table>`;
+    await ctx.route('https://sifereweb.comarb.gob.ar/**', (r) => (/Reporte\.do/.test(r.request().url())
+      ? r.fulfill({ status: 200, contentType: 'application/pdf', body: pdfR1 }) : r.fulfill({ status: 200, contentType: 'text/html', body: lista })));
+    await pg.goto('https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do');
+    const r = await bajarReportesCm03(pg, { meses: ['2026-09'], outDir: out, esperaMs: 8000, obtenerPdf: async () => pdfR1 });
+    assert.equal(r.reportes[0].decision, 'bajada');
+    assert.equal(r.reportes[0].estado, 'revision');
+    assert.match(r.reportes[0].motivo, /rectificativa 1 y se pidió la original/);
+    const del = cm03DelPeriodo(out, '2026-09');
+    assert.equal(del.vigente, null, 'otra versión no queda vigente');
+    assert.equal(del.enRevision.length, 1, 'queda como evidencia');
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});

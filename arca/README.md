@@ -256,7 +256,11 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   - *CCMA (autónomos)*: lee las tablas que muestra la cuenta corriente reconociendo la fila de encabezados por sus
     palabras (las tablas no tienen encabezados HTML). No completa campos ni toca «Calcular deuda» ni «Pagar». Las filas
     del período se muestran como evidencia, sin sacar importes hasta confirmar las columnas reales.
-  - Para una corrida acotada a lo que falta: `.\fiscalos.ps1 correr -Servicios sifere-consultas,ccma,ddjj-y-pagos,ddjj-y-pagos-veps`.
+  - Para una corrida acotada a lo que falta: `.\fiscalos.ps1 correr -Desde 2026-09-01 -Hasta 2026-09-30 -Servicios "sifere-consultas,ccma,ddjj-y-pagos,ddjj-y-pagos-veps"`
+    (las fuentes van separadas por coma o espacio).
+- **Pruebas con datos reales, solo privadas**: las pruebas del repositorio usan cifras inventadas.
+  `test/ganancias-privada.test.js` compara el cálculo de Ganancias con las DJ que importaste en la app (leídas de
+  `out/importados/ganancias/`, que Git ignora), al centavo; sin ninguna DJ importada, se saltea.
 - **Pagos**: cada pago cargado a mano lleva el *período* al que corresponde y su *fecha de pago*: el período descuenta
   esa obligación y la fecha lo ubica en la caja del mes en que salió (el CM03 de septiembre pagado en octubre sale de la
   caja de octubre). Un pago cargado que coincide con uno de ARCA o de SIFERE no se suma dos veces; uno sin fecha que puede

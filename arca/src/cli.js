@@ -13,7 +13,7 @@ import { ejecutarTodo } from './portal/orquestador.js';
 import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
 import { reprocesarDjIva } from './reprocesarDj.js';
-import { actualizarPfos } from './pfos/actualizar.js';
+import { actualizarPfos, resumenFotoFiscal } from './pfos/actualizar.js';
 import { generarClave, verificadorScram, guardarClaveEnEnv } from './pfos/clave.js';
 import { iniciarServidor } from './app/servidor.js';
 import { spawn } from 'node:child_process';
@@ -210,12 +210,8 @@ try {
     const meses = String(need('periodo')).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
     if (!meses.length || meses.some((m) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(m))) throw new Error('--periodo tiene que ser AAAA-MM (uno o varios, separados por coma)');
     const fotos = await actualizarPfos({ outDir: cfg.outDir ?? 'out', meses });
-    for (const f of fotos) {
-      console.log(`\n${f.mes} · cuenta ${f.cuenta.verificada ? 'VERIFICADA' : 'NO verificada'}: ${f.cuenta.motivo}`);
-      for (const [k, l] of Object.entries(f.lineas)) console.log(`  ${k}: ${l.importe} (${l.nivel}${l.completo ? ', completo' : `, INCOMPLETO: ${l.faltan.join('; ')}`})`);
-      if (f.costo.sinCosto.length) console.log(`  sin costo: ${f.costo.sinCosto.slice(0, 10).map((x) => `${x.sku} (${x.unidades} u.: ${x.motivo})`).join(' · ')}`);
-    }
-    console.error('\nFotos guardadas en out/pfos/. Abrí la app para verlas en Rentabilidad.');
+    for (const f of fotos) console.log(['', ...resumenFotoFiscal(f)].join('\n'));
+    console.error('\nFotos guardadas en out/pfos/. En la app se usan en «Impuestos del mes» (conciliación fiscal con PFOS).');
     process.exit(0);
   }
 
@@ -258,7 +254,8 @@ try {
         const haceUnMes = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
         const finMesPasado = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
         const periodo = { desde: o.desde ?? haceUnMes.toISOString().slice(0, 10), hasta: o.hasta ?? finMesPasado.toISOString().slice(0, 10), rehacer: o.rehacer };
-        const pedidos = o.servicios ? o.servicios.split(',').map((x) => x.trim()) : null;
+        // PowerShell pasa «a,b» sin comillas como «a b»: se acepta coma o espacio.
+        const pedidos = o.servicios ? String(o.servicios).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : null;
         const servicios = pedidos ? SERVICIOS_FISCALES.filter((s) => pedidos.includes(s.id)) : SERVICIOS_FISCALES;
         if (!servicios.length) throw new Error(`Ningún servicio coincide con --servicios. Ids: ${SERVICIOS_FISCALES.map((s) => s.id).join(', ')}`);
         const { baseDir, cobertura } = await ejecutarTodo(sesion, { servicios, periodo, log: (m) => console.error(m) });

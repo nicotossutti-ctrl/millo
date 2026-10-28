@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const contribuyente = {
-  deduccionEspecial: 'ap1', cargasFamilia: { conyuge: 0, hijos: 0 }, deduccionesGeneralesAnuales: 1899716.32,
+  deduccionEspecial: 'ap1', cargasFamilia: { conyuge: 0, hijos: 0 }, deduccionesGeneralesAnuales: 1500000,
   autonomosMensual: 100000,
   ingresosBrutos: [{ jurisdiccion: 'CABA', coeficiente: 0.6, alicuota: 0.03 }, { jurisdiccion: 'PBA', coeficiente: 0.4, alicuota: 0.035 }],
 };
