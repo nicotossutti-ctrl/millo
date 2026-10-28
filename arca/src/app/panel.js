@@ -161,6 +161,17 @@ export function pagosDelPeriodo(datosDir, mes, clave) {
  * cuenta como pagado si su estado lo dice (pagado, abonado, acreditado). `pagado` lo indica; los demás se muestran como
  * «volante generado, pago sin verificar» y no se descuentan.
  */
+/**
+ * ¿El estado de un volante de SIFERE dice, sin ambigüedad, que está pagado? Pura. Solo un estado entero positivo
+ * («Pagado», «Abonada», «Acreditado», «Pagado total»): «NO PAGADO», «Impagado», «Pago parcial», «Pendiente de pago»,
+ * «Generado», «Sin pagar», «Rechazado» o «Anulado» no cuentan, y un estado desconocido tampoco (pago sin verificar).
+ */
+export function volantePagado(estado) {
+  const e = norm(estado).replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!e || /\b(no|sin|im|in|des|parcial|pendiente|generad|rechaz|anulad|vencid|revertid|devuelt|a pagar|por pagar)/.test(e)) return false;
+  return /^(pagad[oa]|abonad[oa]|acreditad[oa])( (total|totalmente))?$/.test(e);
+}
+
 export function volantesSifere(datosDir, mes) {
   const out = [];
   for (const v of vigentes(datosDir, 'sifere-consultas-volantes-pago')) {
@@ -172,7 +183,7 @@ export function volantesSifere(datosDir, mes) {
         const ant = String(f[ia] ?? '').match(/^(\d{4})(\d{2})\b/);
         if ((ant ? `${ant[1]}-${ant[2]}` : periodoDe(f[ia])) !== mes || (ie >= 0 && /anulad|rechaz|vencid/.test(norm(f[ie])))) continue;
         const estado = ie >= 0 ? f[ie] : null;
-        out.push({ anticipo: f[ia], importe: importeDe(f[im]), estado, pagado: /pagad|abonad|acreditad/.test(norm(estado)), fuente: `SIFERE volantes (${v.entrada.cuando})` });
+        out.push({ anticipo: f[ia], importe: importeDe(f[im]), estado, pagado: volantePagado(estado), fuente: `SIFERE volantes (${v.entrada.cuando})` });
       }
     }
   }
@@ -387,7 +398,7 @@ export function estadoPago(declarado, pagos = []) {
  */
 function pagosDeCaja(outDir, mes, pagosMes) {
   const verificados = pagosMes.map((x) => ({ fecha: x.fecha, clave: x.clasificacion.clave, impuesto: x.clasificacion.nombre, detalle: x.impuesto, corresponde: x.imputadoA,
-    periodo: x.periodo?.tipo === 'mes' ? x.periodo.mes : null, importe: x.importe, propio: x.clasificacion.propio, nivel: 'verificado', fuente: 'Cuentas Tributarias' }));
+    periodo: x.periodo?.tipo === 'mes' ? x.periodo.mes : x.periodo?.tipo === 'anual' ? x.periodo.anio : null, importe: x.importe, propio: x.clasificacion.propio, nivel: 'verificado', fuente: 'Cuentas Tributarias' }));
   const cargados = pagosCargadosEnCaja(outDir, mes).map((x) => ({ ...x, detalle: x.concepto, corresponde: x.periodo ? `período ${x.periodo.slice(5)}/${x.periodo.slice(0, 4)}` : 'período no indicado' }));
   const c = conciliarPagos(verificados, cargados);
   const filas = [...c.computados.map((x) => ({ ...x, computado: true })), ...c.duplicados, ...c.inciertos].sort((a, b) => String(a.fecha ?? '9').localeCompare(String(b.fecha ?? '9')));

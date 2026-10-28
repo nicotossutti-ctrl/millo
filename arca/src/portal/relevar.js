@@ -3,7 +3,7 @@
  * menús y roles, en el documento principal, en cada frame y dentro de shadow DOM.
  * Solo lectura. Nunca guarda el valor de un input. Los textos se sanean con sanitizarTexto.
  */
-import { sanitizarTexto, sanitizarUrl, sanitizarReferencia } from './diagnostico.js';
+import { sanitizarTexto, sanitizarUrl, sanitizarReferencia, sanitizarHtml } from './diagnostico.js';
 
 /** Se ejecuta dentro del navegador. Recorre el DOM incluyendo shadow roots. */
 function relevarEnDocumento() {
@@ -104,14 +104,27 @@ export function enmascararMuestra(t) {
 const sanearMuestra = (m) => (Array.isArray(m) ? m.map(sanearMuestra) : m && typeof m === 'object'
   ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === 'string' ? enmascararMuestra(v) : sanearMuestra(v)])) : m);
 
-function sanear(obj) {
+const REFERENCIAS = new Set(['href', 'src', 'url', 'action']);
+
+/**
+ * Sanea en profundidad lo que se guarda de una pantalla: toda referencia, absoluta o relativa, pierde query, fragmento
+ * y protocolos con datos (javascript:, data:…); los fragmentos de HTML pasan por sanitizarHtml; el resto, por
+ * sanitizarTexto. Con `enmascarar`, los textos y el HTML también pierden importes y números largos (como la muestra).
+ */
+export function sanear(obj, { enmascarar = false } = {}) {
+  const sub = (v) => sanear(v, { enmascarar });
+  const texto = (v) => (enmascarar ? enmascararMuestra(v) : sanitizarTexto(v));
   if (obj == null) return obj;
-  if (typeof obj === 'string') return sanitizarTexto(obj);
-  if (Array.isArray(obj)) return obj.map(sanear);
+  if (typeof obj === 'string') return texto(obj);
+  if (Array.isArray(obj)) return obj.map(sub);
   if (typeof obj === 'object') {
     const o = {};
-    // Toda referencia, absoluta o relativa, pierde query, fragmento y protocolos con datos (javascript:, data:…).
-    for (const [k, v] of Object.entries(obj)) o[k] = k === 'muestra' ? sanearMuestra(v) : (k === 'href' || k === 'src' || k === 'url' || k === 'action') && typeof v === 'string' ? sanitizarReferencia(v) : sanear(v);
+    for (const [k, v] of Object.entries(obj)) {
+      o[k] = k === 'muestra' ? sanearMuestra(v)
+        : REFERENCIAS.has(k) && typeof v === 'string' ? sanitizarReferencia(v)
+          : k === 'html' && typeof v === 'string' ? texto(sanitizarHtml(v))
+            : sub(v);
+    }
     return o;
   }
   return obj;

@@ -19,21 +19,32 @@ import { URL_PORTAL } from './sesion.js';
 const MASCARA_CUIT = /\b(\d{2})-?\d{8}-?(\d)\b/g;
 const MASCARA_IMPORTE = /\$?\s?\d{1,3}(\.\d{3})+(,\d{2})?/g;
 
+// Parámetros sueltos (?token=…, &vep=…) que quedan en texto o en referencias relativas.
+const PARAMETRO = /([?&])[\w.\-[\]%]+=[^\s"'<>&]*/g;
+
+/**
+ * HTML sin scripts, valores, manejadores ni referencias con datos. Tolera fragmentos cortados (p. ej. los primeros
+ * 200 caracteres de un elemento): un atributo sin comilla de cierre se sanea hasta el final igual.
+ */
 export function sanitizarHtml(html) {
-  return html
-    // Manejadores en línea (onclick="generarVEP(…, número)") y referencias con query, fragmento o javascript:.
-    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*')/gi, '')
-    .replace(/\b(href|src|action)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (_, at, a, b) => `${at}="${sanitizarReferencia(a ?? b)}"`)
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script></script>')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/(<input\b[^>]*\s)value="[^"]*"/gi, '$1value="[omitido]"')
+  return String(html ?? '')
+    // Manejadores en línea (onclick="generarVEP(…, número)"), con o sin comillas y aunque estén cortados.
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"?|'[^']*'?|[^\s>]*)/gi, '')
+    // Referencias (href, src, srcset, action, formaction, data-url…): sin query, fragmento ni javascript:.
+    .replace(/(\s)([\w:-]*?(?:href|src|srcset|action|url))\s*=\s*(?:"([^"]*)"?|'([^']*)'?|([^\s>"']+))/gi,
+      (_, esp, at, a, b, c) => `${esp}${at}="${sanitizarReferencia(a ?? b ?? c)}"`)
+    .replace(/<script\b[^>]*>[\s\S]*?(?:<\/script>|$)/gi, '<script></script>')
+    .replace(/<style\b[^>]*>[\s\S]*?(?:<\/style>|$)/gi, '')
+    .replace(/(<input\b[^>]*\s)value\s*=\s*(?:"[^"]*"?|'[^']*'?|[^\s>]*)/gi, '$1value="[omitido]"')
     .replace(/(name|id)="(javax\.faces\.ViewState|[^"]*token[^"]*|[^"]*csrf[^"]*)"([^>]*)value="[^"]*"/gi, '$1="$2"$3value="[omitido]"')
+    .replace(PARAMETRO, '$1[omitido]')
     .replace(MASCARA_CUIT, '$1-XXXXXXXX-$2')
     .replace(MASCARA_IMPORTE, '[importe]');
 }
 
 export function sanitizarTexto(t) {
-  return t == null ? t : String(t).replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi, '$1').replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]');
+  return t == null ? t : String(t).replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi, '$1').replace(PARAMETRO, '$1[omitido]')
+    .replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]');
 }
 
 export function sanitizarUrl(u) {

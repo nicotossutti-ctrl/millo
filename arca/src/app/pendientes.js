@@ -78,7 +78,7 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
           porque: estado === 'pago parcial: falta conciliar'
             ? `hay pagos por ${pesos(pagado)} de ${pesos(iibb.importe)} declarados: falta conciliar ${pesos(iibb.importe - pagado)}`
             : 'no encontramos el pago en SIFERE ni en tus cargas. Eso no prueba que esté impago: si lo pagaste, cargá el importe; si todavía no, queda pendiente',
-          como: `El importe pagado del VEP o del volante de SIFERE de ese período, con la fecha en que se pagó.${ip.volantesSinPago.length ? ` Hay ${ip.volantesSinPago.length} volante(s) generado(s) en SIFERE sin estado de pago: un volante no es un pago.` : ''}${ip.inciertos.length ? ' Hay un pago cargado sin fecha que no se suma hasta tener su fecha.' : ''}`,
+          como: `El importe pagado del VEP o del volante de SIFERE de ese período, con la fecha en que se pagó.${ip.volantesSinPago.length ? ` Hay ${ip.volantesSinPago.length} volante(s) generado(s) en SIFERE sin estado de pago: un volante no es un pago.` : ''}${ip.inciertos.length ? ` Hay ${ip.inciertos.length} pago(s) cargado(s) que no se suman hasta aclararlos (sin fecha de pago o sin poder conciliarlos con lo de ARCA).` : ''}`,
           accion: { tipo: 'cargar', concepto: 'iibb-pagado', mes, conFecha: true } });
       }
     }

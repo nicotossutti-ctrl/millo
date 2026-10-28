@@ -7,9 +7,10 @@
  *  - Archivos importados de pagos: su mes es el de la fecha de cada fila (fecha de pago); se ubican en esa caja y no
  *    descuentan una obligación (el período no se conoce).
  *  - Conciliación con lo verificado (Cuentas Tributarias, volantes de SIFERE pagados): un pago cargado que coincide con
- *    uno verificado (mismo impuesto, mismo importe ±1 y fechas a 5 días o sin fecha) es un DUPLICADO y no se suma. Uno sin
- *    fecha de un impuesto que ya tiene pagos verificados del mismo período es INCIERTO: no se suma hasta aclararlo. Los
- *    demás son pagos distintos y se suman.
+ *    uno verificado (mismo impuesto, mismo período, mismo importe ±1 y fechas a 5 días o sin fecha) es un DUPLICADO y no
+ *    se suma. Si coincide en todo pero el período de alguno no se conoce, queda SIN CONCILIAR y no se suma. Uno sin fecha
+ *    de un impuesto que ya tiene pagos verificados del mismo período es INCIERTO: tampoco se suma. Los demás (también el
+ *    mismo importe el mismo día para otro período) son pagos distintos y se suman.
  */
 import { listarManuales } from './manuales.js';
 import { listarImportaciones, CONCEPTOS } from './importar.js';
@@ -49,17 +50,41 @@ export const pagosCargadosDelPeriodo = (outDir, periodo, concepto) => listarManu
 export const pagosSinFecha = (outDir) => listarManuales(outDir).filter((c) => CONCEPTOS_PAGO[c.concepto] && !c.fechaPago).map((c) => desdeCarga(c));
 
 /**
+ * ¿Dos pagos corresponden al mismo período? Pura. 'igual', 'distinto' o 'desconocido'. Los períodos son 'AAAA-MM'
+ * (mensual) o 'AAAA' (anual: Ganancias en Cuentas Tributarias). Dos mensuales o dos anuales se comparan enteros; uno
+ * anual con uno mensual, por el año, y si el año no coincide no se sabe (un anticipo de Ganancias se paga en el año
+ * siguiente al del período). Sin período en alguno de los dos, tampoco se sabe.
+ */
+export function mismoPeriodo(a, b) {
+  if (!a || !b) return 'desconocido';
+  const anualA = /^\d{4}$/.test(a); const anualB = /^\d{4}$/.test(b);
+  if (anualA === anualB) return a === b ? 'igual' : 'distinto';
+  return a.slice(0, 4) === b.slice(0, 4) ? 'igual' : 'desconocido';
+}
+
+/**
  * Concilia pagos verificados ({ clave, importe, fecha?, periodo? }) con cargados. Devuelve { computados, duplicados,
  * inciertos } con cada cargado marcado: computados = verificados + cargados distintos; los otros no se suman.
+ *  - duplicado: mismo impuesto, mismo importe (±1), mismo período y fechas a 5 días (o sin fecha en alguno).
+ *  - sin conciliar (en inciertos): coincide en impuesto, importe y fecha con uno verificado, pero el período de alguno
+ *    no se conoce (o no se puede comparar): puede ser el mismo pago; no se suma hasta aclararlo.
+ *  - incierto: sin fecha de pago, y hay pagos verificados del mismo impuesto que pueden ser del mismo período.
+ *  - distinto: todo lo demás, también el mismo importe el mismo día para OTRO período (septiembre y octubre).
  */
 export function conciliarPagos(verificados, cargados) {
   const computados = [...verificados]; const duplicados = []; const inciertos = [];
   const usados = new Set();
   for (const c of cargados) {
     const mismos = verificados.filter((v) => v.clave === c.clave);
-    const dup = mismos.find((v) => !usados.has(v) && Math.abs((v.importe ?? 0) - c.importe) <= 1 && (!c.fecha || !v.fecha || dias(c.fecha, v.fecha) <= 5));
+    const coincide = (v) => !usados.has(v) && Math.abs((v.importe ?? 0) - c.importe) <= 1 && (!c.fecha || !v.fecha || dias(c.fecha, v.fecha) <= 5);
+    const dup = mismos.find((v) => coincide(v) && mismoPeriodo(c.periodo, v.periodo) === 'igual');
     if (dup) { usados.add(dup); duplicados.push({ ...c, estadoConciliacion: 'duplicado', nota: `coincide con un pago verificado (${dup.fuente ?? 'ARCA'}${dup.fecha ? `, ${dup.fecha}` : ''}): no se suma` }); continue; }
-    if (!c.fecha && mismos.some((v) => !c.periodo || !v.periodo || v.periodo === c.periodo)) {
+    const dudoso = mismos.find((v) => coincide(v) && mismoPeriodo(c.periodo, v.periodo) === 'desconocido');
+    if (dudoso) {
+      inciertos.push({ ...c, estadoConciliacion: 'sin conciliar', nota: `mismo importe y fecha que un pago verificado (${dudoso.fuente ?? 'ARCA'}${dudoso.fecha ? `, ${dudoso.fecha}` : ''}), pero no se puede saber si es del mismo período: no se suma hasta aclararlo (revisá el período del pago)` });
+      continue;
+    }
+    if (!c.fecha && mismos.some((v) => mismoPeriodo(c.periodo, v.periodo) !== 'distinto')) {
       inciertos.push({ ...c, estadoConciliacion: 'incierto', nota: 'sin fecha de pago y hay pagos verificados del mismo impuesto: puede ser el mismo; no se suma hasta aclararlo (cargale la fecha de pago)' });
       continue;
     }

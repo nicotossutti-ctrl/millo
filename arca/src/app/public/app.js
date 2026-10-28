@@ -277,7 +277,8 @@ function bloquePagos(p) {
       h('tbody', {}, ...pg.filas.map((f) => h('tr', { title: f.detalle ?? null },
         h('td', { 'data-rotulo': 'Fecha' }, f.fecha ? fecha(f.fecha) : '—'),
         h('td', { 'data-rotulo': 'Impuesto' }, h('span', {}, f.impuesto, ' ', h('span', { class: `etiqueta ${f.propio === true ? 'propio' : ''}` }, f.propio === false ? 'como agente' : f.propio === 'empleador' ? 'como empleador' : 'propio'),
-          f.estadoConciliacion === 'duplicado' ? h('span', { class: 'etiqueta', title: f.nota }, 'duplicado: no se suma') : f.estadoConciliacion === 'incierto' ? h('span', { class: 'etiqueta', title: f.nota }, 'sin fecha: no se suma') : null)),
+          f.estadoConciliacion === 'duplicado' ? h('span', { class: 'etiqueta', title: f.nota }, 'duplicado: no se suma') : f.estadoConciliacion === 'incierto' ? h('span', { class: 'etiqueta', title: f.nota }, 'sin fecha: no se suma')
+            : f.estadoConciliacion === 'sin conciliar' ? h('span', { class: 'etiqueta', title: f.nota }, 'sin conciliar: no se suma') : null)),
         h('td', { 'data-rotulo': 'Corresponde a' }, f.corresponde),
         h('td', { class: 'num', 'data-rotulo': 'Importe' }, h('span', {}, fmt(f.importe), badge(f.nivel))))))) : h('p', { class: 'no-disponible' }, 'No hay pagos con fecha en este mes en las consultas conservadas de Cuentas Tributarias ni cargados a mano.'),
     h('p', {}, h('strong', {}, 'Impuestos propios pagados: '), fmt(pg.propios), pg.comoAgente ? h('span', { class: 'nota' }, ` · retenciones depositadas como agente: ${fmt(pg.comoAgente)} (dinero de terceros)`) : null,

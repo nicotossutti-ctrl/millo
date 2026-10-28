@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { sanitizarHtml, sanitizarUrl, sanitizarTexto } from '../src/portal/diagnostico.js';
 
@@ -102,4 +103,48 @@ test('relevamiento: ninguna URL del diagnóstico conserva query, fragmento ni ja
     const todo = JSON.stringify(rel) + resumenRelevamiento(rel).join('\n');
     assert.doesNotMatch(todo, /SECRETO|555000111|20123456783|sesion=|token=/);
   } finally { await b.close(); }
+});
+
+test('paso de ruta no encontrado: el bloque de candidatos no conserva parámetros de enlaces relativos (estructura.json y diagnóstico integral)', async (t) => {
+  const { ejecutarTodo } = await import('../src/portal/orquestador.js');
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  let b;
+  try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fiscalos-paso-'));
+  try {
+    const pg = await b.newPage();
+    // El texto de la ruta está solo en elementos ocultos (el paso no se encuentra) y sus enlaces llevan datos: relativos,
+    // con fragmento, javascript:, onclick y un HTML largo que se corta en el medio del href (sin comilla de cierre).
+    const relleno = 'A'.repeat(300);
+    await pg.setContent(`<div style="display:none">
+      <a class="m" href="consultas.do?token=SECRETO&vep=555000111&relleno=${relleno}">Consultas</a>
+      <a href="#/consultas?sesion=SECRETO" onclick="ir(555000111)">Consultas</a>
+      <a href="javascript:abrir('SECRETO', 1234567890)">Consultas</a>
+      <span data-url="/x/consultas?token=SECRETO">Consultas</span></div><p>Inicio</p>`);
+    const sesion = { page: pg, cfg: { outDir }, abrirServicio: async () => pg };
+    const servicio = { id: 'prueba-paso', nombre: 'Prueba', fuente: 'prueba', confirmado: false, ruta: [{ texto: 'Consultas' }] };
+    const { baseDir, resultados } = await ejecutarTodo(sesion, { servicios: [servicio], outDir: path.join(outDir, 'corridas'), datosDir: path.join(outDir, 'datos'), periodo: { desde: '2026-09-01', hasta: '2026-09-30' } });
+    assert.match(resultados[0].motivo ?? resultados[0].error ?? JSON.stringify(resultados[0]), /no se encontró el paso/);
+    const estructura = fs.readFileSync(path.join(baseDir, 'prueba-paso', 'estructura.json'), 'utf8');
+    const integral = fs.readFileSync(path.join(baseDir, 'diagnostico-integral.json'), 'utf8');
+    const paso = JSON.parse(estructura).find((x) => x.diagnosticoPaso)?.diagnosticoPaso;
+    assert.ok(paso && Object.values(paso.frames[0].candidatos)[0].length >= 3, 'el bloque de candidatos se guardó');
+    for (const txt of [estructura, integral]) {
+      assert.doesNotMatch(txt, /SECRETO|555000111|1234567890|token=|vep=|sesion=|onclick=/);
+      assert.match(txt, /consultas\.do/);
+    }
+  } finally { await b.close(); fs.rmSync(outDir, { recursive: true, force: true }); }
+});
+
+test('HTML cortado: un atributo sin comilla de cierre igual pierde query, manejadores y protocolos con datos', () => {
+  const corte = (s) => sanitizarHtml(s);
+  assert.doesNotMatch(corte('<a class="x" href="detalle.do?token=SECRETO&id=1'), /SECRETO|token=/);
+  assert.doesNotMatch(corte('<a href=\'/r?vep=SECRETO'), /SECRETO/);
+  assert.doesNotMatch(corte('<a href=/r?vep=SECRETO>x</a>'), /SECRETO/);
+  assert.doesNotMatch(corte('<a onclick="generarVEP(f, SECRETO'), /SECRETO|onclick/);
+  assert.doesNotMatch(corte('<button formaction="/a?token=SECRETO" data-url="b?x=SECRETO">'), /SECRETO/);
+  assert.doesNotMatch(corte('<a href="javascript:ir(SECRETO'), /SECRETO/);
+  assert.doesNotMatch(corte('texto suelto /ruta.do?token=SECRETO'), /SECRETO/);
+  assert.match(corte('<a href="detalle.do?token=SECRETO'), /href="detalle\.do"/);
 });

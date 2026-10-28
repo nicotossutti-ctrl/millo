@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento } from './relevar.js';
+import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento, sanear } from './relevar.js';
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
 import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
@@ -216,10 +216,12 @@ async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
     diagnosticoPaso = { motivo: drill.motivo ?? 'grilla ajena', textos, frames: [] };
     for (const frame of paginaDatos.frames()) {
       const candidatos = {};
-      for (const t of textos) candidatos[t] = (await frame.evaluate(buscarElementosConTexto, t).catch(() => []))
-        .map((c) => ({ ...c, text: sanitizarTexto(c.text), html: sanitizarTexto(c.html), href: c.href && sanitizarTexto(c.href) }));
-      diagnosticoPaso.frames.push({ url: sanitizarTexto(frame.url()), candidatos });
+      for (const t of textos) candidatos[t] = await frame.evaluate(buscarElementosConTexto, t).catch(() => []);
+      diagnosticoPaso.frames.push({ url: frame.url(), candidatos });
     }
+    // Todo el bloque, saneado como la muestra: href y url sin query ni fragmento (también las relativas), el HTML
+    // cortado sin manejadores ni parámetros, y sin importes ni números largos en el texto.
+    diagnosticoPaso = sanear(diagnosticoPaso, { enmascarar: true });
     await paginaDatos.screenshot({ path: path.join(dir, 'paso-no-encontrado.png'), fullPage: true }).catch(() => {});
   }
 
@@ -576,11 +578,12 @@ function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando
   escribir(path.join(baseDir, 'cobertura.json'), JSON.stringify(cobertura.objeto, null, 2));
   escribir(path.join(baseDir, 'cobertura.md'), cobertura.texto);
   // Diagnóstico INTEGRAL en un solo archivo: el DOM saneado de cada servicio (todas sus pestañas).
-  // Es lo único que hace falta mandar para escribir todos los extractores sin más corridas a ciegas.
+  // Es lo único que hace falta mandar para escribir todos los extractores sin más corridas a ciegas. Se vuelve a
+  // sanear al juntarlo (cada estructura.json ya lo está): así ningún bloque que se agregue después queda afuera.
   const integral = {};
   for (const s of servicios) {
     const f = path.join(baseDir, slug(s.id), 'estructura.json');
-    if (fs.existsSync(f)) { try { integral[s.id] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* ignore */ } }
+    if (fs.existsSync(f)) { try { integral[s.id] = sanear(JSON.parse(fs.readFileSync(f, 'utf8'))); } catch { /* ignore */ } }
   }
   escribir(path.join(baseDir, 'diagnostico-integral.json'), JSON.stringify(integral, null, 2));
   escribir(path.join(outDir, 'ultima.txt'), baseDir); // puntero a la última corrida

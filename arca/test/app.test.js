@@ -637,3 +637,76 @@ test('F.931 y SICORE: aparte de los impuestos propios; DJ presentada no es pagad
   claves = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-09').map((x) => x.clave);
   assert.ok(claves.includes('sicore-pagado:2026-09') && !claves.includes('f931-pagado:2026-09'));
 });
+
+test('volantes de SIFERE: solo un estado positivo sin ambigüedad cuenta como pagado', async () => {
+  const { volantePagado } = await import('../src/app/panel.js');
+  for (const e of ['Pagado', 'PAGADO', 'Abonada', 'Acreditado', 'Pagado total']) assert.equal(volantePagado(e), true, e);
+  for (const e of ['NO PAGADO', 'No pagado', 'Impagado', 'IMPAGO', 'Pago parcial', 'Pagado parcialmente', 'Pendiente de pago', 'Generado',
+    'Sin pagar', 'No abonado', 'Rechazado', 'Anulado', 'Pagado / Anulado', 'Vencido', 'Desconocido', '', null]) assert.equal(volantePagado(e), false, String(e));
+});
+
+test('volantes de SIFERE: «NO PAGADO» e «Impagado» no descuentan la obligación del período', async () => {
+  const { volantesSifere } = await import('../src/app/panel.js');
+  const out = escenario(); const d = path.join(out, 'datos');
+  const dir = path.join(d, 'sifere-consultas-volantes-pago', 'vigente', 'acumulado'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'v.csv'), toCsv([['', '202609 - 0', '14/10/2026', '2.500,00', 'VEP', 'NO PAGADO'], ['', '202609 - 1', '15/10/2026', '2.500,00', 'VEP', 'Impagado'],
+    ['', '202609 - 2', '16/10/2026', '2.500,00', 'VEP', 'Pago parcial']],
+  ['Acciones', 'Anticipo', 'Fecha Generación', 'Monto Total', 'Medio de Pago', 'Estado'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  fs.writeFileSync(path.join(d, 'sifere-consultas-volantes-pago', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['v.csv'] } }));
+  assert.deepEqual(volantesSifere(d, '2026-09').map((v) => v.pagado), [false, false, false]);
+  const { guardarManual } = await import('../src/app/manuales.js');
+  guardarManual(out, { mes: '2026-09', concepto: 'iibb-declarado', importe: 2500, fuente: 'CM03' });
+  const sep = panelMes(out, '2026-09', { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') });
+  assert.equal(sep.iibb.estado, 'pago no encontrado (sin cobertura)');
+  assert.equal(sep.iibb.volantesSinPago.length, 3);
+});
+
+test('conciliación de pagos: el mismo importe el mismo día para OTRO período no es un duplicado; sin período, no se afirma', async () => {
+  const { conciliarPagos, mismoPeriodo } = await import('../src/app/pagos.js');
+  assert.equal(mismoPeriodo('2026-09', '2026-09'), 'igual');
+  assert.equal(mismoPeriodo('2026-09', '2026-10'), 'distinto');
+  assert.equal(mismoPeriodo('2025', '2025'), 'igual');
+  assert.equal(mismoPeriodo('2025', '2026'), 'distinto');
+  assert.equal(mismoPeriodo('2025', '2025-12'), 'igual');
+  assert.equal(mismoPeriodo('2025', '2026-03'), 'desconocido', 'un anticipo del período 2025 se paga en 2026');
+  assert.equal(mismoPeriodo(null, '2026-09'), 'desconocido');
+  // IIBB de septiembre verificado, $500 el 20/10, y uno de octubre cargado a mano, $500 el 20/10: son dos pagos.
+  const sep = { clave: 'iibb', importe: 500, fecha: '2026-10-20', periodo: '2026-09', fuente: 'SIFERE' };
+  let c = conciliarPagos([sep], [{ clave: 'iibb', importe: 500, fecha: '2026-10-20', periodo: '2026-10' }]);
+  assert.equal(c.total, 1000); assert.equal(c.duplicados.length, 0); assert.equal(c.inciertos.length, 0);
+  // El mismo período: duplicado.
+  c = conciliarPagos([sep], [{ clave: 'iibb', importe: 500, fecha: '2026-10-21', periodo: '2026-09' }]);
+  assert.equal(c.total, 500); assert.equal(c.duplicados.length, 1);
+  // Sin período en el cargado (fila de un archivo importado): sin conciliar, no se suma ni se afirma duplicado.
+  c = conciliarPagos([sep], [{ clave: 'iibb', importe: 500, fecha: '2026-10-20', periodo: null }]);
+  assert.equal(c.total, 500); assert.equal(c.duplicados.length, 0); assert.equal(c.inciertos[0].estadoConciliacion, 'sin conciliar');
+  // Sin período en el verificado: igual.
+  c = conciliarPagos([{ ...sep, periodo: null }], [{ clave: 'iibb', importe: 500, fecha: '2026-10-20', periodo: '2026-09' }]);
+  assert.equal(c.inciertos[0].estadoConciliacion, 'sin conciliar');
+  // Sin fecha y de otro período: distinto (se suma).
+  c = conciliarPagos([sep], [{ clave: 'iibb', importe: 500, fecha: null, periodo: '2026-08' }]);
+  assert.equal(c.total, 1000);
+});
+
+test('pagos en la caja: Cuentas Tributarias de septiembre y una carga de octubre, mismo importe y día, suman los dos; Ganancias anual se compara por año', async () => {
+  const { guardarManual } = await import('../src/app/manuales.js');
+  const out = escenario(); const op = { hoy: '2026-10-28', paramsFile: path.join(out, 'x.json') };
+  conPagosCt(out, { '2026-10-01_2026-10-26': [['20/10/2026', '1571', '1', '308 - APORTES AUTONOMOS', '202609', '500,00'],
+    ['17/10/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '7.000,00']] });
+  guardarManual(out, { mes: '2026-10', concepto: 'autonomos', importe: 500, fuente: 'boleta', fechaPago: '2026-10-20' });
+  let oct = panelMes(out, '2026-10', op);
+  const aut = oct.pagos.filas.filter((f) => f.clave === 'autonomos');
+  assert.equal(aut.length, 2); assert.ok(aut.every((f) => f.computado), 'los dos se suman');
+  assert.equal(oct.pagos.noSumados, 0);
+  // Anticipo de Ganancias cargado para un mes de 2025 (mismo año que el período 2025 de Cuentas Tributarias): duplicado.
+  guardarManual(out, { mes: '2025-12', concepto: 'ganancias-anticipo', importe: 7000, fuente: 'VEP', fechaPago: '2026-10-17' });
+  oct = panelMes(out, '2026-10', op);
+  assert.equal(oct.pagos.filas.find((f) => f.clave === 'ganancias' && !f.computado)?.estadoConciliacion, 'duplicado');
+  // Cargado para un mes de 2026: no se puede saber si es del período 2025 → sin conciliar, no se suma.
+  const out2 = escenario();
+  conPagosCt(out2, { '2026-10-01_2026-10-26': [['17/10/2026', '1571', '1', '11 - GANANCIAS PERSONAS HUMANAS', '202500', '7.000,00']] });
+  guardarManual(out2, { mes: '2026-08', concepto: 'ganancias-anticipo', importe: 7000, fuente: 'VEP', fechaPago: '2026-10-17' });
+  const oct2 = panelMes(out2, '2026-10', { ...op, paramsFile: path.join(out2, 'x.json') });
+  assert.equal(oct2.pagos.filas.find((f) => f.clave === 'ganancias' && !f.computado)?.estadoConciliacion, 'sin conciliar');
+  assert.equal(oct2.pagos.noSumados, 1);
+});
