@@ -246,6 +246,17 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   favor de ARCA o del contribuyente, el año, la secuencia y la fecha; la DJ es válida solo si determinado − pagos a
   cuenta = saldo, al centavo. El saldo es el que declaró la DJ, no la deuda de hoy: se concilia con los pagos de Cuentas
   Tributarias imputados a ese año desde la presentación, y sin ellos queda «sin conciliar». En `out/importados/ganancias/`.
+- **Recolección automática (solo lectura), lo nuevo de la corrida:**
+  - *SIFERE*: además de los listados, baja el «Reporte» (PDF) de cada CM03 presentada de los meses de la corrida y los
+    seis anteriores, y lo lee como si lo hubieras subido. Solo hace clic en un control que se identifique sin dudas
+    como reporte o impresión de la DJ; nunca en «Pago», «Crear DJ a partir de copia», VEP ni nada de presentar. Si no
+    lo identifica, no hace clic y guarda cómo es cada control (en `resultado.json` de la corrida).
+  - *Presentación de DDJJ y Pagos*: entra por las rutas de lectura «Consulta de DDJJ presentadas» y «Consulta de VEP»
+    (nunca «Presentación» ni «Gestión de VEP») y releva sus grillas, con muestra enmascarada de las filas.
+  - *CCMA (autónomos)*: lee las tablas que muestra la cuenta corriente reconociendo la fila de encabezados por sus
+    palabras (las tablas no tienen encabezados HTML). No completa campos ni toca «Calcular deuda» ni «Pagar». Las filas
+    del período se muestran como evidencia, sin sacar importes hasta confirmar las columnas reales.
+  - Para una corrida acotada a lo que falta: `.\fiscalos.ps1 correr -Servicios sifere-consultas,ccma,ddjj-y-pagos,ddjj-y-pagos-veps`.
 - **Pagos**: cada pago cargado a mano lleva el *período* al que corresponde y su *fecha de pago*: el período descuenta
   esa obligación y la fecha lo ubica en la caja del mes en que salió (el CM03 de septiembre pagado en octubre sale de la
   caja de octubre). Un pago cargado que coincide con uno de ARCA o de SIFERE no se suma dos veces; uno sin fecha que puede

@@ -158,6 +158,25 @@ export function pagosDelPeriodo(datosDir, mes, clave) {
   return out;
 }
 
+/**
+ * Filas de la cuenta corriente de CCMA (autónomos) del período `mes`, tal como las leyó ccma.js: { columnas, filas,
+ * fuente } o null. Las columnas todavía no están confirmadas con una corrida real: se muestran como evidencia y no se
+ * deriva de ellas ningún importe.
+ */
+export function ccmaDelPeriodo(datosDir, mes) {
+  const [y, m] = mes.split('-');
+  const del = (c) => new RegExp(`\\b(${m}/${y}|${y}${m}|${y}-${m}|${y}/${m})\\b`).test(String(c ?? ''));
+  for (const v of vigentes(datosDir, 'ccma')) {
+    for (const t of v.tablas) {
+      const ip = col(t.headers, /periodo/);
+      if (ip < 0) continue;
+      const filas = t.rows.filter((f) => del(f[ip]));
+      return { columnas: t.headers, filas, fuente: `CCMA (${v.entrada.cuando}, columnas sin confirmar)` };
+    }
+  }
+  return null;
+}
+
 /** Pagos de Cuentas Tributarias de un impuesto imputados al período fiscal ANUAL `anio` (Ganancias: anticipos y saldo). */
 export function pagosDelAnio(datosDir, anio, clave) {
   const out = []; const vistos = new Set();
@@ -421,6 +440,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
       ?? (autPeriodo.length ? cifra(suma(autPeriodo), 'verificado', 'Cuentas Tributarias', `${autPeriodo.length} pago(s) imputados al período`) : null)
       ?? (contrib?.autonomosMensual ? cifra(contrib.autonomosMensual, 'estimado', 'params/contribuyente.json', 'cuota mensual configurada') : faltante('sin pagos del período en ARCA: cargá la cuota del mes')),
     pagos: autPagosCaja.length ? cifra(suma(autPagosCaja), autPagosCaja.every((x) => x.nivel === 'verificado') ? 'verificado' : 'manual', [...new Set(autPagosCaja.map((x) => x.fuente))].join(' + ')) : faltante('sin pagos registrados en el mes'),
+    ccma: ccmaDelPeriodo(datosDir, mes),
   };
 
 

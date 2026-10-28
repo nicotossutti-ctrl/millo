@@ -173,7 +173,7 @@ async function seleccionarImpuesto(frame, servicio, impuestoLabel = null) {
  * Corre en el navegador. Elige la mejor tabla del documento. Si `expected` trae encabezados,
  * da prioridad fuerte a la tabla que los contiene (evita grillas de navegación/título).
  */
-function extraerTablasEnDocumento() {
+export function extraerTablasEnDocumento() {
   const vis = (e) => { try { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; } };
   const tx = (c) => (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
   const out = [];

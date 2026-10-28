@@ -70,7 +70,10 @@ export const SERVICIOS = [
   // muestra de filas y acciones) SIN hacer clic en nada. Con esa evidencia se escribe el lector de la CM03 presentada.
   { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
     fuente: '5-consultas', confirmado: false, extractor: 'sifere', grillas: [], soloRelevamiento: true },
+  // Además de los listados, baja el «Reporte» (PDF) de cada CM03 presentada del período y lo lee (sifereReporte.js):
+  // solo el control inequívoco de reporte/impresión de la fila; nunca «Pago» ni «Crear DJ a partir de copia».
   { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE WEB - DDJJ', 'CONVENIO MULTILATERAL – SIFERE WEB - DDJJ'], fuente: 5, confirmado: false, extractor: 'sifere',
+    reportesCm03: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do',
     grillas: [
       { id: 'ddjj-mensuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJController.do', columnasEsperadas: ['Anticipo', 'Estado', 'Presentacion'] },
       { id: 'ddjj-anuales', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaDDJJAnualController.do', columnasEsperadas: ['Año', 'Estado', 'Presentacion'] },
@@ -153,8 +156,16 @@ export const SERVICIOS = [
   // DDJJ y Pagos (seti, EJ2): la home arranca con un tutorial/intro ("Saltar intro"/"Continuar")
   // y, debajo, las tabs "Presentaciones" (DDJJ presentadas) y "Pagos". Saltamos la intro (opcional)
   // y abrimos "Presentaciones"; la grilla de componente la lee el extractor (e-grid/role=grid).
+  // Presentación de DDJJ y Pagos (setiweb, Angular). El diagnóstico del 25/10 muestra el menú lateral con rutas de
+  // LECTURA: «Consulta de DDJJ presentadas» (#/presentacion/consulta) y «Consulta de VEP» (#/pago/consulta-veps); se
+  // entra por hash, como en Portal IVA. Nunca «Presentación de declaración jurada» (#/presentacion/presentacion) ni
+  // «Gestión de VEP» (#/pago/nuevo-vep). Las grillas todavía no se vieron: el relevamiento con muestra las va a mostrar.
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { texto: 'Presentaciones', opcional: true }] },
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/presentacion/consulta' },
+      { texto: 'Consultar', opcional: true }, { texto: 'Buscar', opcional: true }] },
+  { id: 'ddjj-y-pagos-veps', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: '10-veps', confirmado: false, extractor: 'generico',
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/pago/consulta-veps' },
+      { texto: 'Consultar', opcional: true }, { texto: 'Buscar', opcional: true }] },
   // Portal IVA (Angular, siapweb/iva/#/...). Flujo real confirmado por capturas:
   //   home (#/init) --CONSULTAR "Declaraciones juradas presentadas"--> #/anteriores
   //   #/anteriores  --CONSULTAR "Declaración Jurada de IVA"--> #/declaraciones.anteriores (la LISTA)
@@ -180,7 +191,9 @@ export const SERVICIOS = [
   // sección por su texto (tarjeta/enlace) o por CONSULTAR; ambos opcionales. La grilla es async.
   { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'Mis declaraciones juradas presentadas', opcional: true }, { texto: 'CONSULTAR', opcional: true }] },
-  { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'generico' },
+  // CCMA: lector propio (ccma.js) para sus tablas sin <th>; solo lee, sin completar campos ni tocar «Pagar» (Pag_Princ).
+  { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'ccma',
+    columnasEsperadas: ['Periodo'] },
   { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).

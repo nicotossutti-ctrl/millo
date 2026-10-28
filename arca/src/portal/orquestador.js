@@ -8,13 +8,16 @@ import path from 'node:path';
 import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento, sanear } from './relevar.js';
 import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
-import { extraerTabla, extraerTablaEnPagina, norm } from './extractor.js';
+import { extraerTabla, extraerTablaEnPagina, extraerTablasEnDocumento, norm } from './extractor.js';
+import { leerCcma } from './ccma.js';
+import { toCsv } from '../csv.js';
 import { drillHaciaGrilla, navegarPorEnlace } from './navegar.js';
 import { slug } from './servicios.js';
 import { evaluarCalidad, esGrillaAjena, estadoInforme } from './calidad.js';
 import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
 import { generarMatrizCobertura } from './coberturaHistorica.js';
 import { correrIvaDdjj } from './ivaDdjj.js';
+import { bajarReportesCm03 } from './sifereReporte.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
 
@@ -396,9 +399,22 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       intentos.push({ id: idSub, dirIntento, clave: null, resultado: { estado: 'error', filas: 0, error } });
     }
   }
+  // Reporte (PDF) de cada CM03 presentada de los meses de la corrida y los seis anteriores: se baja y se lee. Solo si el
+  // listado se pudo abrir con sesión, y sin tocar ningún control que no sea inequívocamente «Reporte».
+  let reportes = null;
+  if (servicio.reportesCm03 && enSesion && periodo) {
+    try {
+      await pagina.goto(servicio.reportesCm03, { waitUntil: 'domcontentloaded' });
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2000);
+      if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al volver al listado');
+      reportes = await bajarReportesCm03(pagina, { meses: mesesDeLaCorrida(periodo, 6), outDir: outBase, log });
+      for (const r of reportes.reportes) log(`  sifere/reporte ${r.anticipo}: ${r.decision}${r.estado ? ` (${r.estado})` : ''}${r.motivo ? ` · ${r.motivo}` : ''}`);
+    } catch (e) { reportes = { error: sanitizarTexto(e?.message ?? String(e)), reportes: [] }; }
+  }
   const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
-  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub }, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes }, null, 2));
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
 
   const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
@@ -413,7 +429,50 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
     validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
       motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
       finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
+    ...(reportes ? { reportesCm03: reportes } : {}),
   };
+}
+
+/** Meses ('AAAA-MM') del período de la corrida, más los `antes` meses anteriores a su inicio. Pura. */
+export function mesesDeLaCorrida(periodo, antes = 0) {
+  const [y0, m0] = periodo.desde.slice(0, 7).split('-').map(Number); const fin = periodo.hasta.slice(0, 7);
+  let y = y0, m = m0 - antes; while (m < 1) { m += 12; y -= 1; }
+  const out = [];
+  for (let i = 0; i < 240; i++) {
+    const k = `${y}-${String(m).padStart(2, '0')}`;
+    if (k > fin) break;
+    out.push(k); m += 1; if (m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+
+/**
+ * CCMA (autónomos): abre la cuenta corriente y LEE las tablas que muestra (ccma.js), sin completar campos ni hacer clic
+ * (nunca «Pagar»). La grilla se reconoce por su fila de encabezados; sin una reconocible, queda 'relevado' con la
+ * estructura y la muestra de filas para escribir la regla con evidencia.
+ */
+async function correrCcma(sesion, servicio, dir, periodo, log, ctx = {}) {
+  const pagina = await abrirSistema(sesion, servicio, dir, log);
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  const tablas = [];
+  for (const f of pagina.frames()) tablas.push(...await f.evaluate(extraerTablasEnDocumento).catch(() => []));
+  const g = leerCcma(tablas);
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
+  const r = { id: servicio.id, archivos: [], filas: g?.rows.length ?? 0, columnas: g?.headers ?? [], estado: g ? 'extraido' : 'sin-datos', conFiltroPeriodo: false,
+    finPaginacion: g ? 'sin-siguiente' : null, totales: g?.totales.length ?? 0, motivo: g ? undefined : 'CCMA: ninguna tabla tiene una fila de encabezados reconocible (período, importe, saldo…); estructura y muestra en estructura.json' };
+  if (g && g.rows.length && dirIntento) {
+    const archivo = 'ccma-cuenta-corriente.csv';
+    escribir(path.join(dirIntento, archivo), toCsv(g.rows, g.headers.map((h, i) => ({ header: h || `Columna ${i + 1}`, value: (x) => x[i] ?? '' }))));
+    r.archivos.push(archivo);
+  }
+  r.calidad = evaluarCalidad(servicio, r, { desde: periodo?.desde, hasta: periodo?.hasta });
+  const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  log(`  ccma: ${r.filas} fila(s)${g ? ` · columnas: ${g.headers.filter(Boolean).slice(0, 8).join(' / ')}` : ''}`);
+  return { estado: estadoInforme(r.calidad, r.filas) ?? (r.filas ? 'descargado' : 'relevado'), archivos: r.archivos, filas: r.filas, motivo: r.motivo ?? (r.calidad.motivos.join('; ') || undefined),
+    calidad: r.calidad, intentos: [{ id: servicio.id, dirIntento, clave: g ? claveDe(r, periodo) : null, resultado: r }] };
 }
 
 /**
@@ -469,6 +528,7 @@ export async function correrUno(sesion, servicio, { baseDir, periodo, log = () =
     if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log, ctx);
     if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log, ctx);
     if (servicio.extractor === 'iva-ddjj') return correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'ccma') return correrCcma(sesion, servicio, dir, periodo, log, ctx);
     return correrGenerico(sesion, servicio, dir, periodo, log, ctx);
   });
   try {
