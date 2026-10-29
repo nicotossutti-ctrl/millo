@@ -18,6 +18,7 @@ import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
 import { generarMatrizCobertura } from './coberturaHistorica.js';
 import { correrIvaDdjj } from './ivaDdjj.js';
 import { bajarReportesCm03 } from './sifereReporte.js';
+import { irAPagosConsultas, guardarExportacionPagos } from './sifereConsultas.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
 
@@ -331,7 +332,7 @@ async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
  * 'relevado' con la estructura capturada (acceso ≠ descarga).
  */
 async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
-  const pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
+  let pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
   // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la
   // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
   // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
@@ -351,6 +352,14 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   // lecturas seguidas) y, si cae en SesionExpirada, reabrimos la entrada de login (hasta 2 veces).
   await pagina.waitForTimeout(2500).catch(() => {});
   let conexionFallida = !!(await sinConexion());
+  // Un solo reintento si COMARB no cargó (corrida del 28/10: fue un corte de conexión, no un login): se cierra la pestaña
+  // con error, se espera un momento y se vuelve a abrir el acceso. Si sigue sin cargar, se registra y se sigue.
+  if (conexionFallida) {
+    log('  SIFERE: COMARB no cargó; reintento una vez en unos segundos.');
+    for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
+    await new Promise((r) => setTimeout(r, servicio.esperaReintentoConexionMs ?? 10000));
+    try { pagina = await sesion.abrirServicio(servicio); await pagina.waitForTimeout(2500).catch(() => {}); conexionFallida = !!(await sinConexion()); } catch { /* sigue fallida */ }
+  }
   if (!conexionFallida && !enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
   const limite = Date.now() + 180000;
   let estables = 0, reintentos = 0;
@@ -396,7 +405,10 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
     const idSub = `${servicio.id}-${g.id}`;
     const dirIntento = ctx.dirIntento?.(idSub) ?? null;
     try {
-      const via = await irAListado(pagina, g.url);
+      // Sin conexión con COMARB no se intenta nada: se registra y no se pisa lo guardado.
+      if (conexionFallida) throw new Error('no se pudo conectar con COMARB (el sitio no cargó)');
+      // SIFERE Consultas: la consulta de pagos se abre por los rótulos de su menú (sifereConsultas.js), no por dirección.
+      const via = g.navegar === 'consultas-pagos' ? await irAPagosConsultas(pagina, { log }) : await irAListado(pagina, g.url);
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
       log(`  sifere/${g.id}: abierto por ${via}`);
@@ -405,7 +417,12 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       const servSub = { id: idSub, columnasEsperadas: g.columnasEsperadas };
       const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
       r.calidad = evaluarCalidad(servSub, r, { desde: periodo.desde, hasta: periodo.hasta });
-      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion });
+      // Respaldo original de la consulta (exportación a Excel), si la pantalla la ofrece.
+      if (g.exportar && r.filas > 0) {
+        r.exportacion = await guardarExportacionPagos(pagina, outBase, { mes: periodo.desde.slice(0, 7) }).catch((e) => ({ motivo: sanitizarTexto(e.message) }));
+        log(`  sifere/${g.id}: exportación ${r.exportacion.archivo ? `guardada (${r.exportacion.archivo})` : `no guardada: ${r.exportacion.motivo}`}`);
+      }
+      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion, exportacion: r.exportacion });
       intentos.push({ id: idSub, dirIntento, clave: claveDe(r, periodo), resultado: r });
       log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas${r.resumenEstados ? ` · ${JSON.stringify(r.resumenEstados)}` : ''}`);
     } catch (e) {

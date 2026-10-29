@@ -81,8 +81,11 @@ export const SERVICIOS = [
     ] },
   // SIFERE WEB – Consultas, DESPUÉS del de DDJJ (corrida 2026-10-28: su pestaña no cargó y no debe tocar la sesión del
   // otro). Su módulo puede estar en otro host de COMARB (la pestaña fue a app1.comarb.gob.ar).
+  // Pagos realizados de IIBB (documentación de la Comisión Arbitral: menú «SIFERE» > pagos, exportable a Excel). La
+  // pantalla interna no se vio en una corrida: se navega por rótulos y la grilla se reconoce por sus columnas.
   { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
-    fuente: '5-consultas', confirmado: false, extractor: 'sifere', grillas: [], soloRelevamiento: true, hostModulo: /comarb\.gob\.ar/ },
+    fuente: '5-consultas', confirmado: false, extractor: 'sifere', hostModulo: /(comarb|ca)\.gob\.ar/,
+    grillas: [{ id: 'pagos', navegar: 'consultas-pagos', exportar: true, columnasEsperadas: ['Fecha', 'Importe|Monto', 'Anticipo|Periodo'] }] },
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   // Vencimientos (home de Cuentas Tributarias). Corrida 2026-10-24: quedó en el login de ARCA y dio 0

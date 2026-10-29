@@ -32,7 +32,7 @@ export function grillaLista(rel, expected = []) {
       if (t.visible === false) continue;
       if ((t.filas ?? 0) > 0) hayGrillaConDatos = true;
       const enc = (t.encabezados ?? []).map(norm);
-      if (exp.length && exp.every((e) => enc.some((h) => h.includes(e)))) hayGrillaEsperada = true;
+      if (exp.length && exp.every((e) => String(e).split('|').some((alt) => enc.some((h) => h.includes(alt))))) hayGrillaEsperada = true;
     }
     for (const i of f.inputs ?? []) {
       const marca = norm(`${i.placeholder ?? ''} ${i.id ?? ''} ${i.name ?? ''}`);

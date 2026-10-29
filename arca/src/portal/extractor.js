@@ -219,12 +219,15 @@ export function extraerTablasEnDocumento() {
  * bonus fuerte por cada encabezado esperado presente. Si se esperan encabezados y ninguna
  * candidata coincide, devuelve null (era tabla de navegación/título, no la grilla fiscal).
  */
+/** ¿Algún encabezado contiene la columna esperada? «importe|monto»: cualquiera de las alternativas. Pura. */
+const tieneColumna = (hn, e) => String(e).split('|').some((alt) => hn.some((h) => h.includes(alt)));
+
 export function elegirTabla(tablas, expected = []) {
   let mejor = null;
   for (const t of tablas) {
     const cols = (t.headers ?? []).filter(Boolean).length;
     const hn = (t.headers ?? []).map(norm);
-    const coincideCols = expected.filter((e) => hn.some((h) => h.includes(e))).length;
+    const coincideCols = expected.filter((e) => tieneColumna(hn, e)).length;
     // Bonus a las tablas con encabezados reales (≥2): sin columnas esperadas, una tabla de maquetación
     // sin encabezados (p. ej. las secciones del menú lateral de Cuentas Tributarias, 10 filas) no debe
     // ganarle a una grilla de datos chica.
@@ -246,7 +249,7 @@ export function recolectarTablas(tablas, expected = []) {
   if (!exp.length) return elegirTabla(tablas, expected);
   const coincide = (t) => {
     const hn = (t.headers ?? []).map(norm);
-    return exp.every((e) => hn.some((h) => h.includes(e)));
+    return exp.every((e) => tieneColumna(hn, e));
   };
   const match = tablas.filter(coincide);
   if (!match.length) return null; // ninguna coincide: era navegación/título

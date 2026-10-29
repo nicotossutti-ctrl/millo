@@ -52,7 +52,8 @@ export function resumenEstados(headers, filas) {
 /** Columnas obligatorias que NO aparecen en los encabezados reales (comparación sin acentos ni mayúsculas, por inclusión). */
 export function columnasFaltantes(encabezados, requeridas) {
   const hn = (encabezados ?? []).map(norm).filter(Boolean);
-  return (requeridas ?? []).filter((r) => !hn.some((h) => h.includes(norm(r))));
+  // «Importe|Monto»: alcanza con cualquiera de las alternativas (pantallas cuyo rótulo exacto no está confirmado).
+  return (requeridas ?? []).filter((r) => !String(r).split('|').some((alt) => hn.some((h) => h.includes(norm(alt)))));
 }
 
 /** ¿Los encabezados son los de una grilla que la sección NO busca? true si TODOS los términos de `rechazar` aparecen. */

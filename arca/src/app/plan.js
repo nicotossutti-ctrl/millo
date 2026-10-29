@@ -5,7 +5,8 @@
  *  - los PAGOS se buscan por fecha de operación desde el mes (o desde la presentación de la DJ anual de Ganancias, si es
  *    anterior) HASTA AYER: el IVA de septiembre se paga en octubre o después, y una consulta solo de septiembre no lo ve;
  *  - deudas, vencimientos y compensaciones se releen siempre (son el saldo de hoy);
- *  - SIFERE se relee siempre (los volantes pagados son los pagos de IIBB) y baja el Reporte de la CM03 si falta.
+ *  - SIFERE DDJJ se relee siempre (volantes; el Reporte de la CM03 si falta) y SIFERE WEB – Consultas, los pagos
+ *    realizados por jurisdicción.
  * Lo que todavía no tiene fuente automática se informa como pendiente, sin inventar nada. Pura sobre out/.
  */
 import path from 'node:path';
@@ -51,8 +52,8 @@ export function planActualizacion(outDir, hoy) {
   // IIBB: SIFERE siempre (los volantes pagados son los pagos); el Reporte de la CM03 solo si falta.
   const cm = cm03DelPeriodo(outDir, mes).vigente;
   if (cm) reutilizado.push({ que: `CM03 de ${mes}`, porque: `ya está leída (${cm.rectificativa ? `rectificativa ${cm.rectificativa}` : 'original'})` });
-  paso('sifere-consultas', inicio, ayer, cm ? 'IIBB: volantes de pago (pagos del período) y rectificativas nuevas' : `IIBB: volantes de pago y el Reporte de la CM03 de ${mes}`);
-  pendientes.push('IIBB: los pagos y deducciones de «SIFERE WEB – Consultas» todavía no se extraen solos (solo los volantes pagados de SIFERE DDJJ)');
+  paso('sifere-consultas', inicio, ayer, cm ? 'IIBB: volantes de pago y rectificativas nuevas' : `IIBB: volantes de pago y el Reporte de la CM03 de ${mes}`);
+  paso('sifere-consultas-web', inicio, ayer, `IIBB: pagos realizados por jurisdicción (SIFERE WEB – Consultas), para conciliar la CM03 de ${mes}`);
 
   // Ganancias: la DJ anual no se baja sola todavía; sus pagos salen de ct-pagos (arriba).
   if (djGan) reutilizado.push({ que: `DJ de Ganancias ${anio} (F.${djGan.formulario})`, porque: 'ya está leída' });

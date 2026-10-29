@@ -813,7 +813,9 @@ test('plan del botón (IVA septiembre): reutiliza la DJ y los comprobantes guard
   const pagos = plan.pasos.find((p) => p.id === 'ct-pagos');
   assert.deepEqual([pagos.desde, pagos.hasta], ['2026-09-01', '2026-10-28'], 'los pagos de septiembre se hacen en octubre: se buscan hasta ayer');
   for (const id of ['ct-deudas', 'cuentas-tributarias', 'sifere-consultas']) assert.ok(ids.includes(id), id);
-  assert.ok(!ids.includes('sifere-consultas-web') && !ids.includes('ccma') && !ids.includes('ddjj-y-pagos'), 'lo que no aporta al saldo no se recorre');
+  assert.ok(ids.includes('sifere-consultas-web'), 'IIBB: pagos por jurisdicción de SIFERE Consultas');
+  assert.deepEqual(['desde', 'hasta'].map((k) => plan.pasos.find((p) => p.id === 'sifere-consultas-web')[k]), ['2026-09-01', '2026-10-28']);
+  assert.ok(!ids.includes('ccma') && !ids.includes('ddjj-y-pagos'), 'lo que no aporta al saldo no se recorre');
   assert.ok(plan.pendientes.some((p) => /Ganancias: la DJ anual 2025/.test(p)));
   // Instalación vacía: se pide todo lo de septiembre.
   const vacio = planActualizacion(tmp(), '2026-10-29').pasos.map((p) => p.id);

@@ -368,6 +368,26 @@ function bloqueResumen() {
 }
 
 /** Ingresos Brutos según la CM03: por jurisdicción, sin compensar saldos a favor de una con lo que se debe en otra. */
+/** Conciliación de IIBB por jurisdicción: a pagar según la CM03, pagado verificado (fecha y comprobante) y saldo. */
+function bloqueConciliacionIibb(c) {
+  const conPagar = c.filas.filter((f) => f.aPagar > 0);
+  const pagosDe = (f) => f.pagos.map((p) => `${fmt(p.importe)}${p.fecha ? ` el ${fecha(p.fecha)}` : ''}${p.comprobante ? ` · ${p.comprobante}` : ''}`).join(' · ');
+  return h('div', {}, h('h3', {}, 'Pagos por jurisdicción'),
+    h('table', { class: 'apilable' },
+      h('thead', {}, h('tr', {}, ...['Jurisdicción', 'A pagar CM03', 'Pagado verificado', 'Saldo'].map((x, k) => h('th', { class: k ? 'num' : '' }, x)))),
+      h('tbody', {}, ...conPagar.map((f) => h('tr', {},
+        h('td', { 'data-rotulo': 'Jurisdicción' }, f.jurisdiccion),
+        h('td', { class: 'num', 'data-rotulo': 'A pagar CM03' }, fmt(f.aPagar)),
+        h('td', { class: 'num', 'data-rotulo': 'Pagado verificado' }, f.pagado == null ? f.estado : h('span', {}, fmt(f.pagado), h('div', { class: 'nota' }, pagosDe(f)))),
+        h('td', { class: 'num', 'data-rotulo': 'Saldo' }, f.saldo == null ? (f.saldoTexto ?? 'Sin verificar') : h('span', {}, fmt(f.saldo), h('div', { class: 'nota' }, f.estado))))),
+      h('tr', {}, h('td', {}, h('strong', {}, 'Total')), h('td', { class: 'num' }, h('strong', {}, fmt(c.total.aPagar))),
+        h('td', { class: 'num' }, c.total.pagadoVerificado == null ? '—' : fmt(c.total.pagadoVerificado)),
+        h('td', { class: 'num' }, c.total.saldo == null ? (c.total.saldoTexto ?? 'Sin verificar') : fmt(c.total.saldo))))),
+    c.sinImputar.length ? h('div', { class: 'aviso' }, `Pagos verificados pendientes de imputación (no dicen su jurisdicción; no se reparten): ${c.sinImputar.map((p) => `${fmt(p.importe)}${p.fecha ? ` el ${fecha(p.fecha)}` : ''} (${p.fuente})`).join(' · ')}`) : null,
+    c.sinConfirmar.length ? h('p', { class: 'nota' }, `Sin confirmar, no se computan (un VEP o volante generado no es un pago): ${c.sinConfirmar.map((p) => `${fmt(p.importe)}${p.estado ? ` · ${p.estado}` : ''}`).join(' · ')}`) : null,
+    !c.consultado ? h('p', { class: 'nota' }, '«A consultar»: la consulta de pagos de SIFERE WEB – Consultas todavía no se leyó; se hace sola con «Actualizar datos fiscales».') : null);
+}
+
 function bloqueIibb(p) {
   const i = p.iibb; const js = i.porJurisdiccion;
   const fila = (nombre, c) => h('tr', {}, h('td', {}, nombre), h('td', { class: 'num', title: [c?.fuente, c?.nota].filter(Boolean).join(' · ') || null },
@@ -383,7 +403,8 @@ function bloqueIibb(p) {
       h('thead', {}, h('tr', {}, ...['Jurisdicción', 'Determinado', 'A favor contribuyente', 'A favor fisco', 'A pagar'].map((x, k) => h('th', { class: k ? 'num' : '' }, x)))),
       h('tbody', {}, ...js.map((j) => h('tr', {}, h('td', { 'data-rotulo': 'Jurisdicción' }, `${j.codigo ? `${j.codigo} · ` : ''}${j.jurisdiccion}`),
         ...[['determinado', 'Determinado'], ['aFavorContribuyente', 'A favor contribuyente'], ['aFavorFisco', 'A favor fisco'], ['aPagar', 'A pagar']].map(([k, rot]) => h('td', { class: 'num', 'data-rotulo': rot }, fmt(j[k]))))))) : null,
-    h('p', { class: 'nota' }, 'Presentar la CM03 no es pagarla. Un saldo a favor de una jurisdicción no cancela lo que se debe en otra; los pagos no dicen a qué jurisdicción van.'),
+    i.conciliacion ? bloqueConciliacionIibb(i.conciliacion) : null,
+    h('p', { class: 'nota' }, 'Presentar la CM03 no es pagarla. Un saldo a favor de una jurisdicción no cancela lo que se debe en otra.'),
     i.cm03?.vigente?.detalles?.length ? h('details', {}, h('summary', { class: 'nota' }, 'Determinación del anticipo (detalle del PDF, no se suma)'),
       ...i.cm03.vigente.detalles.map((d) => h('div', {}, h('strong', {}, d.jurisdiccion), h('table', {}, h('tbody', {}, ...d.conceptos.map((c) => h('tr', {}, h('td', {}, c.concepto), h('td', { class: 'num' }, fmt(c.importe))))))))) : null,
     i.avisos?.length ? h('div', {}, ...i.avisos.map((a) => h('div', { class: 'aviso' }, a))) : null);

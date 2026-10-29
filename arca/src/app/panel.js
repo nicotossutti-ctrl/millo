@@ -28,6 +28,7 @@ import { cm03Sifere, djAnualGanancias, djDelPeriodo } from './presentaciones.js'
 import { conciliarPagos, pagosCargadosEnCaja, pagosCargadosDelPeriodo, pagosSinFecha } from './pagos.js';
 import { cm03DelPeriodo } from './cm03.js';
 import { ddjjGananciasDelAnio } from './ddjjGanancias.js';
+import { conciliarIibb } from './iibbConciliacion.js';
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -235,6 +236,34 @@ export function volantePagado(estado) {
   return /^(pagad[oa]|abonad[oa]|acreditad[oa])( (total|totalmente))?$/.test(e);
 }
 
+/**
+ * Pagos de IIBB del período `mes` según SIFERE WEB – Consultas (los que leyó sifereConsultas.js), con la jurisdicción si
+ * la consulta la trae. Verificado: la consulta es de pagos REALIZADOS; si trae una columna de estado, además tiene que
+ * decir pagado (volantePagado). { pagos: [...], consultado } — consultado: hay una lectura guardada de la consulta.
+ */
+export function pagosConsultasIibb(datosDir, mes) {
+  const out = []; const vistos = new Set(); let consultado = false;
+  for (const v of vigentes(datosDir, 'sifere-consultas-web-pagos')) {
+    consultado = true;
+    for (const t of v.tablas) {
+      const ip = col(t.headers, /anticipo|periodo/); const im = col(t.headers, /importe|monto/); const ij = col(t.headers, /jurisdic/);
+      const ifp = col(t.headers, /fecha.*pago|pago.*fecha/); const ifx = ifp >= 0 ? ifp : col(t.headers, /fecha/); const ie = col(t.headers, /^estado/);
+      const ic = col(t.headers, /vep|comprobante|transacci|n(u|ú)mero|nro/);
+      if (ip < 0 || im < 0) continue;
+      for (const f of t.rows) {
+        const ant = String(f[ip] ?? '').match(/^(\d{4})(\d{2})\b/);
+        if ((ant ? `${ant[1]}-${ant[2]}` : periodoDe(f[ip])) !== mes) continue;
+        const k = f.join('|'); if (vistos.has(k)) continue; vistos.add(k); // ventanas que se superponen
+        const estado = ie >= 0 ? f[ie] : null;
+        out.push({ importe: importeDe(f[im]), fecha: ifx >= 0 ? fechaIso(f[ifx]) : null, jurisdiccion: ij >= 0 ? String(f[ij] ?? '').trim() || null : null,
+          comprobante: ic >= 0 ? String(f[ic] ?? '').trim() || null : null, estado, verificado: ie < 0 || volantePagado(estado), nivel: 'verificado',
+          fuente: `SIFERE Consultas · pagos (${v.entrada.cuando})` });
+      }
+    }
+  }
+  return { pagos: out, consultado };
+}
+
 export function volantesSifere(datosDir, mes) {
   const out = [];
   for (const v of vigentes(datosDir, 'sifere-consultas-volantes-pago')) {
@@ -356,6 +385,16 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
     impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, aPagar: iibbAPagar, estimado: iibbEstimado, pagos: iibbPagado,
     aFavorContribuyente: cmv ? cifra(cmv.aFavorContribuyenteTotal, 'importado', fuenteCm, 'saldos a favor de cada jurisdicción: no cancelan lo que se debe en otras') : faltante('sin la CM03 importada'),
     porJurisdiccion: cmv ? cmv.jurisdicciones.map(({ jurisdiccion, codigo, determinado, aFavorContribuyente, aFavorFisco, aPagar }) => ({ jurisdiccion, codigo: codigo ?? null, determinado, aFavorContribuyente, aFavorFisco, aPagar })) : null,
+    // Conciliación por jurisdicción: a pagar según la CM03 contra los pagos verificados que dicen su jurisdicción.
+    conciliacion: cmv ? (() => {
+      // Los pagos con jurisdicción de SIFERE Consultas, más los demás pagos del período ya sin duplicados (volantes pagados
+      // y cargas, que no dicen jurisdicción) y los volantes sin estado de pago (no cuentan).
+      const pc = pagosConsultasIibb(datosDir, mes);
+      const otros = ip.computados.filter((x) => !String(x.fuente ?? '').startsWith('SIFERE Consultas'))
+        .map((x) => ({ importe: x.importe, fecha: x.fecha ?? null, jurisdiccion: null, comprobante: x.comprobante ?? null, verificado: true, nivel: x.nivel, fuente: x.fuente }));
+      const volantesSinPago = ip.volantesSinPago.map((v) => ({ importe: v.importe, fecha: null, jurisdiccion: null, comprobante: null, estado: v.estado, verificado: false, fuente: 'SIFERE: volante generado' }));
+      return conciliarIibb({ jurisdicciones: cmv.jurisdicciones, pagos: [...pc.pagos, ...otros, ...volantesSinPago], consultado: pc.consultado });
+    })() : null,
     saldoPendiente: saldoIibb(iibbAPagar, iibbPagos, cmv?.jurisdicciones ?? null),
     // Presentación: la lista de DJ CM03 de SIFERE (fecha y rectificativa) o el reporte importado.
     presentacion: (() => {
@@ -499,7 +538,7 @@ export function saldoIibb(aPagar, pagos = [], jurisdicciones = null) {
   if (pagado >= aPagar.valor - 1) return cifra(0, nivelPagos, 'a pagar según CM03 − pagos', pagado > aPagar.valor + 1 ? `los pagos (${pagado}) superan lo a pagar: revisalos` : 'cubierto por los pagos del período');
   const conSaldo = (jurisdicciones ?? []).filter((j) => j.aPagar > 0);
   if (conSaldo.length === 1) return cifra(aPagar.valor - pagado, nivelPagos, 'a pagar según CM03 − pagos', `queda de ${conSaldo[0].jurisdiccion} (la única jurisdicción con saldo a pagar)`);
-  return { ...faltante(`saldo sin conciliar: pagos por ${pagado} de ${aPagar.valor} a pagar${conSaldo.length ? ` en ${conSaldo.length} jurisdicciones` : ''}; los pagos no dicen a qué jurisdicción corresponden`), diferencia: r2(aPagar.valor - pagado) };
+  return { ...faltante(`saldo sin conciliar: pagos por ${pagado} de ${aPagar.valor} a pagar${conSaldo.length ? ` en ${conSaldo.length} jurisdicciones` : ''}; el total no se afirma hasta verificar cada jurisdicción (ver «Pagos por jurisdicción»)`), diferencia: r2(aPagar.valor - pagado) };
 }
 
 /**
@@ -561,7 +600,13 @@ const classifyO = (impuesto) => clasificarImpuesto(impuesto).clave;
  */
 export function pagosIibbDelPeriodo(outDir, datosDir, mes) {
   const volantes = volantesSifere(datosDir, mes);
-  const verificados = volantes.filter((v) => v.pagado).map((v) => ({ clave: 'iibb', importe: v.importe, fecha: null, periodo: mes, nivel: 'verificado', fuente: v.fuente }));
+  // Pagos de SIFERE Consultas (verificados) y volantes pagados; un volante del mismo importe que un pago de la consulta
+  // es el mismo pago visto desde dos pantallas: no se suma dos veces.
+  const consultas = pagosConsultasIibb(datosDir, mes).pagos.filter((p) => p.verificado && p.importe > 0)
+    .map((p) => ({ clave: 'iibb', importe: p.importe, fecha: p.fecha, periodo: mes, nivel: 'verificado', fuente: p.fuente }));
+  const deVolantes = volantes.filter((v) => v.pagado && !consultas.some((c) => Math.abs(c.importe - v.importe) <= 1))
+    .map((v) => ({ clave: 'iibb', importe: v.importe, fecha: null, periodo: mes, nivel: 'verificado', fuente: v.fuente }));
+  const verificados = [...consultas, ...deVolantes];
   const c = conciliarPagos(verificados, pagosCargadosDelPeriodo(outDir, mes, 'iibb-pagado'));
   return { ...c, volantesSinPago: volantes.filter((v) => !v.pagado).map((v) => ({ importe: v.importe, estado: v.estado, nota: 'volante generado, pago sin verificar: no se descuenta' })) };
 }
