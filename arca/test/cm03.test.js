@@ -173,7 +173,10 @@ test('panel y cartel con la CM03 importada: el determinado sale del cartel, el p
   assert.ok(!claves.includes('iibb-declarado') && !claves.includes('iibb-a-pagar-segun-cm03'), 'la CM03 ya no se pide');
   assert.ok(claves.includes('iibb-pagado'), 'el pago se sigue pidiendo');
   guardarManual(out, { mes: '2026-09', concepto: 'iibb-pagado', importe: 20, fuente: 'VEP', fechaPago: '2026-10-20' });
-  assert.equal(panelMes(out, '2026-09', op).iibb.saldoPendiente.valor, 10);
+  // Un pago cargado a mano no está verificado por el organismo: no baja el saldo de la jurisdicción (se muestra aparte).
+  const tras = panelMes(out, '2026-09', op).iibb;
+  assert.equal(tras.saldoPendiente.valor, null);
+  assert.equal(tras.conciliacion.manuales.length, 1);
   // SIFERE muestra presentada la rectificativa 1: se pide su reporte y se avisa.
   const d = path.join(out, 'datos', 'sifere-consultas-ddjj-mensuales'); fs.mkdirSync(path.join(d, 'vigente', 'a'), { recursive: true });
   fs.writeFileSync(path.join(d, 'vigente', 'a', 'l.csv'), toCsv([['202609 - 1', 'Presentada', '20/10/2026 11:00:00']], ['Anticipo', 'Estado', 'Fecha Presentación'].map((h, i) => ({ header: h, value: (r) => r[i] }))));

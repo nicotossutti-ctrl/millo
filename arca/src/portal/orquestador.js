@@ -13,12 +13,13 @@ import { leerCcma, calcularDeudaCcma } from './ccma.js';
 import { toCsv } from '../csv.js';
 import { drillHaciaGrilla, navegarPorEnlace } from './navegar.js';
 import { slug } from './servicios.js';
-import { evaluarCalidad, esGrillaAjena, estadoInforme } from './calidad.js';
+import { evaluarCalidad, esGrillaAjena, estadoInforme, verificarFechas } from './calidad.js';
 import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
 import { generarMatrizCobertura } from './coberturaHistorica.js';
 import { correrIvaDdjj } from './ivaDdjj.js';
 import { bajarReportesCm03 } from './sifereReporte.js';
-import { irAPagosConsultas, guardarExportacionPagos } from './sifereConsultas.js';
+import { consultarPagosConsultas } from './sifereConsultas.js';
+import { cm03DelPeriodo } from '../app/cm03.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
 
@@ -407,8 +408,15 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
     try {
       // Sin conexión con COMARB no se intenta nada: se registra y no se pisa lo guardado.
       if (conexionFallida) throw new Error('no se pudo conectar con COMARB (el sitio no cargó)');
-      // SIFERE Consultas: la consulta de pagos se abre por los rótulos de su menú (sifereConsultas.js), no por dirección.
-      const via = g.navegar === 'consultas-pagos' ? await irAPagosConsultas(pagina, { log }) : await irAListado(pagina, g.url);
+      // SIFERE Consultas: pagos por jurisdicción con sus filtros (sifereConsultas.js); camino propio, sin la grilla genérica.
+      if (g.navegar === 'consultas-pagos') {
+        const r = await leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log });
+        sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, finPaginacion: r.finPaginacion, consultas: r.consultas, exportaciones: r.exportaciones });
+        intentos.push({ id: idSub, dirIntento, clave: r.consultas.some((c) => c.estado === 'consultada') ? claveDe(r, periodo) : null, resultado: r });
+        log(`  sifere/${g.id}: ${r.consultas.map((c) => `${c.jurisdiccion}: ${c.estado}${c.filas ? ` (${c.filas})` : ''}`).join(' · ') || r.motivo}`);
+        continue;
+      }
+      const via = await irAListado(pagina, g.url);
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
       log(`  sifere/${g.id}: abierto por ${via}`);
@@ -417,12 +425,7 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       const servSub = { id: idSub, columnasEsperadas: g.columnasEsperadas };
       const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
       r.calidad = evaluarCalidad(servSub, r, { desde: periodo.desde, hasta: periodo.hasta });
-      // Respaldo original de la consulta (exportación a Excel), si la pantalla la ofrece.
-      if (g.exportar && r.filas > 0) {
-        r.exportacion = await guardarExportacionPagos(pagina, outBase, { mes: periodo.desde.slice(0, 7) }).catch((e) => ({ motivo: sanitizarTexto(e.message) }));
-        log(`  sifere/${g.id}: exportación ${r.exportacion.archivo ? `guardada (${r.exportacion.archivo})` : `no guardada: ${r.exportacion.motivo}`}`);
-      }
-      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion, exportacion: r.exportacion });
+      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion });
       intentos.push({ id: idSub, dirIntento, clave: claveDe(r, periodo), resultado: r });
       log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas${r.resumenEstados ? ` · ${JSON.stringify(r.resumenEstados)}` : ''}`);
     } catch (e) {
@@ -482,6 +485,44 @@ async function irAListado(pagina, url) {
   }
   await pagina.goto(url, { waitUntil: 'domcontentloaded' });
   return 'la dirección';
+}
+
+/**
+ * Pagos de SIFERE Consultas del anticipo de la corrida, una consulta por jurisdicción de la CM03 con importe a pagar. Se
+ * guarda un CSV con los pagos y, además, una fila de constancia por cada jurisdicción consultada sin pagos o sin consulta
+ * confirmada (columna «Resultado de la consulta»): así el panel distingue «SIFERE no informa pagos» de «no se pudo
+ * consultar» y de «no se consultó». Sin CM03 leída no se consulta (no se sabe qué jurisdicciones).
+ */
+async function leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log }) {
+  const mes = periodo.desde.slice(0, 7);
+  const cm = cm03DelPeriodo(outBase, mes).vigente;
+  const base = { id: idSub, archivos: [], filas: 0, columnas: [], conFiltroPeriodo: true, consultas: [], exportaciones: [] };
+  if (!cm) return { ...base, estado: 'sin-datos', motivo: `no hay CM03 de ${mes} leída: no se sabe qué jurisdicciones consultar`, calidad: evaluarCalidad({ id: idSub }, base, periodo) };
+  const jur = cm.jurisdicciones.filter((j) => j.aPagar > 0);
+  if (!jur.length) return { ...base, estado: 'sin-datos', motivo: `la CM03 de ${mes} no deja importe a pagar en ninguna jurisdicción`, calidad: evaluarCalidad({ id: idSub }, base, periodo) };
+  const res = await consultarPagosConsultas(pagina, { mes, jurisdicciones: jur, outDir: outBase, log });
+  const headers = res.headers.length ? res.headers : ['Jurisdicción consultada', 'Período consultado'];
+  const filas = res.rows.map((f) => [...f, 'pago']);
+  for (const c of res.consultas.filter((x) => !x.filas)) {
+    const f = headers.map(() => ''); f[headers.length - 2] = c.jurisdiccion; f[headers.length - 1] = `${mes}-01`;
+    filas.push([...f, c.estado === 'consultada' ? 'sin pagos informados por SIFERE' : `sin consulta confirmada: ${c.motivo}`]);
+  }
+  const columnas = [...headers, 'Resultado de la consulta'];
+  if (dirIntento && filas.length) {
+    escribir(path.join(dirIntento, `${idSub}.csv`), toCsv(filas, columnas.map((h, i) => ({ header: h, value: (x) => x[i] ?? '' }))));
+    base.archivos.push(`${idSub}.csv`);
+  }
+  const confirmadas = res.consultas.every((c) => c.estado === 'consultada');
+  // filas = lo guardado (pagos + constancias de jurisdicciones consultadas sin pagos o sin confirmar); pagos, aparte.
+  const r = { ...base, filas: filas.length, pagos: res.rows.length, columnas, estado: filas.length ? 'extraido' : 'sin-datos', consultas: res.consultas, exportaciones: res.exportaciones,
+    rangoOk: true, rangoAplicado: { desde: `${mes}-01`, hasta: `${mes}-01` },
+    finPaginacion: res.consultas.every((c) => c.paginas !== 'incompleta') ? 'sin-siguiente' : null,
+    ceroConfirmado: !res.rows.length && confirmadas,
+    motivo: confirmadas ? undefined : `consultas sin confirmar: ${res.consultas.filter((c) => c.estado !== 'consultada').map((c) => `${c.jurisdiccion} (${c.motivo})`).join('; ')}` };
+  // El período consultado (el anticipo, como AAAA-MM-01) es la columna de fecha que se verifica contra la ventana.
+  r.fechas = verificarFechas(columnas, filas, periodo.desde, periodo.hasta, 'Período consultado');
+  r.calidad = evaluarCalidad({ id: idSub, columnasEsperadas: ['Jurisdicción consultada'] }, r, periodo);
+  return r;
 }
 
 /** Meses ('AAAA-MM') del período de la corrida, más los `antes` meses anteriores a su inicio. Pura. */

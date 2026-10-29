@@ -38,12 +38,15 @@ export function claveJurisdiccion(texto, codigo = null) {
 export const nombreJurisdiccion = (cod) => JURISDICCIONES.find(([c]) => c === cod)?.[1] ?? null;
 
 /**
- * pagos: [{ importe, fecha, jurisdiccion, comprobante, verificado, fuente, nivel, estado }] del período. `consultado`:
- * si la consulta de pagos por jurisdicción (SIFERE Consultas) se pudo leer para el período. Devuelve { filas, sinImputar,
- * sinConfirmar, total }.
+ * pagos: [{ importe, fecha, jurisdiccion, comprobante, verificado, manual, fuente, estado }] del período. `consultado`:
+ * si la consulta de SIFERE Consultas se leyó alguna vez; `consultas`: por código, si cada jurisdicción se consultó
+ * ('consultada' o 'sin consulta confirmada'). Devuelve { filas, sinImputar, sinConfirmar, manuales, total }.
+ *  - Cuenta como pagado solo un pago VERIFICADO por el organismo, con la jurisdicción de la fila (nunca una carga a mano).
+ *  - Las jurisdicciones no se compensan entre sí: un pago de más en una no cubre a otra ni deja saldo negativo.
+ *  - El total se afirma solo si CADA jurisdicción con importe a pagar está conciliada y no hay pagos sin imputar.
  */
-export function conciliarIibb({ jurisdicciones = [], pagos = [], consultado = false }) {
-  const verificados = pagos.filter((p) => p.verificado && p.importe > 0);
+export function conciliarIibb({ jurisdicciones = [], pagos = [], consultado = false, consultas = new Map() }) {
+  const verificados = pagos.filter((p) => p.verificado && !p.manual && p.importe > 0);
   const usados = new Set();
   const filas = jurisdicciones.map((j) => {
     const cod = claveJurisdiccion(j.jurisdiccion, j.codigo);
@@ -51,17 +54,29 @@ export function conciliarIibb({ jurisdicciones = [], pagos = [], consultado = fa
     suyos.forEach((p) => usados.add(p));
     const pagado = suyos.length ? r2(suyos.reduce((n, p) => n + p.importe, 0)) : null;
     const base = { jurisdiccion: j.jurisdiccion, codigo: cod, aPagar: j.aPagar, pagado, pagos: suyos.map(({ fecha, importe, comprobante, fuente }) => ({ fecha, importe, comprobante, fuente })) };
-    if (!(j.aPagar > 0)) return { ...base, estado: 'Nada a pagar según la CM03', saldo: pagado ? r2(-pagado) : 0 };
-    if (pagado == null) return { ...base, estado: consultado ? 'Sin pagos verificados' : 'A consultar', saldo: null, saldoTexto: 'Sin verificar' };
-    if (pagado >= j.aPagar - 1) return { ...base, estado: pagado > j.aPagar + 1 ? 'Pagado (de más)' : 'Pagado', saldo: r2(j.aPagar - pagado) };
+    const exceso = pagado != null && pagado > (j.aPagar > 0 ? j.aPagar : 0) + 1 ? 'pago superior a lo declarado en la CM03: revisar' : null;
+    if (!(j.aPagar > 0)) return { ...base, estado: 'Nada a pagar según la CM03', saldo: 0, advertencia: exceso };
+    if (pagado == null) {
+      const c = cod ? consultas.get(cod) : null;
+      // Un pago informado pero no confirmado (p. ej. «Pendiente») no es «sin pagos»: es «sin pagos verificados».
+      const noConfirmados = cod && pagos.some((p) => !p.verificado && !p.manual && p.jurisdiccion && claveJurisdiccion(p.jurisdiccion) === cod);
+      const estado = noConfirmados ? 'Sin pagos verificados' : c?.estado === 'consultada' ? 'Sin pagos informados por SIFERE' : c ? 'Sin consulta confirmada' : consultado ? 'Sin pagos verificados' : 'A consultar';
+      return { ...base, estado, motivo: c?.motivo ?? null, saldo: null, saldoTexto: 'Sin verificar' };
+    }
+    if (pagado >= j.aPagar - 1) return { ...base, estado: 'Pagado', saldo: 0, advertencia: exceso };
     return { ...base, estado: 'Pago parcial', saldo: r2(j.aPagar - pagado) };
   });
   const sinImputar = verificados.filter((p) => !usados.has(p)).map(({ fecha, importe, comprobante, fuente, jurisdiccion }) => ({ fecha, importe, comprobante, fuente, jurisdiccion: jurisdiccion ?? null,
     nota: jurisdiccion ? `la jurisdicción «${jurisdiccion}» no está entre las de la CM03` : 'el pago no dice a qué jurisdicción corresponde: pendiente de imputación' }));
-  const sinConfirmar = pagos.filter((p) => !p.verificado).map(({ fecha, importe, comprobante, fuente, estado }) => ({ fecha, importe, comprobante, fuente, estado: estado ?? null }));
-  const aPagar = r2(jurisdicciones.reduce((n, j) => n + (j.aPagar > 0 ? j.aPagar : 0), 0));
+  const sinConfirmar = pagos.filter((p) => !p.verificado && !p.manual).map(({ fecha, importe, comprobante, fuente, estado, motivo }) => ({ fecha, importe, comprobante, fuente, estado: estado ?? null, motivo: motivo ?? null }));
+  const manuales = pagos.filter((p) => p.manual).map(({ fecha, importe, comprobante, fuente }) => ({ fecha, importe, comprobante, fuente, nota: 'cargado a mano: no está verificado por el organismo, no se computa' }));
+  const conPagar = filas.filter((f) => f.aPagar > 0);
+  const conciliadas = conPagar.every((f) => f.saldo != null) && !sinImputar.length;
+  const pendientes = conPagar.filter((f) => f.saldo == null).map((f) => f.jurisdiccion);
   const pagadoTotal = r2(verificados.reduce((n, p) => n + p.importe, 0));
-  return { filas, sinImputar, sinConfirmar, consultado,
-    total: { aPagar, pagadoVerificado: pagadoTotal || null, saldo: pagadoTotal >= aPagar - 1 ? r2(aPagar - pagadoTotal) : null,
-      saldoTexto: pagadoTotal >= aPagar - 1 ? null : 'Sin verificar' } };
+  return { filas, sinImputar, sinConfirmar, manuales, consultado,
+    total: { aPagar: r2(conPagar.reduce((n, f) => n + f.aPagar, 0)), pagadoVerificado: pagadoTotal || null,
+      saldo: conciliadas ? r2(conPagar.reduce((n, f) => n + f.saldo, 0)) : null,
+      saldoTexto: conciliadas ? null : 'Sin verificar',
+      motivo: conciliadas ? null : [pendientes.length ? `sin verificar: ${pendientes.join(', ')}` : null, sinImputar.length ? `${sinImputar.length} pago(s) sin jurisdicción pendiente(s) de imputación` : null].filter(Boolean).join('; ') } };
 }

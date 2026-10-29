@@ -273,15 +273,20 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
     expirada»). Si la pestaña de COMARB no carga, se informa como problema de conexión, no como login pendiente.
   - Para una corrida acotada a lo que falta: `.\fiscalos.ps1 correr -Desde 2026-09-01 -Hasta 2026-09-30 -Servicios "sifere-consultas,ccma,ddjj-y-pagos,ddjj-y-pagos-veps"`
     (las fuentes van separadas por coma o espacio).
-- **Pagos de Ingresos Brutos por jurisdicción** (SIFERE WEB – Consultas, `src/portal/sifereConsultas.js`): el botón entra
-  al módulo y abre la consulta de pagos realizados por los rótulos de su menú documentados por la Comisión Arbitral
-  («SIFERE» > «Pagos»; si hay botón «Consultar», lo toca) y lee la grilla reconociéndola por sus columnas (fecha, importe,
-  período). Nunca toca nada que diga pagar, VEP, generar o volante; si un paso no es inequívoco, no hace clic y lo
-  informa. La exportación a Excel, si existe, se guarda como respaldo en `out/importados/sifere-pagos/`. En el panel,
-  «Pagos por jurisdicción» cruza lo que la CM03 dejó a pagar en cada jurisdicción con los pagos verificados que dicen
-  su jurisdicción: un VEP o volante generado no es un pago, un pago sin jurisdicción queda «pendiente de imputación» (no
-  se reparte) y una jurisdicción sin pago verificado queda «Sin verificar», nunca como deuda. Si COMARB no carga, se
-  reintenta una vez y se sigue con lo demás.
+- **Pagos de Ingresos Brutos por jurisdicción** (SIFERE WEB – Consultas, `src/portal/sifereConsultas.js`): como indica la
+  guía oficial de la Comisión Arbitral, «SIFERE» > «Pagos» > período y jurisdicción > «Buscar». El botón hace UNA consulta
+  por cada jurisdicción de la CM03 con importe a pagar, con el anticipo del mes en «desde» y «hasta». Los filtros se
+  reconocen por sus opciones (meses, años, jurisdicciones), se verifica que quedaron elegidos y solo se toca «Buscar»;
+  nunca nada que diga pagar, VEP, generar o volante. Si un paso no es inequívoco, esa jurisdicción queda «sin consulta
+  confirmada» y no se guarda como cero. Se guardan los pagos y una constancia por jurisdicción consultada sin pagos; la
+  exportación a Excel, si existe, en `out/importados/sifere-pagos/`. En el panel, «Pagos por jurisdicción»:
+  - un pago cuenta solo con evidencia positiva (estado pagado, o fecha de pago efectiva en la consulta de pagos); un VEP
+    o volante generado, una fila pendiente o una carga a mano no se computan;
+  - el volante pagado de SIFERE DDJJ y el pago de la consulta son el mismo si comparten número de VEP; con el mismo
+    importe y sin número, «incierto» (no se suma ni se descarta);
+  - un pago sin jurisdicción queda pendiente de imputación (no se reparte); las provincias no se compensan entre sí;
+  - el total solo se afirma si cada jurisdicción con importe a pagar está conciliada; si no, «Sin verificar».
+  Si COMARB no carga, se reintenta una vez y se sigue con lo demás.
 - **Pruebas con datos reales, solo privadas**: las pruebas del repositorio usan cifras inventadas.
   `test/ganancias-privada.test.js` compara el cálculo de Ganancias con las DJ que importaste en la app (leídas de
   `out/importados/ganancias/`, que Git ignora), al centavo; sin ninguna DJ importada, se saltea.

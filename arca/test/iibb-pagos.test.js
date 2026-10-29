@@ -33,24 +33,51 @@ test('conciliación por jurisdicción: sin consulta «A consultar»; con pagos v
   assert.deepEqual(c.filas.filter((f) => f.aPagar > 0).map((f) => [f.jurisdiccion, f.estado, f.saldo, f.saldoTexto]),
     [['Buenos Aires', 'A consultar', null, 'Sin verificar'], ['Córdoba', 'A consultar', null, 'Sin verificar'], ['Santa Fe', 'A consultar', null, 'Sin verificar']]);
   assert.equal(c.total.saldo, null);
-  c = conciliarIibb({ jurisdicciones: JUR, consultado: true, pagos: [
+  c = conciliarIibb({ jurisdicciones: JUR, consultado: true, consultas: new Map([['921', { estado: 'consultada' }]]), pagos: [
     { importe: 100, fecha: '2026-10-14', jurisdiccion: '902 - Buenos Aires', comprobante: 'VEP 1', verificado: true, fuente: 'SIFERE Consultas' },
     { importe: 150, fecha: '2026-10-14', jurisdiccion: 'Córdoba', verificado: true, fuente: 'SIFERE Consultas' },
     { importe: 300, fecha: '2026-10-15', jurisdiccion: null, verificado: true, fuente: 'volante pagado' },
     { importe: 600, fecha: null, jurisdiccion: null, verificado: false, estado: 'Generado', fuente: 'volante' },
+    { importe: 300, fecha: '2026-10-16', jurisdiccion: null, verificado: false, manual: true, fuente: 'carga manual' },
   ] });
   const fila = (n) => c.filas.find((f) => f.jurisdiccion === n);
   assert.deepEqual([fila('Buenos Aires').estado, fila('Buenos Aires').saldo, fila('Buenos Aires').pagos[0].comprobante], ['Pagado', 0, 'VEP 1']);
   assert.deepEqual([fila('Córdoba').estado, fila('Córdoba').saldo], ['Pago parcial', 50]);
-  assert.deepEqual([fila('Santa Fe').estado, fila('Santa Fe').saldo, fila('Santa Fe').saldoTexto], ['Sin pagos verificados', null, 'Sin verificar']);
+  assert.deepEqual([fila('Santa Fe').estado, fila('Santa Fe').saldo, fila('Santa Fe').saldoTexto], ['Sin pagos informados por SIFERE', null, 'Sin verificar']);
   assert.equal(c.sinImputar.length, 1, 'el pago sin jurisdicción no se reparte');
   assert.match(c.sinImputar[0].nota, /pendiente de imputación/);
   assert.equal(c.sinConfirmar.length, 1, 'un volante generado no es un pago');
+  assert.equal(c.manuales.length, 1, 'una carga a mano no es un pago verificado');
   assert.equal(c.total.pagadoVerificado, 550); assert.equal(c.total.saldo, null);
-  // Cubierto el total (aunque uno no diga jurisdicción): el total queda en 0, cada jurisdicción sin pago propio sigue sin verificar.
-  c = conciliarIibb({ jurisdicciones: JUR, consultado: true, pagos: [{ importe: 600, jurisdiccion: null, verificado: true, fuente: 'x' }] });
-  assert.equal(c.total.saldo, 0);
-  assert.equal(c.filas.find((f) => f.jurisdiccion === 'Santa Fe').saldo, null);
+});
+
+test('conciliación: el total no se afirma con un pago sin jurisdicción ni compensando provincias entre sí', () => {
+  const dos = [{ jurisdiccion: 'Buenos Aires', aPagar: 100 }, { jurisdiccion: 'Córdoba', aPagar: 200 }];
+  // 300 sin jurisdicción: cubre el total, pero no se sabe de qué provincia es.
+  let c = conciliarIibb({ jurisdicciones: dos, consultado: true, pagos: [{ importe: 300, jurisdiccion: null, verificado: true, fuente: 'x' }] });
+  assert.equal(c.total.saldo, null); assert.equal(c.total.saldoTexto, 'Sin verificar');
+  assert.ok(c.filas.every((f) => f.saldo == null));
+  // Buenos Aires pagó 300 y Córdoba nada: el exceso de una no cubre a la otra ni queda como saldo negativo.
+  c = conciliarIibb({ jurisdicciones: dos, consultado: true, pagos: [{ importe: 300, jurisdiccion: 'Buenos Aires', verificado: true, fuente: 'x' }] });
+  const ba = c.filas.find((f) => f.jurisdiccion === 'Buenos Aires');
+  assert.deepEqual([ba.estado, ba.saldo], ['Pagado', 0]);
+  assert.match(ba.advertencia, /superior a lo declarado/);
+  assert.equal(c.filas.find((f) => f.jurisdiccion === 'Córdoba').saldo, null);
+  assert.equal(c.total.saldo, null);
+  // Cada provincia conciliada por separado: recién ahí el total.
+  c = conciliarIibb({ jurisdicciones: dos, consultado: true, pagos: [{ importe: 100, jurisdiccion: 'Buenos Aires', verificado: true }, { importe: 150, jurisdiccion: 'Córdoba', verificado: true }] });
+  assert.equal(c.total.saldo, 50);
+});
+
+test('pagos de SIFERE Consultas: sin estado ni fecha de pago no se dan por pagados; con estado pendiente, tampoco', () => {
+  const out = tmp();
+  conPagosConsultas(out, [['202609', '902 - Buenos Aires', '14/10/2026', '100,00', 'pago']], ['Anticipo', 'Jurisdicción', 'Fecha', 'Importe', 'Resultado de la consulta']);
+  let p = pagosConsultasIibb(path.join(out, 'datos'), '2026-09').pagos;
+  assert.equal(p[0].verificado, false, 'una «Fecha» genérica no es una fecha de pago');
+  assert.match(p[0].motivo, /sin estado ni fecha de pago/);
+  conPagosConsultas(out, [['202609', '902 - Buenos Aires', '14/10/2026', '100,00', 'pago']], ['Anticipo', 'Jurisdicción', 'Fecha de Pago', 'Importe', 'Resultado de la consulta']);
+  p = pagosConsultasIibb(path.join(out, 'datos'), '2026-09').pagos;
+  assert.equal(p[0].verificado, true, 'consulta de pagos realizados con fecha de pago efectiva');
 });
 
 /** Lo que deja la consulta de pagos de SIFERE Consultas en out/datos (como cualquier listado conservado). */
@@ -79,7 +106,7 @@ test('panel: pagos de SIFERE Consultas conciliados contra la CM03 por jurisdicci
   ]);
   // Un volante de SIFERE DDJJ pagado por el mismo importe que el pago de Buenos Aires: es el mismo pago.
   const dv = path.join(out, 'datos', 'sifere-consultas-volantes-pago', 'vigente', 'acumulado'); fs.mkdirSync(dv, { recursive: true });
-  fs.writeFileSync(path.join(dv, 'v.csv'), toCsv([['', '202609 - 0', '13/10/2026', '100,00', 'VEP', 'Pagado']], ['Acciones', 'Anticipo', 'Fecha Generación', 'Monto Total', 'Medio de Pago', 'Estado'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
+  fs.writeFileSync(path.join(dv, 'v.csv'), toCsv([['', '202609 - 0', '13/10/2026', '100,00', 'VEP', 'Pagado', '555000111']], ['Acciones', 'Anticipo', 'Fecha Generación', 'Monto Total', 'Medio de Pago', 'Estado', 'Número VEP'].map((h, i) => ({ header: h, value: (r) => r[i] }))));
   fs.writeFileSync(path.join(out, 'datos', 'sifere-consultas-volantes-pago', 'vigente.json'), JSON.stringify({ acumulado: { cuando: 'c', nivel: 'validado', archivos: ['v.csv'] } }));
   assert.equal(pagosConsultasIibb(path.join(out, 'datos'), '2026-09').pagos.length, 2, 'solo el período 09/2026');
   p = panelMes(out, '2026-09', op);
@@ -88,7 +115,18 @@ test('panel: pagos de SIFERE Consultas conciliados contra la CM03 por jurisdicci
   assert.deepEqual([ba.estado, ba.pagado, ba.saldo, ba.pagos[0].fecha], ['Pagado', 100, 0, '2026-10-14']);
   assert.deepEqual([cba.estado, cba.saldo], ['Sin pagos verificados', null], 'un pago «Pendiente» no cuenta');
   assert.equal(c.sinConfirmar.length, 1);
-  assert.equal(c.sinImputar.length, 0, 'el volante pagado es el mismo pago de la consulta');
+  assert.equal(c.sinImputar.length, 0, 'el volante pagado es el mismo pago de la consulta (mismo número de VEP)');
   assert.equal(p.iibb.pagos.valor, 100, 'el total pagado no se duplica');
   assert.equal(p.iibb.saldoPendiente.valor, null, 'con una jurisdicción sin verificar, el saldo total no se afirma');
+  assert.match(p.iibb.saldoPendiente.nota, /sin verificar: .*Córdoba/);
+});
+
+test('volantes y pagos: el número de VEP decide si son el mismo pago; mismo importe sin número es «incierto», no duplicado', async () => {
+  const { mismoPagoIibb } = await import('../src/app/panel.js');
+  const pagos = [{ importe: 100, comprobante: '555000111' }];
+  assert.equal(mismoPagoIibb({ importe: 100, vep: '555000111' }, pagos), 'mismo');
+  assert.equal(mismoPagoIibb({ importe: 100, vep: '555000999' }, pagos), 'distinto', 'dos pagos distintos del mismo importe');
+  assert.equal(mismoPagoIibb({ importe: 100, vep: null }, pagos), 'incierto');
+  assert.equal(mismoPagoIibb({ importe: 100, vep: '555000999' }, [{ importe: 100, comprobante: null }]), 'incierto');
+  assert.equal(mismoPagoIibb({ importe: 70, vep: null }, pagos), 'distinto');
 });
