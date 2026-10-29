@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { leerXlsx, columnaDe, fechaExcel } from '../src/app/xlsx.js';
 import { mesDe, importeImportado, usaComaDecimal, detectarEncabezado, analizarArchivo, simularImportacion, confirmarImportacion, eliminarImportacion, listarImportaciones, importadoDelMes } from '../src/app/importar.js';
 import { panelMes, mesesDisponibles, mesAnterior } from '../src/app/panel.js';
@@ -756,6 +757,14 @@ test('«Actualizar datos fiscales»: una sola corrida a la vez, con su avance; l
     const post = () => fetch(`${base}/api/actualizar`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: '{}' });
     assert.equal((await post()).status, 202);
     assert.deepEqual(argumentos.slice(1), [path.join('src', 'cli.js'), 'portal:todo', '--visible', '--plan'], 'la corrida dirigida: solo lo que falta, sin elegir fuentes');
+    // El programa real acepta exactamente esos argumentos (con --help termina ahí, sin abrir el navegador ni ARCA).
+    const { spawnSync } = await import('node:child_process');
+    const raizArca = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    for (const extra of [[], ['--todos']]) {
+      const r = spawnSync(process.execPath, [...argumentos, ...extra, '--help'], { cwd: raizArca, encoding: 'utf8', timeout: 20000 });
+      assert.equal(r.status, 0, `${[...argumentos, ...extra].join(' ')}: ${r.stderr}`);
+      assert.match(r.stdout + r.stderr, /portal:todo/);
+    }
     assert.equal((await post()).status, 409, 'una sola a la vez');
     hijo.stderr.emit('data', 'Servicio con CUIT 20999999991\n[ct-pagos] validado\n');
     let st = await (await fetch(`${base}/api/actualizar`)).json();

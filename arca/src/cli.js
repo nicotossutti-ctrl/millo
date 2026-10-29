@@ -109,6 +109,8 @@ const { values: o, positionals } = parseArgs({
     visible: { type: 'boolean', default: false },
     'sin-capturas': { type: 'boolean', default: false },
     rehacer: { type: 'boolean', default: false },
+    plan: { type: 'boolean', default: false }, // portal:todo dirigido (el botón «Actualizar datos fiscales»)
+    todos: { type: 'boolean', default: false }, // portal:todo con las fuentes pospuestas
     nueva: { type: 'boolean', default: false },
     texto: { type: 'boolean', default: false },
     servicios: { type: 'string' },
