@@ -395,6 +395,7 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas${r.resumenEstados ? ` · ${JSON.stringify(r.resumenEstados)}` : ''}`);
     } catch (e) {
       const error = sanitizarTexto(e?.message ?? String(e));
+      log(`  sifere/${g.id}: error · ${error}`); // el motivo también en la consola, no solo en resultado.json
       sub.push({ sub: g.id, filas: 0, estado: 'error', error });
       intentos.push({ id: idSub, dirIntento, clave: null, resultado: { estado: 'error', filas: 0, error } });
     }
@@ -470,7 +471,7 @@ async function correrCcma(sesion, servicio, dir, periodo, log, ctx = {}) {
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
   escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
-  log(`  ccma: ${r.filas} fila(s)${g ? ` · columnas: ${g.headers.filter(Boolean).slice(0, 8).join(' / ')}` : ''}`);
+  log(`  ccma: ${r.filas} fila(s) de ${tablas.length} tabla(s) leída(s)${g ? ` · columnas: ${g.headers.filter(Boolean).slice(0, 8).join(' / ')}` : ''}`);
   return { estado: estadoInforme(r.calidad, r.filas) ?? (r.filas ? 'descargado' : 'relevado'), archivos: r.archivos, filas: r.filas, motivo: r.motivo ?? (r.calidad.motivos.join('; ') || undefined),
     calidad: r.calidad, intentos: [{ id: servicio.id, dirIntento, clave: g ? claveDe(r, periodo) : null, resultado: r }] };
 }
