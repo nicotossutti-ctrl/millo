@@ -69,7 +69,8 @@ export async function calcularDeudaCcma(pagina, periodo, { log = () => {}, hoy =
     const btn = f.locator('input[name="CalDeud"]');
     if (!(await d.count().catch(() => 0)) || !(await h.count().catch(() => 0)) || !(await btn.count().catch(() => 0))) continue;
     const texto = `${await btn.first().getAttribute('value').catch(() => '') ?? ''} ${await btn.first().getAttribute('title').catch(() => '') ?? ''}`.trim();
-    if (esProhibido(texto) || (texto && !/calcul|consult|deuda/i.test(texto))) return { consultado: false, desde, hasta, motivo: `el botón CalDeud dice «${texto}»: no parece la consulta, no se toca` };
+    // Hace falta una indicación POSITIVA de cálculo o consulta: un botón sin texto, o que solo dice «deuda», no se toca.
+    if (esProhibido(texto) || !/calcul|consult/i.test(texto)) return { consultado: false, desde, hasta, motivo: `el botón CalDeud dice «${texto}»: no se confirma que sea la consulta, no se toca` };
     for (const [loc, v] of [[d, desde], [h, hasta]]) {
       await loc.first().fill(v);
       if ((await loc.first().inputValue().catch(() => '')) !== v) return { consultado: false, desde, hasta, motivo: `el campo de período no tomó ${v}` };

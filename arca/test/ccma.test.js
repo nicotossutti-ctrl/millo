@@ -57,16 +57,18 @@ test('CCMA en el navegador (simulado como la pantalla real): completa los perío
   } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
 });
 
-test('CCMA: si el botón CalDeud no dice «Calcular», no se toca nada', async (t) => {
+test('CCMA: si el botón CalDeud no dice «Calcular» (vacío, solo «Deuda» o prohibido), no se toca nada', async (t) => {
   let chromium;
   try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
   let b;
   try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
   try {
     const pg = await b.newPage();
-    await pg.setContent(`<input name="perdesde2"><input name="perhasta2"><input name="feccalculo"><input type="button" name="CalDeud" value="Generar VEP" onclick="window.tocado=1">`);
-    const r = await calcularDeudaCcma(pg, { desde: '2026-09-01', hasta: '2026-09-30' });
-    assert.equal(r.consultado, false);
-    assert.equal(await pg.evaluate(() => window.tocado ?? null), null);
+    for (const valor of ['Generar VEP', '', 'Deuda']) {
+      await pg.setContent(`<input name="perdesde2"><input name="perhasta2"><input name="feccalculo"><input type="button" name="CalDeud" value="${valor}" onclick="window.tocado=1">`);
+      const r = await calcularDeudaCcma(pg, { desde: '2026-09-01', hasta: '2026-09-30' });
+      assert.equal(r.consultado, false, valor);
+      assert.equal(await pg.evaluate(() => window.tocado ?? null), null, valor);
+    }
   } finally { await b.close(); }
 });

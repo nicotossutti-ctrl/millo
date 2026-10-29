@@ -16,7 +16,8 @@ import path from 'node:path';
 import { relevarPagina, resumenRelevamiento } from './relevar.js';
 import { URL_PORTAL } from './sesion.js';
 
-const MASCARA_CUIT = /\b(\d{2})-?\d{8}-?(\d)\b/g;
+// Límites de DÍGITO, no de palabra: en SETI el CUIT viene pegado a texto («TODOS20999999991»).
+const MASCARA_CUIT = /(?<!\d)(\d{2})-?\d{8}-?(\d)(?!\d)/g;
 const MASCARA_IMPORTE = /\$?\s?\d{1,3}(\.\d{3})+(,\d{2})?/g;
 
 // Datos personales ROTULADOS en las pantallas (CCMA: «Apellido y Nombre: …», «Domicilio: …»): se conserva el rótulo.

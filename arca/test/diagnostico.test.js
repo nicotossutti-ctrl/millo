@@ -170,3 +170,20 @@ test('datos personales rotulados (CCMA) y el nombre junto al CUIT en las barras:
     assert.doesNotMatch(JSON.stringify(rel) + resumenRelevamiento(rel).join('\n'), /PEREZ|JUAN|FALSA|11111111/);
   } finally { await b.close(); }
 });
+
+test('CUIT pegado a texto (como en las opciones de SETI): también se enmascara, en texto, HTML y relevamiento', async (t) => {
+  // CUIT inventados.
+  for (const x of ['TODOS20999999991', 'CUIT 20999999991', '20-99999999-1', 'x20999999991y']) assert.doesNotMatch(sanitizarTexto(x), /99999999/, x);
+  assert.doesNotMatch(sanitizarHtml('<option>TODOS20999999991</option>'), /99999999/);
+  assert.match(sanitizarTexto('202609 y 1234567890123'), /202609/, 'un período o un número de otra longitud no se toca');
+  const { relevarPagina } = await import('../src/portal/relevar.js');
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  let b;
+  try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
+  try {
+    const pg = await b.newPage();
+    await pg.setContent('<select><option>TODOS20999999991</option></select><ul role="listbox"><li>TODOS20999999991</li></ul><p>20-99999999-1</p>');
+    assert.doesNotMatch(JSON.stringify(await relevarPagina(pg)), /99999999/);
+  } finally { await b.close(); }
+});
