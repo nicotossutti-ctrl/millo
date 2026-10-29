@@ -68,8 +68,6 @@ export const SERVICIOS = [
   // «SIFERE WEB – Consultas» (DJ presentadas, pagos y retenciones), y el portal muestra los dos accesos. Esta entrada
   // es SOLO de relevamiento: entra por Consultas, espera el ingreso a COMARB como la otra y releva la pantalla (con la
   // muestra de filas y acciones) SIN hacer clic en nada. Con esa evidencia se escribe el lector de la CM03 presentada.
-  { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
-    fuente: '5-consultas', confirmado: false, extractor: 'sifere', grillas: [], soloRelevamiento: true },
   // Además de los listados, baja el «Reporte» (PDF) de cada CM03 presentada del período y lo lee (sifereReporte.js):
   // solo el control inequívoco de reporte/impresión de la fila; nunca «Pago» ni «Crear DJ a partir de copia».
   { id: 'sifere-consultas', nombre: 'SIFERE', terminos: ['SIFERE WEB - DDJJ', 'CONVENIO MULTILATERAL – SIFERE WEB - DDJJ'], fuente: 5, confirmado: false, extractor: 'sifere',
@@ -81,6 +79,10 @@ export const SERVICIOS = [
       // Estado, Resultado). URL confirmada por captura. Solo lectura (no se paga nada).
       { id: 'volantes-pago', url: 'https://sifereweb.comarb.gob.ar/sifereweb/MostrarListaVolantesPagoController.do', columnasEsperadas: ['Anticipo', 'Monto Total', 'Medio de Pago'] },
     ] },
+  // SIFERE WEB – Consultas, DESPUÉS del de DDJJ (corrida 2026-10-28: su pestaña no cargó y no debe tocar la sesión del
+  // otro). Su módulo puede estar en otro host de COMARB (la pestaña fue a app1.comarb.gob.ar).
+  { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
+    fuente: '5-consultas', confirmado: false, extractor: 'sifere', grillas: [], soloRelevamiento: true, hostModulo: /comarb\.gob\.ar/ },
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
   { id: 'comprobantes-emitidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: '1b', confirmado: true, extractor: 'mis-comprobantes', tipo: 'emitidos' },
   // Vencimientos (home de Cuentas Tributarias). Corrida 2026-10-24: quedó en el login de ARCA y dio 0
@@ -159,13 +161,13 @@ export const SERVICIOS = [
   // Presentación de DDJJ y Pagos (setiweb, Angular). El diagnóstico del 25/10 muestra el menú lateral con rutas de
   // LECTURA: «Consulta de DDJJ presentadas» (#/presentacion/consulta) y «Consulta de VEP» (#/pago/consulta-veps); se
   // entra por hash, como en Portal IVA. Nunca «Presentación de declaración jurada» (#/presentacion/presentacion) ni
-  // «Gestión de VEP» (#/pago/nuevo-vep). Las grillas todavía no se vieron: el relevamiento con muestra las va a mostrar.
+  // «Gestión de VEP» (#/pago/nuevo-vep). Corrida 2026-10-28T21-19-50: las dos son un formulario de FILTROS (CUIT ya
+  // elegido; formulario, período, estado…) que se ejecuta con «Aplicar»; el drill cortaba al ver los filtros y nunca lo
+  // tocaba. El hash lleva `continuar` y «Aplicar» es obligatorio: si no está, queda el diagnóstico del paso.
   { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: 10, confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/presentacion/consulta' },
-      { texto: 'Consultar', opcional: true }, { texto: 'Buscar', opcional: true }] },
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/presentacion/consulta', continuar: true }, { texto: 'Aplicar' }] },
   { id: 'ddjj-y-pagos-veps', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', terminos: ['PRESENTACIÓN DE DDJJ Y PAGOS', 'PRESENTACION DE DDJJ'], fuente: '10-veps', confirmado: false, extractor: 'generico',
-    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/pago/consulta-veps' },
-      { texto: 'Consultar', opcional: true }, { texto: 'Buscar', opcional: true }] },
+    ruta: [{ texto: 'Entendido', opcional: true }, { texto: 'Saltar intro', opcional: true }, { hash: '#/pago/consulta-veps', continuar: true }, { texto: 'Aplicar' }] },
   // Portal IVA (Angular, siapweb/iva/#/...). Flujo real confirmado por capturas:
   //   home (#/init) --CONSULTAR "Declaraciones juradas presentadas"--> #/anteriores
   //   #/anteriores  --CONSULTAR "Declaración Jurada de IVA"--> #/declaraciones.anteriores (la LISTA)

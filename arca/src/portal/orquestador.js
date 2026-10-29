@@ -6,10 +6,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento, sanear } from './relevar.js';
-import { sanitizarHtml, sanitizarTexto } from './diagnostico.js';
+import { sanitizarHtml, sanitizarTexto, sanitizarUrl } from './diagnostico.js';
 import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
 import { extraerTabla, extraerTablaEnPagina, extraerTablasEnDocumento, norm } from './extractor.js';
-import { leerCcma } from './ccma.js';
+import { leerCcma, calcularDeudaCcma } from './ccma.js';
 import { toCsv } from '../csv.js';
 import { drillHaciaGrilla, navegarPorEnlace } from './navegar.js';
 import { slug } from './servicios.js';
@@ -336,14 +336,26 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
   // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
   // inicial, no se tipea la clave: la pone la persona. Si no llega, queda 'relevado' honesto.
-  const enModulo = (u) => /sifereweb\.comarb\.gob\.ar/.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip/i.test(u);
+  const hostModulo = servicio.hostModulo ?? /sifereweb\.comarb\.gob\.ar/;
+  const enModulo = (u) => hostModulo.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip|^chrome-error:/i.test(u);
+  // Corrida 2026-10-28T21-19-50: el acceso abrió una pestaña de COMARB que no cargó («No se puede acceder a este sitio
+  // web»). Eso no es un login pendiente: se dice así y no se esperan 3 minutos.
+  const sinConexion = async () => {
+    for (const p of sesion?.context?.pages?.() ?? [pagina]) {
+      if (/^chrome-error:/i.test(p.url()) && /comarb/i.test(await p.title().catch(() => ''))) return p;
+    }
+    return null;
+  };
   // Corrida 2026-10-22T19-49-58: waitForURL se resolvía con una URL de sifereweb de PASO, justo antes
   // del redirect a SesionExpirada. Ahora exigimos que la URL quede en el módulo de forma ESTABLE (dos
   // lecturas seguidas) y, si cae en SesionExpirada, reabrimos la entrada de login (hasta 2 veces).
-  if (!enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
+  await pagina.waitForTimeout(2500).catch(() => {});
+  let conexionFallida = !!(await sinConexion());
+  if (!conexionFallida && !enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
   const limite = Date.now() + 180000;
   let estables = 0, reintentos = 0;
-  while (Date.now() < limite) {
+  while (!conexionFallida && Date.now() < limite) {
+    if (await sinConexion()) { conexionFallida = true; break; }
     const u = pagina.url();
     if (enModulo(u)) {
       if (++estables >= 2) break;
@@ -358,7 +370,9 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
     await pagina.waitForTimeout(1500);
   }
   await pagina.waitForLoadState('networkidle').catch(() => {});
-  if (!enModulo(pagina.url())) log('  SIFERE: no se llegó al módulo (login no completado o sesión expirada); sigo con lo que haya.');
+  if (conexionFallida) log('  SIFERE: no se pudo conectar con COMARB (la página no cargó: «No se puede acceder a este sitio web»). No es un login: es el sitio o la red. Sigo con lo que haya.');
+  else if (!enModulo(pagina.url())) log('  SIFERE: no se llegó al módulo (login no completado o sesión expirada); sigo con lo que haya.');
+  else log(`  SIFERE: en el módulo (${sanitizarUrl(pagina.url()).replace(/^https?:\/\/[^/]+/, '')}).`);
   // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
   try {
     const sel = pagina.locator('select').first();
@@ -382,9 +396,10 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
     const idSub = `${servicio.id}-${g.id}`;
     const dirIntento = ctx.dirIntento?.(idSub) ?? null;
     try {
-      await pagina.goto(g.url, { waitUntil: 'domcontentloaded' });
+      const via = await irAListado(pagina, g.url);
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2500);
+      log(`  sifere/${g.id}: abierto por ${via}`);
       // Si COMARB nos manda a "Sesión Expirada", el listado NO se lee (y no pisa lo conservado).
       if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al abrir el listado (no se completó el login)');
       const servSub = { id: idSub, columnasEsperadas: g.columnasEsperadas };
@@ -405,7 +420,7 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   let reportes = null;
   if (servicio.reportesCm03 && enSesion && periodo) {
     try {
-      await pagina.goto(servicio.reportesCm03, { waitUntil: 'domcontentloaded' });
+      await irAListado(pagina, servicio.reportesCm03);
       await pagina.waitForLoadState('networkidle').catch(() => {});
       await pagina.waitForTimeout(2000);
       if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al volver al listado');
@@ -415,8 +430,10 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   }
   const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
-  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes }, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes, conexionFallida }, null, 2));
   if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  // Pestañas de COMARB que no cargaron: se cierran para que no queden abiertas en el resto de la corrida.
+  for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
 
   const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
   const archivos = sub.flatMap((s) => s.archivos ?? []);
@@ -425,13 +442,29 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   return {
     estado,
     archivos, filas, intentos,
-    motivo: filas > 0 ? undefined : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
+    motivo: filas > 0 ? undefined : conexionFallida ? `SIFERE (${servicio.nombre}): no se pudo conectar con COMARB (el sitio no cargó); se conserva lo obtenido antes` : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
       : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
     validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
       motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
       finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
     ...(reportes ? { reportesCm03: reportes } : {}),
   };
+}
+
+/**
+ * Abre un listado de SIFERE con el enlace de su propio menú (como lo hace la persona), que conserva la sesión del
+ * módulo; si el enlace no está en la página, por la dirección. Los controladores son de listado (solo lectura).
+ */
+async function irAListado(pagina, url) {
+  const controlador = url.split('/').pop();
+  const enlace = pagina.locator(`a[href$="${controlador}"]`).first();
+  if (await enlace.count().catch(() => 0)) {
+    // Los ítems del menú desplegable están ocultos: clic del DOM sobre ese mismo enlace.
+    await Promise.all([pagina.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}), enlace.evaluate((el) => el.click())]);
+    return 'el menú de SIFERE';
+  }
+  await pagina.goto(url, { waitUntil: 'domcontentloaded' });
+  return 'la dirección';
 }
 
 /** Meses ('AAAA-MM') del período de la corrida, más los `antes` meses anteriores a su inicio. Pura. */
@@ -455,12 +488,16 @@ export function mesesDeLaCorrida(periodo, antes = 0) {
 async function correrCcma(sesion, servicio, dir, periodo, log, ctx = {}) {
   const pagina = await abrirSistema(sesion, servicio, dir, log);
   await pagina.waitForLoadState('networkidle').catch(() => {});
+  // Al abrir solo está el formulario: se consulta la deuda de los últimos doce meses (nunca «Pagar»).
+  const consulta = periodo ? await calcularDeudaCcma(pagina, periodo, { log }).catch((e) => ({ consultado: false, motivo: sanitizarTexto(e.message) })) : null;
+  if (consulta && !consulta.consultado) log(`  ccma: no se consultó: ${consulta.motivo}`);
   const tablas = [];
   for (const f of pagina.frames()) tablas.push(...await f.evaluate(extraerTablasEnDocumento).catch(() => []));
   const g = leerCcma(tablas);
   const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
   const r = { id: servicio.id, archivos: [], filas: g?.rows.length ?? 0, columnas: g?.headers ?? [], estado: g ? 'extraido' : 'sin-datos', conFiltroPeriodo: false,
-    finPaginacion: g ? 'sin-siguiente' : null, totales: g?.totales.length ?? 0, motivo: g ? undefined : 'CCMA: ninguna tabla tiene una fila de encabezados reconocible (período, importe, saldo…); estructura y muestra en estructura.json' };
+    finPaginacion: g ? 'sin-siguiente' : null, totales: g?.totales.length ?? 0, consulta,
+    motivo: g ? undefined : `CCMA: ninguna tabla tiene una fila de encabezados reconocible (período, importe, saldo…)${consulta?.consultado ? ' después de «Calcular deuda»' : ''}; estructura y muestra en estructura.json` };
   if (g && g.rows.length && dirIntento) {
     const archivo = 'ccma-cuenta-corriente.csv';
     escribir(path.join(dirIntento, archivo), toCsv(g.rows, g.headers.map((h, i) => ({ header: h || `Columna ${i + 1}`, value: (x) => x[i] ?? '' }))));

@@ -148,3 +148,25 @@ test('HTML cortado: un atributo sin comilla de cierre igual pierde query, maneja
   assert.doesNotMatch(corte('texto suelto /ruta.do?token=SECRETO'), /SECRETO/);
   assert.match(corte('<a href="detalle.do?token=SECRETO'), /href="detalle\.do"/);
 });
+
+test('datos personales rotulados (CCMA) y el nombre junto al CUIT en las barras: no quedan en el diagnóstico', async (t) => {
+  // Datos inventados.
+  assert.equal(sanitizarTexto('Apellido y Nombre: PEREZ, JUAN'), 'Apellido y Nombre: [omitido]');
+  assert.equal(sanitizarTexto('Domicilio: CALLE FALSA 123 - CAPITAL FEDERAL - 0'), 'Domicilio: [omitido]');
+  assert.doesNotMatch(sanitizarTexto('PRESENTACIÓN DE DDJJ Y PAGOS PEREZ JUAN[20111111112] TN'), /PEREZ|JUAN/);
+  assert.doesNotMatch(sanitizarTexto('PORTAL INTEGRADO PEREZ JUAN [CUIT 20-11111111-2]'), /PEREZ|JUAN/);
+  assert.equal(sanitizarTexto('Tipo de Contribuyente: MONOTRIBUTISTA | AUTONOMO'), 'Tipo de Contribuyente: MONOTRIBUTISTA | AUTONOMO', 'lo no personal queda');
+  assert.doesNotMatch(sanitizarHtml('<td>Apellido y Nombre: PEREZ, JUAN</td><td>Domicilio: CALLE 1</td>'), /PEREZ|CALLE 1/);
+  const { relevarPagina, resumenRelevamiento } = await import('../src/portal/relevar.js');
+  let chromium;
+  try { ({ chromium } = await import('playwright')); } catch { t.skip('sin Playwright'); return; }
+  let b;
+  try { b = await chromium.launch(process.env.FISCALOS_CHROMIUM ? { executablePath: process.env.FISCALOS_CHROMIUM } : {}); } catch { t.skip('sin navegador'); return; }
+  try {
+    const pg = await b.newPage();
+    await pg.setContent(`<nav>SISTEMA PEREZ JUAN[20111111112]</nav><table><tr><td>CUIT: 20-11111111-2</td><td>Tipo de Contribuyente: AUTONOMO</td></tr>
+      <tr><td>Apellido y Nombre: PEREZ, JUAN</td><td></td></tr><tr><td>Domicilio: CALLE FALSA 123 - CAPITAL FEDERAL - 0</td></tr></table>`);
+    const rel = await relevarPagina(pg);
+    assert.doesNotMatch(JSON.stringify(rel) + resumenRelevamiento(rel).join('\n'), /PEREZ|JUAN|FALSA|11111111/);
+  } finally { await b.close(); }
+});

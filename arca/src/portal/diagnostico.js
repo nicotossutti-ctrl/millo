@@ -19,6 +19,12 @@ import { URL_PORTAL } from './sesion.js';
 const MASCARA_CUIT = /\b(\d{2})-?\d{8}-?(\d)\b/g;
 const MASCARA_IMPORTE = /\$?\s?\d{1,3}(\.\d{3})+(,\d{2})?/g;
 
+// Datos personales ROTULADOS en las pantallas (CCMA: «Apellido y Nombre: …», «Domicilio: …»): se conserva el rótulo.
+const DATO_PERSONAL = /\b(apellidos?\s+y\s+nombres?|nombres?\s+y\s+apellidos?|raz[oó]n\s+social|denominaci[oó]n|domicilio(?:\s+fiscal)?|direcci[oó]n|tel[eé]fono|e-?mail|correo(?:\s+electr[oó]nico)?)\s*:\s*[^|<>\n]+/gi;
+// Nombre en mayúsculas pegado a un CUIT ya enmascarado, como en las barras de los sistemas («APELLIDO NOMBRE [20-XXXXXXXX-3]»).
+const NOMBRE_JUNTO_A_CUIT = /[A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ,.'-]*(?:\s+[A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ,.'-]*){0,5}\s*\[\s*(?:CUIT\s*)?(\d{2}-X{8}-\d)/g;
+const sinDatosPersonales = (t) => t.replace(DATO_PERSONAL, '$1: [omitido]').replace(NOMBRE_JUNTO_A_CUIT, '[nombre] [$1');
+
 // Parámetros sueltos (?token=…, &vep=…) que quedan en texto o en referencias relativas.
 const PARAMETRO = /([?&])[\w.\-[\]%]+=[^\s"'<>&]*/g;
 
@@ -39,12 +45,13 @@ export function sanitizarHtml(html) {
     .replace(/(name|id)="(javax\.faces\.ViewState|[^"]*token[^"]*|[^"]*csrf[^"]*)"([^>]*)value="[^"]*"/gi, '$1="$2"$3value="[omitido]"')
     .replace(PARAMETRO, '$1[omitido]')
     .replace(MASCARA_CUIT, '$1-XXXXXXXX-$2')
-    .replace(MASCARA_IMPORTE, '[importe]');
+    .replace(MASCARA_IMPORTE, '[importe]')
+    .replace(/>([^<]+)</g, (_, t) => `>${sinDatosPersonales(t)}<`);
 }
 
 export function sanitizarTexto(t) {
   return t == null ? t : String(t).replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi, '$1').replace(PARAMETRO, '$1[omitido]')
-    .replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]');
+    .replace(MASCARA_CUIT, '$1-XXXXXXXX-$2').replace(MASCARA_IMPORTE, '[importe]').replace(/[^]*/, sinDatosPersonales);
 }
 
 export function sanitizarUrl(u) {

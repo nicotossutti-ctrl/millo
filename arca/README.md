@@ -252,10 +252,14 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
     como reporte o impresión de la DJ; nunca en «Pago», «Crear DJ a partir de copia», VEP ni nada de presentar. Si no
     lo identifica, no hace clic y guarda cómo es cada control (en `resultado.json` de la corrida).
   - *Presentación de DDJJ y Pagos*: entra por las rutas de lectura «Consulta de DDJJ presentadas» y «Consulta de VEP»
-    (nunca «Presentación» ni «Gestión de VEP») y releva sus grillas, con muestra enmascarada de las filas.
-  - *CCMA (autónomos)*: lee las tablas que muestra la cuenta corriente reconociendo la fila de encabezados por sus
-    palabras (las tablas no tienen encabezados HTML). No completa campos ni toca «Calcular deuda» ni «Pagar». Las filas
-    del período se muestran como evidencia, sin sacar importes hasta confirmar las columnas reales.
+    (nunca «Presentación» ni «Gestión de VEP»); las dos son un formulario de filtros con el CUIT ya elegido, que se
+    ejecuta con «Aplicar», y se lee la grilla que resulta.
+  - *CCMA (autónomos)*: al abrir solo muestra el formulario «Recálculo de deuda a fecha». FiscalOS completa «Período
+    desde/hasta (MM/AAAA)» con los doce meses que terminan en el mes de la corrida y toca solo «Calcular deuda» (una
+    consulta); nunca «Pagar». Lee la grilla reconociendo la fila de encabezados por sus palabras. Las filas del período
+    se muestran como evidencia, sin sacar importes hasta confirmar las columnas reales.
+  - *SIFERE*: los listados se abren con los enlaces del menú del propio módulo (por la dirección, COMARB daba «Sesión
+    expirada»). Si la pestaña de COMARB no carga, se informa como problema de conexión, no como login pendiente.
   - Para una corrida acotada a lo que falta: `.\fiscalos.ps1 correr -Desde 2026-09-01 -Hasta 2026-09-30 -Servicios "sifere-consultas,ccma,ddjj-y-pagos,ddjj-y-pagos-veps"`
     (las fuentes van separadas por coma o espacio).
 - **Pruebas con datos reales, solo privadas**: las pruebas del repositorio usan cifras inventadas.
