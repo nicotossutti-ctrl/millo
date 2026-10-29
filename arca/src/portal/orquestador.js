@@ -690,7 +690,7 @@ function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando
 
 /** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
 export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner, datosDir = null,
-  historicoDesde = process.env.FISCALOS_HISTORICO_DESDE || null } = {}) {
+  historicoDesde = process.env.FISCALOS_HISTORICO_DESDE || null, periodoDe = null } = {}) {
   const cuando = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const baseDir = path.join(outDir, cuando);
   fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
@@ -706,7 +706,9 @@ export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/c
       if (typeof sesion?.asegurarVivo === 'function') {
         try { await sesion.asegurarVivo(); } catch (e) { log(`[${s.id}] no se pudo recuperar el navegador: ${sanitizarTexto(e?.message ?? String(e))}`); }
       }
-      resultados.push(await correrUno(sesion, s, { baseDir, periodo, log, datosDir: datos, runner: runner ? () => runner(s) : undefined }));
+      // `periodoDe`: cada fuente con su ventana (p. ej. los pagos hasta ayer, la DJ solo del mes).
+      const per = periodoDe?.(s) ?? periodo;
+      resultados.push(await correrUno(sesion, s, { baseDir, periodo: per, log, datosDir: datos, runner: runner ? () => runner(s, per) : undefined }));
     } catch (e) {
       const error = sanitizarTexto(e?.message ?? String(e));
       log(`[${s.id}] error aislado en el orquestador: ${error}`);

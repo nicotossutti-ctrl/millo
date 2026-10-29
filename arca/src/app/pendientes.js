@@ -37,7 +37,7 @@ export function mesesHacia(ultimo, n) {
 const finDeMes = (mes) => { const [y, m] = mes.split('-'); return new Date(Date.UTC(+y, +m, 0)).toISOString().slice(0, 10); };
 
 /** ¿Hay un tramo apto de Mis Comprobantes que cubra el mes entero? */
-function tieneComprobantes(datosDir, id, tipo, mes) {
+export function tieneComprobantes(datosDir, id, tipo, mes) {
   return Object.entries(leerManifiesto(path.join(datosDir, id))).some(([k, v]) => {
     const [t, d, h] = k.split(':');
     return t === tipo && v?.ok && d <= `${mes}-01` && h >= finDeMes(mes);

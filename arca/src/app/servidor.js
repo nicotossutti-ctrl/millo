@@ -92,7 +92,7 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         if (ruta === 'POST /api/manuales/guardar') return json(res, 200, guardarManual(outDir, cuerpo));
         if (ruta === 'POST /api/manuales/eliminar') return json(res, 200, eliminarManual(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/importar') return json(res, 200, await importarCm03(outDir, { nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null }));
-        if (ruta === 'POST /api/actualizar') return json(res, 202, iniciarActualizacion({ lanzar: opcionesActualizar.lanzar, leerInforme: opcionesActualizar.leerInforme }));
+        if (ruta === 'POST /api/actualizar') return json(res, 202, iniciarActualizacion({ lanzar: opcionesActualizar.lanzar, leerInforme: opcionesActualizar.leerInforme, outDir, hoy: fecha }));
         if (ruta === 'POST /api/pdf/importar') return json(res, 200, await importarPdfFiscal(outDir, { tipo: cuerpo.tipo || null, nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null, anio: cuerpo.anio || null }));
         if (ruta === 'POST /api/pdf/eliminar') return json(res, 200, cuerpo.documento === 'ddjj-ganancias' ? eliminarDdjjGanancias(outDir, String(cuerpo.id ?? '')) : eliminarCm03(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/eliminar') return json(res, 200, eliminarCm03(outDir, String(cuerpo.id ?? '')));

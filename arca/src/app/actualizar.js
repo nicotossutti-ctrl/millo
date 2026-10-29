@@ -1,6 +1,7 @@
 /**
- * «Actualizar datos fiscales» desde la app: lanza la misma corrida que `fiscalos.ps1 correr` (portal:todo, con el
- * navegador visible, todas las fuentes de IVA, IIBB y Ganancias) como proceso aparte, y guarda su avance para mostrarlo.
+ * «Actualizar datos fiscales» desde la app: lanza la corrida DIRIGIDA (portal:todo --plan, con el navegador visible):
+ * solo lo que falta de IVA, IIBB y Ganancias, cada fuente con su ventana de fechas (plan.js), como proceso aparte, y
+ * guarda su avance para mostrarlo.
  * Una sola a la vez. Solo lectura en ARCA y SIFERE; lo que se baja queda en out/ y nunca borra lo guardado antes.
  * Si ARCA o COMARB piden la clave fiscal, se escribe en la ventana del navegador (FiscalOS nunca la tipea).
  */
@@ -9,10 +10,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sanitizarTexto } from '../portal/diagnostico.js';
+import { planActualizacion } from './plan.js';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MAX_LINEAS = 400;
-let estado = { corriendo: false, inicio: null, fin: null, codigo: null, lineas: [], balance: null };
+let estado = { corriendo: false, inicio: null, fin: null, codigo: null, lineas: [], balance: null, plan: null };
 
 const CON_DATOS = new Set(['validado', 'descargado']);
 const CON_ERROR = new Set(['sin-acceso', 'desafio', 'error']);
@@ -41,10 +43,13 @@ export function balanceCorrida(cobertura, codigo = 0) {
 export const estadoActualizacion = () => ({ ...estado, lineas: [...estado.lineas] });
 
 /** Arranca la actualización. `lanzar` es inyectable (pruebas). Error si ya hay una corriendo. */
-export function iniciarActualizacion({ lanzar = spawn, raiz = RAIZ, argumentos = [], leerInforme = (f) => JSON.parse(fs.readFileSync(f, 'utf8')) } = {}) {
+export function iniciarActualizacion({ lanzar = spawn, raiz = RAIZ, argumentos = [], leerInforme = (f) => JSON.parse(fs.readFileSync(f, 'utf8')), outDir = null, hoy = null } = {}) {
   if (estado.corriendo) throw Object.assign(new Error('ya hay una actualización en curso'), { status: 409 });
-  const hijo = lanzar(process.execPath, ['--env-file-if-exists=.env', path.join('src', 'cli.js'), 'portal:todo', '--visible', ...argumentos], { cwd: raiz, windowsHide: false });
-  estado = { corriendo: true, inicio: new Date().toISOString(), fin: null, codigo: null, lineas: [], balance: null };
+  // El mismo plan que va a seguir la corrida, para mostrar antes qué se reutiliza y qué se va a buscar.
+  let plan = null;
+  try { if (outDir && hoy) plan = planActualizacion(outDir, hoy); } catch { /* sin plan visible: la corrida igual lo arma */ }
+  const hijo = lanzar(process.execPath, ['--env-file-if-exists=.env', path.join('src', 'cli.js'), 'portal:todo', '--visible', '--plan', ...argumentos], { cwd: raiz, windowsHide: false });
+  estado = { corriendo: true, inicio: new Date().toISOString(), fin: null, codigo: null, lineas: [], balance: null, plan };
   const actual = estado;
   const agregar = (buf) => {
     for (const l of String(buf).split(/\r?\n/)) {

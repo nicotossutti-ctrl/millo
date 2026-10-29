@@ -246,10 +246,14 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   favor de ARCA o del contribuyente, el año, la secuencia y la fecha; la DJ es válida solo si determinado − pagos a
   cuenta = saldo, al centavo. El saldo es el que declaró la DJ, no la deuda de hoy: se concilia con los pagos de Cuentas
   Tributarias imputados a ese año desde la presentación, y sin ellos queda «sin conciliar». En `out/importados/ganancias/`.
-- **«Actualizar datos fiscales»** (botón arriba de todo en la app): lanza la corrida completa (lo mismo que
-  `fiscalos.ps1 correr`) con todas las fuentes de IVA, Ingresos Brutos y Ganancias, muestra qué está haciendo y, al
-  terminar, recarga lo guardado. Las fuentes que quedaron para después (autónomos/CCMA, planes de pago, Bienes Personales,
-  domicilio fiscal electrónico) solo corren con `--todos`. Si ARCA o SIFERE piden la clave fiscal, se escribe en la
+- **«Actualizar datos fiscales»** (botón arriba de todo en la app): corre `portal:todo --plan`, la corrida DIRIGIDA
+  (`src/app/plan.js`). Primero mira lo guardado del último mes cerrado y entra solo a lo que falta: la DJ de IVA y los
+  comprobantes del mes, solo si no están; los pagos de Cuentas Tributarias por fecha de operación desde el mes (o desde
+  la presentación de la DJ anual de Ganancias) HASTA AYER, porque el IVA de septiembre se paga en octubre; deudas,
+  vencimientos y compensaciones (el saldo de hoy) y SIFERE (volantes pagados y, si falta, el Reporte de la CM03),
+  siempre. Muestra qué reutiliza, qué busca y qué queda pendiente sin fuente automática. `fiscalos.ps1 correr` sigue
+  siendo la recorrida general; las fuentes pospuestas (autónomos/CCMA, planes de pago, Bienes Personales, domicilio
+  fiscal electrónico) solo corren con `--todos`. Si ARCA o SIFERE piden la clave fiscal, se escribe en la
   ventana del navegador. Al principio de «Impuestos del mes» queda una tabla con IVA, IIBB y Ganancias: declarado,
   pagado, saldo, documentos y lo que falta (un saldo sin verificar figura sin dato, con su motivo). El mismo resumen
   sale al final de la corrida en la consola.

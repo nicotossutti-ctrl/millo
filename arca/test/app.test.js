@@ -755,7 +755,7 @@ test('«Actualizar datos fiscales»: una sola corrida a la vez, con su avance; l
     const base = `http://127.0.0.1:${puerto}`;
     const post = () => fetch(`${base}/api/actualizar`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: '{}' });
     assert.equal((await post()).status, 202);
-    assert.deepEqual(argumentos.slice(1), [path.join('src', 'cli.js'), 'portal:todo', '--visible'], 'la misma corrida que fiscalos.ps1 correr, sin elegir fuentes');
+    assert.deepEqual(argumentos.slice(1), [path.join('src', 'cli.js'), 'portal:todo', '--visible', '--plan'], 'la corrida dirigida: solo lo que falta, sin elegir fuentes');
     assert.equal((await post()).status, 409, 'una sola a la vez');
     hijo.stderr.emit('data', 'Servicio con CUIT 20999999991\n[ct-pagos] validado\n');
     let st = await (await fetch(`${base}/api/actualizar`)).json();
@@ -786,4 +786,55 @@ test('balance de la corrida: cuenta fuentes con datos, con datos nuevos, sin dat
   assert.match(b.titulo, /3 de 5 fuentes con datos \(1 con datos nuevos guardados\), 1 CM03 bajada/);
   assert.match(balanceCorrida(null, 0).titulo, /no se encontró su informe/);
   assert.match(balanceCorrida({ servicios: [] }, 1).titulo, /error/);
+});
+
+test('plan del botón (IVA septiembre): reutiliza la DJ y los comprobantes guardados y busca los pagos hasta ayer, no solo en septiembre', async () => {
+  const { planActualizacion } = await import('../src/app/plan.js');
+  const out = escenario(); const d = path.join(out, 'datos');
+  // Comprobantes de septiembre ya guardados completos.
+  for (const [id, tipo] of [['comprobantes-emitidos', 'emitidos'], ['comprobantes-recibidos', 'recibidos']]) {
+    fs.mkdirSync(path.join(d, id), { recursive: true });
+    fs.writeFileSync(path.join(d, id, 'manifiesto.json'), JSON.stringify({ [`${tipo}:2026-09-01:2026-09-30`]: { ok: true, fecha: '2026-10-21', archivo: 'mc.csv' } }));
+  }
+  const plan = planActualizacion(out, '2026-10-29');
+  const ids = plan.pasos.map((p) => p.id);
+  assert.equal(plan.mes, '2026-09');
+  for (const id of ['comprobantes-emitidos', 'comprobantes-recibidos', 'portal-iva', 'portal-iva-ddjj']) assert.ok(!ids.includes(id), `${id} ya está guardado: no se vuelve a bajar`);
+  assert.ok(plan.reutilizado.some((r) => /DJ de IVA/.test(r.que)));
+  const pagos = plan.pasos.find((p) => p.id === 'ct-pagos');
+  assert.deepEqual([pagos.desde, pagos.hasta], ['2026-09-01', '2026-10-28'], 'los pagos de septiembre se hacen en octubre: se buscan hasta ayer');
+  for (const id of ['ct-deudas', 'cuentas-tributarias', 'sifere-consultas']) assert.ok(ids.includes(id), id);
+  assert.ok(!ids.includes('sifere-consultas-web') && !ids.includes('ccma') && !ids.includes('ddjj-y-pagos'), 'lo que no aporta al saldo no se recorre');
+  assert.ok(plan.pendientes.some((p) => /Ganancias: la DJ anual 2025/.test(p)));
+  // Instalación vacía: se pide todo lo de septiembre.
+  const vacio = planActualizacion(tmp(), '2026-10-29').pasos.map((p) => p.id);
+  for (const id of ['comprobantes-emitidos', 'comprobantes-recibidos', 'portal-iva-ddjj', 'ct-pagos']) assert.ok(vacio.includes(id), id);
+});
+
+test('plan del botón: con la DJ de Ganancias leída, los pagos se buscan desde su presentación (para ver el pago del saldo)', async () => {
+  const { planActualizacion } = await import('../src/app/plan.js');
+  const out = tmp(); const f = path.join(out, 'importados', 'ganancias', 'ddjj.json'); fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify([{ id: 'x', hash: 'h', archivo: 'dj.pdf', cuando: '2026-10-01T00:00:00Z', estado: 'valida', formulario: '2711', anio: '2025', secuencia: 0,
+    fechaPresentacion: '2026-07-10', impuestoDeterminado: 1500, pagosACuenta: 400, saldoAFavorArca: 1100, saldoAFavorContribuyente: 0, motivos: [], conceptos: [] }]));
+  const plan = planActualizacion(out, '2026-10-29');
+  assert.equal(plan.pasos.find((p) => p.id === 'ct-pagos').desde, '2026-07-10');
+  assert.ok(plan.reutilizado.some((r) => /Ganancias 2025/.test(r.que)));
+});
+
+test('corrida dirigida: cada fuente con su ventana; un pago de octubre imputado a septiembre entra en el IVA de septiembre', async () => {
+  const { ejecutarTodo } = await import('../src/portal/orquestador.js');
+  const recibidos = {};
+  const servicios = [{ id: 'portal-iva-ddjj', nombre: 'DJ IVA', fuente: 1 }, { id: 'ct-pagos', nombre: 'CT pagos', fuente: 2 }];
+  const ventanas = new Map([['portal-iva-ddjj', { desde: '2026-09-01', hasta: '2026-09-30' }], ['ct-pagos', { desde: '2026-09-01', hasta: '2026-10-28' }]]);
+  const base = tmp();
+  await ejecutarTodo({ cfg: { outDir: base } }, { servicios, outDir: path.join(base, 'corridas'), periodo: ventanas.get('portal-iva-ddjj'), periodoDe: (s) => ventanas.get(s.id),
+    runner: async (s, per) => { recibidos[s.id] = per; return { estado: 'relevado' }; } });
+  assert.deepEqual(recibidos['ct-pagos'], { desde: '2026-09-01', hasta: '2026-10-28' });
+  assert.deepEqual(recibidos['portal-iva-ddjj'], { desde: '2026-09-01', hasta: '2026-09-30' });
+  // Lo que deja esa consulta de pagos (ventana hasta ayer, con el pago del 20/10 del período 09/2026): el IVA lo encuentra.
+  const out = escenario({ conDeuda: false });
+  conPagosCt(out, { '2026-09-01_2026-10-28': [['20/10/2026', '2002', '1', '30 - IVA', '202609', '8.500,00']] });
+  const p = panelMes(out, '2026-09', { hoy: '2026-10-29', paramsFile: path.join(out, 'x.json') });
+  assert.equal(p.iva.pagos.valor, 8500);
+  assert.doesNotMatch(JSON.stringify(p.iva.avisos ?? []) + (p.iva.detalle ?? ''), /no se consultaron pagos posteriores/);
 });
