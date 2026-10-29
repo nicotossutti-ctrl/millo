@@ -744,7 +744,12 @@ test('«Actualizar datos fiscales»: una sola corrida a la vez, con su avance; l
   let hijo; let argumentos;
   const lanzar = (exe, args) => { argumentos = args; hijo = new EventEmitter(); hijo.stdout = new EventEmitter(); hijo.stderr = new EventEmitter(); return hijo; };
   const out = tmp(); const puerto = 44000 + Math.floor(Math.random() * 1000);
-  const s = crearServidor({ outDir: out, hoy: '2026-10-29', puerto, paramsFile: path.join(out, 'x.json'), lanzarActualizacion: lanzar });
+  // Como la corrida real del 28/10: terminó bien (código 0) pero ninguna fuente trajo datos.
+  const informes = []; const leerInforme = (f) => { informes.push(f); return { servicios: [
+    { id: 'sifere-consultas', nombre: 'SIFERE', estado: 'relevado', motivo: 'SIFERE: no se obtuvieron filas de los listados' },
+    { id: 'ddjj-y-pagos', nombre: 'PRESENTACIÓN DE DDJJ Y PAGOS', estado: 'relevado', motivo: 'grilla/filtros alcanzados pero sin filas' },
+    { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', estado: 'sin-acceso', error: 'no se pudo conectar con COMARB' }] }; };
+  const s = crearServidor({ outDir: out, hoy: '2026-10-29', puerto, paramsFile: path.join(out, 'x.json'), lanzarActualizacion: lanzar, leerInforme });
   await new Promise((ok) => s.listen(puerto, '127.0.0.1', ok));
   try {
     const base = `http://127.0.0.1:${puerto}`;
@@ -757,10 +762,28 @@ test('«Actualizar datos fiscales»: una sola corrida a la vez, con su avance; l
     assert.equal(st.corriendo, true);
     assert.ok(st.lineas.includes('[ct-pagos] validado'));
     assert.doesNotMatch(st.lineas.join('\n'), /99999999/, 'el avance se muestra saneado');
+    hijo.stderr.emit('data', 'Corrida guardada en out/corridas/2026-10-29T10-00-00\n');
     hijo.emit('close', 0);
     st = await (await fetch(`${base}/api/actualizar`)).json();
     assert.equal(st.corriendo, false); assert.equal(st.codigo, 0);
+    assert.match(informes[0], /out[\\/]corridas[\\/]2026-10-29T10-00-00[\\/]cobertura\.json$/);
+    assert.match(st.balance.titulo, /^Corrida finalizada sin datos: 0 de 3 fuentes/, 'terminar sin bajar nada no se anuncia como éxito');
+    assert.equal(st.balance.sinDatos.length, 2); assert.equal(st.balance.errores.length, 1);
     const resumen = await (await fetch(`${base}/api/resumen?mes=2026-09`)).json();
     assert.equal(resumen.impuestos.length, 3);
   } finally { await new Promise((ok) => s.close(ok)); }
+});
+
+test('balance de la corrida: cuenta fuentes con datos, con datos nuevos, sin datos y con error; sin informe no afirma nada', async () => {
+  const { balanceCorrida } = await import('../src/app/actualizar.js');
+  const b = balanceCorrida({ servicios: [
+    { id: 'ct-pagos', nombre: 'CT pagos', estado: 'validado', filas: 15, conservacion: [{ id: 'ct-pagos', promovido: true }] },
+    { id: 'portal-iva', nombre: 'Portal IVA', estado: 'descargado', filas: 3, conservacion: [{ id: 'portal-iva', promovido: false }] },
+    { id: 'sifere-consultas', nombre: 'SIFERE', estado: 'descargado', filas: 2, reportesCm03: { reportes: [{ decision: 'bajada', estado: 'valida' }, { decision: 'sin clic' }] } },
+    { id: 'ccma', nombre: 'CCMA', estado: 'relevado', motivo: 'sin grilla' }, { id: 'x', nombre: 'X', estado: 'error', error: 'boom' }] });
+  assert.equal(b.conDatos.length, 3); assert.equal(b.conNuevos, 1); assert.equal(b.cm03, 1);
+  assert.equal(b.sinDatos[0].motivo, 'sin grilla'); assert.equal(b.errores[0].motivo, 'boom');
+  assert.match(b.titulo, /3 de 5 fuentes con datos \(1 con datos nuevos guardados\), 1 CM03 bajada/);
+  assert.match(balanceCorrida(null, 0).titulo, /no se encontró su informe/);
+  assert.match(balanceCorrida({ servicios: [] }, 1).titulo, /error/);
 });

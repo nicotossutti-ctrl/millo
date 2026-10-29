@@ -138,6 +138,8 @@ test('saldo de IIBB: total a pagar de la CM03 − pagos comprobados; con varias 
   assert.equal(saldoIibb(cifra(null), []).valor, null);
   assert.equal(saldoIibb(ap(0), []).valor, 0);
   assert.match(saldoIibb(ap(30), []).nota, /no prueba que esté impago/);
+  assert.equal(saldoIibb(ap(30), []).valor, null, 'sin pagos: sin conciliar, no 30');
+  assert.equal(saldoIibb(ap(30), []).diferencia, 30);
   assert.equal(saldoIibb(ap(30), [pago(30)]).valor, 0);
   const una = saldoIibb(ap(30), [pago(20)], DOS);
   assert.equal(una.valor, 10, 'una sola jurisdicción con saldo a pagar: el pago es de ella');
@@ -161,7 +163,12 @@ test('panel y cartel con la CM03 importada: el determinado sale del cartel, el p
   assert.equal(p.iibb.aFavorContribuyente.valor, 40);
   assert.deepEqual(p.iibb.porJurisdiccion.map((j) => [j.jurisdiccion, j.aPagar]), [['Uno', 0], ['Dos Provincia', 30]]);
   assert.equal(p.iibb.estado, 'pago no encontrado (sin cobertura)', 'presentada no es pagada');
-  assert.equal(p.iibb.saldoPendiente.valor, 30);
+  assert.equal(p.iibb.saldoPendiente.valor, null, 'sin pagos encontrados no hay saldo verificado: lo declarado no es la deuda de hoy');
+  assert.match(p.iibb.saldoPendiente.nota, /sin conciliar/);
+  const { resumenImpuestos } = await import('../src/app/resumenImpuestos.js');
+  const fila = resumenImpuestos(out, { ...op, mes: '2026-09' }).impuestos.find((x) => x.impuesto === 'Ingresos Brutos');
+  assert.equal(fila.aPagar.valor, 30, 'el total a pagar de la CM03 se muestra aparte');
+  assert.equal(fila.saldo.valor, null);
   let claves = pendientesDeCarga(out, op.hoy, op).filter((x) => x.mes === '2026-09').map((x) => x.clave.split(':')[0]);
   assert.ok(!claves.includes('iibb-declarado') && !claves.includes('iibb-a-pagar-segun-cm03'), 'la CM03 ya no se pide');
   assert.ok(claves.includes('iibb-pagado'), 'el pago se sigue pidiendo');

@@ -483,16 +483,19 @@ export function estadoPago(declarado, pagos = []) {
 
 /**
  * Saldo de IIBB del período: el TOTAL A PAGAR de la CM03 menos los pagos comprobados del período. Nunca el impuesto
- * determinado menos los pagos (los saldos a favor, retenciones y percepciones ya están descontados en la CM03). Los pagos
- * no dicen a qué jurisdicción van: con una sola jurisdicción a pagar el pago es de ella; con varias y un pago que no cubre
- * el total, el saldo queda «sin conciliar» (valor null y la diferencia aparte), sin afirmar cuánto se debe en cada una.
+ * determinado menos los pagos (los saldos a favor, retenciones y percepciones ya están descontados en la CM03). Sin pagos
+ * encontrados, el saldo queda «sin conciliar» (valor null, la cifra declarada aparte): no es una deuda confirmada. Los
+ * pagos no dicen a qué jurisdicción van: con una sola jurisdicción a pagar el pago es de ella; con varias y un pago que
+ * no cubre el total, también «sin conciliar», sin afirmar cuánto se debe en cada una.
  */
 export function saldoIibb(aPagar, pagos = [], jurisdicciones = null) {
   if (aPagar?.valor == null) return faltante('sin el total a pagar de la CM03 no se puede saber el saldo: el impuesto determinado no es lo que se paga');
   if (aPagar.valor <= 0) return cifra(0, aPagar.nivel, aPagar.fuente, 'la CM03 no deja saldo a pagar');
   const pagado = r2(pagos.reduce((n, c) => n + (c.valor ?? 0), 0));
   const nivelPagos = pagos.every((c) => c.nivel === 'verificado') ? aPagar.nivel : 'manual';
-  if (pagado <= 0) return cifra(aPagar.valor, aPagar.nivel, 'a pagar según CM03', 'sin pagos encontrados: no prueba que esté impago');
+  // Sin pagos encontrados no hay saldo VERIFICADO: lo declarado a pagar no es la deuda de hoy (los pagos de COMARB no
+  // siempre se pudieron consultar). Se informa como «sin conciliar», con la cifra declarada aparte.
+  if (pagado <= 0) return { ...faltante(`sin conciliar: la CM03 deja ${aPagar.valor} a pagar y no se encontraron pagos en lo bajado (no prueba que esté impago ni que se deba)`), diferencia: aPagar.valor };
   if (pagado >= aPagar.valor - 1) return cifra(0, nivelPagos, 'a pagar según CM03 − pagos', pagado > aPagar.valor + 1 ? `los pagos (${pagado}) superan lo a pagar: revisalos` : 'cubierto por los pagos del período');
   const conSaldo = (jurisdicciones ?? []).filter((j) => j.aPagar > 0);
   if (conSaldo.length === 1) return cifra(aPagar.valor - pagado, nivelPagos, 'a pagar según CM03 − pagos', `queda de ${conSaldo[0].jurisdiccion} (la única jurisdicción con saldo a pagar)`);

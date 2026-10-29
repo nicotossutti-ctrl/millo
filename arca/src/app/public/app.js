@@ -89,9 +89,16 @@ async function seguirActualizacion() {
   boton.disabled = st.corriendo; boton.textContent = st.corriendo ? 'Actualizando…' : 'Actualizar datos fiscales';
   if (!st.inicio) { poner($('#actualizacion')); return; }
   const ultimas = st.lineas.slice(-12);
-  poner($('#actualizacion'), h('div', { class: `caja ${st.corriendo ? 'aviso-pendientes' : ''}` },
-    h('strong', {}, st.corriendo ? 'Actualizando datos fiscales…' : st.codigo === 0 ? 'Actualización terminada' : 'La actualización terminó con un error'),
+  const b = st.balance;
+  const malo = !st.corriendo && (!b || st.codigo !== 0 || !b.conDatos.length);
+  const lista = (titulo, xs, texto) => (xs?.length ? h('div', {}, h('strong', {}, `${titulo} (${xs.length}): `), h('ul', { class: 'lista' }, ...xs.map((x) => h('li', {}, texto(x))))) : null);
+  poner($('#actualizacion'), h('div', { class: `caja ${st.corriendo || malo ? 'aviso-pendientes' : ''}` },
+    h('strong', {}, st.corriendo ? 'Actualizando datos fiscales…' : b?.titulo ?? (st.codigo === 0 ? 'Actualización terminada' : 'La actualización terminó con un error')),
     h('span', { class: 'nota' }, st.corriendo ? ' · si ARCA o SIFERE piden la clave fiscal, escribila en la ventana del navegador que se abrió' : ` · ${fecha(String(st.fin).slice(0, 10))}`),
+    !st.corriendo && b ? h('div', {},
+      lista('Con datos', b.conDatos, (x) => `${x.nombre}${x.filas != null ? ` · ${x.filas} fila(s)` : ''}${x.nuevos ? ' · datos nuevos guardados' : ' · sin cambios (se conserva lo anterior)'}`),
+      lista('Sin datos', b.sinDatos, (x) => `${x.nombre}${x.motivo ? ` · ${x.motivo}` : ''}`),
+      lista('Con error', b.errores, (x) => `${x.nombre}${x.motivo ? ` · ${x.motivo}` : ''}`)) : null,
     h('details', { open: st.corriendo || st.codigo !== 0 }, h('summary', { class: 'nota' }, 'Qué está haciendo'), h('pre', { class: 'registro' }, ultimas.join('\n')))));
   if (st.corriendo) { clearTimeout(siguiendo); siguiendo = setTimeout(seguirActualizacion, 2000); return; }
   if (siguiendo) { siguiendo = null; await refrescarMeses(); await renderPendientes(); }
@@ -347,13 +354,13 @@ function bloqueResumen() {
     c?.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(c.valor), badge(c?.valor == null ? 'faltante' : c.nivel));
   return h('div', { class: 'caja' }, h('h2', {}, `IVA, Ingresos Brutos y Ganancias · ${nombreMes(r.mes)}`),
     h('table', { class: 'apilable' },
-      h('thead', {}, h('tr', {}, ...['Impuesto', 'Declarado', 'Pagado', 'Saldo', 'Documentos', 'Falta'].map((x, i) => h('th', { class: i >= 1 && i <= 3 ? 'num' : '' }, x)))),
+      h('thead', {}, h('tr', {}, ...['Impuesto', 'Determinado / declarado', 'A pagar según la DJ', 'Pagado', 'Saldo verificado', 'Documentos', 'Falta'].map((x, i) => h('th', { class: i >= 1 && i <= 4 ? 'num' : '' }, x)))),
       h('tbody', {}, ...r.impuestos.map((x) => h('tr', {},
         h('td', { 'data-rotulo': 'Impuesto' }, h('strong', {}, x.impuesto), x.estado ? h('div', { class: 'nota' }, x.estado) : null),
-        celda(x.declarado, 'Declarado'), celda(x.pagado, 'Pagado'), celda(x.saldo, 'Saldo'),
+        celda(x.declarado, 'Determinado / declarado'), celda(x.aPagar, 'A pagar según la DJ'), celda(x.pagado, 'Pagado'), celda(x.saldo, 'Saldo verificado'),
         h('td', { 'data-rotulo': 'Documentos' }, x.documentos.length ? x.documentos.join(' · ') : '—'),
         h('td', { 'data-rotulo': 'Falta' }, x.falta.length ? x.falta.join(' · ') : 'nada'))))),
-    h('p', { class: 'nota' }, 'Un saldo sin verificar figura como «—» con su motivo: no se inventa. Pasá el mouse por cada cifra para ver de dónde sale.'));
+    h('p', { class: 'nota' }, '«A pagar según la DJ» es lo que se declaró; «Saldo verificado» es lo que queda después de los pagos encontrados. Si no se pudo verificar, figura «—» con su motivo: no se inventa. Pasá el mouse por cada cifra para ver de dónde sale.'));
 }
 
 /** Ingresos Brutos según la CM03: por jurisdicción, sin compensar saldos a favor de una con lo que se debe en otra. */

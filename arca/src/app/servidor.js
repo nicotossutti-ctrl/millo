@@ -33,8 +33,8 @@ function leerCuerpo(req) {
 }
 
 /** Crea el servidor (sin escuchar). `opciones.hoy` permite fijar la fecha en pruebas. */
-export function crearServidor({ outDir = 'out', paramsFile = path.resolve('params/contribuyente.json'), hoy = null, puerto = 4321, lanzarActualizacion = undefined } = {}) {
-  const opcionesActualizar = { lanzar: lanzarActualizacion };
+export function crearServidor({ outDir = 'out', paramsFile = path.resolve('params/contribuyente.json'), hoy = null, puerto = 4321, lanzarActualizacion = undefined, leerInforme = undefined } = {}) {
+  const opcionesActualizar = { lanzar: lanzarActualizacion, leerInforme };
   const permitidos = new Set([`127.0.0.1:${puerto}`, `localhost:${puerto}`]);
   const origenes = new Set([...permitidos].map((h) => `http://${h}`));
   const json = (res, status, cuerpo) => {
@@ -92,7 +92,7 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         if (ruta === 'POST /api/manuales/guardar') return json(res, 200, guardarManual(outDir, cuerpo));
         if (ruta === 'POST /api/manuales/eliminar') return json(res, 200, eliminarManual(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/importar') return json(res, 200, await importarCm03(outDir, { nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null }));
-        if (ruta === 'POST /api/actualizar') return json(res, 202, iniciarActualizacion({ lanzar: opcionesActualizar.lanzar }));
+        if (ruta === 'POST /api/actualizar') return json(res, 202, iniciarActualizacion({ lanzar: opcionesActualizar.lanzar, leerInforme: opcionesActualizar.leerInforme }));
         if (ruta === 'POST /api/pdf/importar') return json(res, 200, await importarPdfFiscal(outDir, { tipo: cuerpo.tipo || null, nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null, anio: cuerpo.anio || null }));
         if (ruta === 'POST /api/pdf/eliminar') return json(res, 200, cuerpo.documento === 'ddjj-ganancias' ? eliminarDdjjGanancias(outDir, String(cuerpo.id ?? '')) : eliminarCm03(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/eliminar') return json(res, 200, eliminarCm03(outDir, String(cuerpo.id ?? '')));
