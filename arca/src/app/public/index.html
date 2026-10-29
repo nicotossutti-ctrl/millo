@@ -13,6 +13,7 @@
       <strong>FiscalOS</strong>
       <span class="sub">Panel fiscal mensual · datos locales</span>
     </div>
+    <button id="actualizar" class="primario" title="Entra a ARCA y SIFERE en modo lectura, baja lo que falta y lo guarda">Actualizar datos fiscales</button>
     <div class="mes">
       <button id="mes-ant" class="icono" title="Mes anterior" aria-label="Mes anterior">‹</button>
       <select id="mes" aria-label="Mes de facturación"></select>
@@ -38,6 +39,7 @@
   </p>
 
   <main>
+    <div id="actualizacion"></div>
     <div id="pendientes"></div>
     <section id="impuestos" class="pestana activa"></section>
     <section id="obligaciones" class="pestana"></section>
@@ -45,7 +47,7 @@
     <section id="simulador" class="pestana"></section>
   </main>
 
-  <footer>FiscalOS trabaja solo con lo que ya está en tu computadora (out/datos y out/importados). No abre ARCA ni envía datos a internet.</footer>
+  <footer>Todo queda en tu computadora (out/). «Actualizar datos fiscales» entra a ARCA y SIFERE solo para consultar y bajar: nunca presenta, paga ni genera VEP.</footer>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

@@ -43,7 +43,7 @@ function celdaCifra(c, { conNota = true } = {}) {
 }
 const celdaFecha = (f) => h('td', { title: [f?.fuente, f?.nota].filter(Boolean).join(' · ') }, f?.fecha ? fecha(f.fecha) : '—', badge(f?.nivel ?? 'faltante'));
 
-const estado = { mes: null, meses: [], panel: null, hoy: null, conceptos: {} };
+const estado = { mes: null, meses: [], panel: null, resumen: null, hoy: null, conceptos: {} };
 
 // ---------------- pestañas y mes ----------------
 for (const b of document.querySelectorAll('[data-pestana]')) {
@@ -69,17 +69,39 @@ async function iniciar() {
     const inicial = m.meses.includes(m.porDefecto) ? m.porDefecto : m.meses[0];
     sel.value = inicial;
     renderImportar();
-    await Promise.all([cargarMes(inicial), renderPendientes()]);
+    await Promise.all([cargarMes(inicial), renderPendientes(), seguirActualizacion()]);
   } catch (e) {
     poner($('#impuestos'), h('div', { class: 'error' }, `No se pudo cargar FiscalOS: ${e.message}`));
   }
+}
+
+// ---------------- Actualizar datos fiscales (un solo botón) ----------------
+$('#actualizar').addEventListener('click', async () => {
+  try { await api('/api/actualizar', {}); } catch (e) { alert(e.message); }
+  seguirActualizacion();
+});
+let siguiendo = null;
+/** Muestra el avance de la actualización y, al terminar, recarga lo guardado. */
+async function seguirActualizacion() {
+  let st;
+  try { st = await api('/api/actualizar'); } catch { return; }
+  const boton = $('#actualizar');
+  boton.disabled = st.corriendo; boton.textContent = st.corriendo ? 'Actualizando…' : 'Actualizar datos fiscales';
+  if (!st.inicio) { poner($('#actualizacion')); return; }
+  const ultimas = st.lineas.slice(-12);
+  poner($('#actualizacion'), h('div', { class: `caja ${st.corriendo ? 'aviso-pendientes' : ''}` },
+    h('strong', {}, st.corriendo ? 'Actualizando datos fiscales…' : st.codigo === 0 ? 'Actualización terminada' : 'La actualización terminó con un error'),
+    h('span', { class: 'nota' }, st.corriendo ? ' · si ARCA o SIFERE piden la clave fiscal, escribila en la ventana del navegador que se abrió' : ` · ${fecha(String(st.fin).slice(0, 10))}`),
+    h('details', { open: st.corriendo || st.codigo !== 0 }, h('summary', { class: 'nota' }, 'Qué está haciendo'), h('pre', { class: 'registro' }, ultimas.join('\n')))));
+  if (st.corriendo) { clearTimeout(siguiendo); siguiendo = setTimeout(seguirActualizacion, 2000); return; }
+  if (siguiendo) { siguiendo = null; await refrescarMeses(); await renderPendientes(); }
 }
 
 async function cargarMes(mes) {
   estado.mes = mes;
   for (const id of ['impuestos', 'obligaciones']) poner($(`#${id}`), h('div', { class: 'cargando' }, `Cargando ${nombreMes(mes)}…`));
   try {
-    estado.panel = await api(`/api/panel?mes=${encodeURIComponent(mes)}`);
+    [estado.panel, estado.resumen] = await Promise.all([api(`/api/panel?mes=${encodeURIComponent(mes)}`), api(`/api/resumen?mes=${encodeURIComponent(mes)}`).catch(() => null)]);
     renderImpuestos(); renderObligaciones(); renderSimulador();
   } catch (e) {
     poner($('#impuestos'), h('div', { class: 'error' }, `No se pudo armar el panel de ${nombreMes(mes)}: ${e.message}`));
@@ -260,7 +282,7 @@ function renderImpuestos() {
         celdaCifra(o.declarado), celdaCifra(o.pagos),
         h('td', { 'data-rotulo': 'Estado' }, h('span', { class: `estado ${claseEstado(o.estado)}` }, o.estado)),
         h('td', { 'data-rotulo': 'Vence' }, o.vencimiento?.fecha ? fecha(o.vencimiento.fecha) : '—'))))));
-  poner($('#impuestos'), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), bloqueIibb(p), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloqueTerceros, bloquePfos(p));
+  poner($('#impuestos'), bloqueResumen(), tarjetas, config, tabla, h('div', { class: 'columnas' }, detalle, bloquePagos(p)), bloqueIibb(p), h('div', { class: 'columnas' }, bloqueDeja(p), bloqueDj), bloqueTerceros, bloquePfos(p));
 }
 
 // ---------------- Cargas a mano (pagos que no están en ARCA) ----------------
@@ -317,6 +339,23 @@ function bloquePagos(p) {
 }
 
 /** Lo que el mes deja para pagar más adelante. */
+/** IVA, IIBB y Ganancias en una línea cada uno: declarado, pagado, saldo, documentos y lo que falta. */
+function bloqueResumen() {
+  const r = estado.resumen;
+  if (!r) return null;
+  const celda = (c, rotulo) => h('td', { class: 'num', 'data-rotulo': rotulo, title: [c?.fuente, c?.nota].filter(Boolean).join(' · ') || null },
+    c?.valor == null ? h('span', { class: 'sin-dato' }, '—') : fmt(c.valor), badge(c?.valor == null ? 'faltante' : c.nivel));
+  return h('div', { class: 'caja' }, h('h2', {}, `IVA, Ingresos Brutos y Ganancias · ${nombreMes(r.mes)}`),
+    h('table', { class: 'apilable' },
+      h('thead', {}, h('tr', {}, ...['Impuesto', 'Declarado', 'Pagado', 'Saldo', 'Documentos', 'Falta'].map((x, i) => h('th', { class: i >= 1 && i <= 3 ? 'num' : '' }, x)))),
+      h('tbody', {}, ...r.impuestos.map((x) => h('tr', {},
+        h('td', { 'data-rotulo': 'Impuesto' }, h('strong', {}, x.impuesto), x.estado ? h('div', { class: 'nota' }, x.estado) : null),
+        celda(x.declarado, 'Declarado'), celda(x.pagado, 'Pagado'), celda(x.saldo, 'Saldo'),
+        h('td', { 'data-rotulo': 'Documentos' }, x.documentos.length ? x.documentos.join(' · ') : '—'),
+        h('td', { 'data-rotulo': 'Falta' }, x.falta.length ? x.falta.join(' · ') : 'nada'))))),
+    h('p', { class: 'nota' }, 'Un saldo sin verificar figura como «—» con su motivo: no se inventa. Pasá el mouse por cada cifra para ver de dónde sale.'));
+}
+
 /** Ingresos Brutos según la CM03: por jurisdicción, sin compensar saldos a favor de una con lo que se debe en otra. */
 function bloqueIibb(p) {
   const i = p.iibb; const js = i.porJurisdiccion;

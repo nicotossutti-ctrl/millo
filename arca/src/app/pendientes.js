@@ -11,8 +11,7 @@
  *    a pagar: el determinado no es lo que se paga.
  *  - Ingresos Brutos: el pago, si la CM03 deja algo a pagar y no se encontró un pago que lo cubra. «No encontrado» es
  *    falta de evidencia, no prueba de que esté impago; un pago parcial no silencia el pedido.
- *  - Autónomos: la cuota del mes, si ARCA no tiene pagos imputados al período y no está configurada.
- *  - F.931 (empleador) y F.744 / SICORE (agente), si su DJ figura presentada: el total declarado y, después, el pago.
+ *  - Con `pospuestos` (lo que va después de IVA, IIBB y Ganancias): la cuota de autónomos y F.931 / F.744 (SICORE).
  * Una vez por año (desde julio): la DJ anual de Ganancias del año anterior, mejor su PDF (F.2711 o F.711), que trae el
  * impuesto determinado, los pagos a cuenta y el saldo; si no, su impuesto determinado a mano.
  */
@@ -53,7 +52,7 @@ const cargado = (outDir, mes, concepto) => manualesDelMes(outDir, mes)[concepto]
  * { tipo: 'cargar', concepto, mes } (importe en el cartel o archivo en «Importar») | { tipo: 'arca' } (se baja sola) |
  * { tipo: 'cm03', mes, alternativa? } (subir el PDF de la CM03; la alternativa es cargar el importe a mano).
  */
-export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
+export function pendientesDeCarga(outDir, hoy, { paramsFile, pospuestos = false } = {}) {
   const datosDir = path.join(outDir, 'datos');
   const contrib = contribuyente(paramsFile);
   const ultimo = mesAnterior(hoy);
@@ -64,14 +63,14 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
     for (const [id, tipo, nombre] of [['comprobantes-emitidos', 'emitidos', 'emitidos'], ['comprobantes-recibidos', 'recibidos', 'recibidos']]) {
       if (tieneComprobantes(datosDir, id, tipo, mes)) continue;
       out.push({ clave: `${id}:${mes}`, mes, titulo: `Comprobantes ${nombre} de ${n}`, porque: 'sin ellos no hay IVA ni Ingresos Brutos estimados del mes',
-        como: 'No hay que bajar nada: se traen solos con la actualización de ARCA (fiscalos.ps1 correr).', accion: { tipo: 'arca' } });
+        como: 'No hay que bajar nada: se traen solos con el botón «Actualizar datos fiscales».', accion: { tipo: 'arca' } });
     }
     // Ingresos Brutos: la CM03 (lo mejor, su PDF: trae el determinado y el total a pagar por jurisdicción) y el pago del
     // TOTAL A PAGAR, nunca del impuesto determinado.
     const cm = cm03DelPeriodo(outDir, mes); const cmv = cm.vigente;
     const lista = cm03Sifere(datosDir, mes)?.presentada;
     const cual = lista ? `la CM03 ${lista.rectificativa ? `rectificativa ${lista.rectificativa}` : 'original'} presentada el ${lista.fechaPresentacion}` : `la DJ CM03 del período ${mes.slice(5)}/${mes.slice(0, 4)}`;
-    const dondePdf = 'En SIFERE WEB – Consultas: DDJJ Mensuales > Listado > la fila presentada del período > ícono «Reporte» (impresora). Subí ese PDF acá: FiscalOS lee el impuesto determinado y el total a pagar de cada jurisdicción.';
+    const dondePdf = 'Se baja sola con «Actualizar datos fiscales» (el «Reporte» de SIFERE). Si no se pudo, subí ese PDF acá (SIFERE: DDJJ Mensuales > Listado > ícono de impresora): FiscalOS lee el impuesto determinado y el total a pagar de cada jurisdicción.';
     const revision = cm.enRevision.length ? ` Hay ${cm.enRevision.length} PDF(s) en revisión que no se usan (${cm.enRevision.map((r) => r.motivos[0]).join('; ')}).` : '';
     const det = cmv ? { importe: cmv.impuestoDeterminadoTotal } : cargado(outDir, mes, 'iibb-declarado');
     const aPagar = cmv ? { importe: cmv.totalAPagarDeclarado } : cargado(outDir, mes, 'iibb-a-pagar-segun-cm03');
@@ -106,7 +105,7 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
       }
     }
     // Como empleador (F.931) y agente (F.744 / SICORE): solo si la DJ del período figura presentada (hay obligación).
-    for (const o of obligacionesDeTerceros(outDir, datosDir, mes, hoy)) {
+    for (const o of pospuestos ? obligacionesDeTerceros(outDir, datosDir, mes, hoy) : []) {
       const t = TERCEROS[o.id];
       if (!o.presentacion) continue;
       if (o.declarado.valor == null) {
@@ -120,7 +119,7 @@ export function pendientesDeCarga(outDir, hoy, { paramsFile } = {}) {
           como: 'El importe pagado del VEP de ese período, con la fecha en que se pagó.', accion: { tipo: 'cargar', concepto: t.pagado, mes, conFecha: true } });
       }
     }
-    if (!cargado(outDir, mes, 'autonomos-cuota') && !pagosDelPeriodo(datosDir, mes, 'autonomos').length && !contrib?.autonomosMensual) {
+    if (pospuestos && !cargado(outDir, mes, 'autonomos-cuota') && !pagosDelPeriodo(datosDir, mes, 'autonomos').length && !contrib?.autonomosMensual) {
       out.push({ clave: `autonomos-cuota:${mes}`, mes, titulo: `Autónomos de ${n}: cuota del mes`,
         porque: 'ARCA no tiene pagos de autónomos imputados a ese período',
         como: 'En ARCA, «CCMA - Cuenta corriente de monotributistas y autónomos» (o tu VEP): el importe de la cuota del período.',

@@ -14,6 +14,7 @@ import { SERVICIOS as SERVICIOS_FISCALES } from './portal/servicios.js';
 import { escribirInformeIva } from './informeIva.js';
 import { reprocesarDjIva } from './reprocesarDj.js';
 import { actualizarPfos, resumenFotoFiscal } from './pfos/actualizar.js';
+import { resumenImpuestos } from './app/resumenImpuestos.js';
 import { generarClave, verificadorScram, guardarClaveEnEnv } from './pfos/clave.js';
 import { iniciarServidor } from './app/servidor.js';
 import { spawn } from 'node:child_process';
@@ -72,7 +73,7 @@ Portal (sesión autenticada con navegador, sin certificado):
   portal:diagnostico [--visible] [--sin-capturas] [--servicios "Mis Comprobantes,Portal IVA"]
                                 Entra a cada servicio y guarda captura, HTML saneado y estructura en out/diagnostico/
                                 (permisos 0600, CUIT e importes enmascarados, sin query strings ni cookies).
-  portal:todo [--desde AAAA-MM-DD --hasta AAAA-MM-DD] [--servicios "id1,id2"] [--rehacer] [--visible]
+  portal:todo [--desde AAAA-MM-DD --hasta AAAA-MM-DD] [--servicios "id1,id2"] [--todos] [--rehacer] [--visible]
                                 Recorre TODOS los servicios fiscales en modo lectura, aísla fallos, descarga lo
                                 que puede y guarda la corrida en out/corridas/<fecha>/ con un informe cobertura.md.
   portal:limpiar                Borra diagnóstico, descargas y sesión guardada.
@@ -256,11 +257,16 @@ try {
         const periodo = { desde: o.desde ?? haceUnMes.toISOString().slice(0, 10), hasta: o.hasta ?? finMesPasado.toISOString().slice(0, 10), rehacer: o.rehacer };
         // PowerShell pasa «a,b» sin comillas como «a b»: se acepta coma o espacio.
         const pedidos = o.servicios ? String(o.servicios).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : null;
-        const servicios = pedidos ? SERVICIOS_FISCALES.filter((s) => pedidos.includes(s.id)) : SERVICIOS_FISCALES;
+        // Sin --servicios: todas las fuentes de IVA, IIBB y Ganancias (las pospuestas, solo con --todos).
+        const servicios = pedidos ? SERVICIOS_FISCALES.filter((s) => pedidos.includes(s.id)) : SERVICIOS_FISCALES.filter((s) => o.todos || !s.pospuesto);
+        if (!pedidos && !o.todos) console.error(`Fuentes pospuestas (se agregan con --todos): ${SERVICIOS_FISCALES.filter((s) => s.pospuesto).map((s) => s.id).join(', ')}`);
         if (!servicios.length) throw new Error(`Ningún servicio coincide con --servicios. Ids: ${SERVICIOS_FISCALES.map((s) => s.id).join(', ')}`);
         const { baseDir, cobertura } = await ejecutarTodo(sesion, { servicios, periodo, log: (m) => console.error(m) });
         console.log('\n' + cobertura.texto);
         console.error(`\nCorrida guardada en ${baseDir}`);
+        // Lo que importa: IVA, IIBB y Ganancias del último mes cerrado, con lo que hay y lo que falta.
+        try { console.log(`\n${resumenImpuestos(cfg.outDir ?? 'out', { hoy: hoy.toISOString().slice(0, 10) }).texto.join('\n')}`); }
+        catch (e) { console.error(`(no se pudo armar el resumen de impuestos: ${e.message})`); }
       } else if (cmd === 'portal:mc-consulta') {
         await pruebaConsulta(sesion, { tipo: need('tipo'), desde: need('desde'), hasta: need('hasta'), sinCapturas: o['sin-capturas'], log: (m) => console.log(m) });
       } else if (cmd === 'portal:mis-comprobantes') {

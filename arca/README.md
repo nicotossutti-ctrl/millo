@@ -246,6 +246,13 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   favor de ARCA o del contribuyente, el año, la secuencia y la fecha; la DJ es válida solo si determinado − pagos a
   cuenta = saldo, al centavo. El saldo es el que declaró la DJ, no la deuda de hoy: se concilia con los pagos de Cuentas
   Tributarias imputados a ese año desde la presentación, y sin ellos queda «sin conciliar». En `out/importados/ganancias/`.
+- **«Actualizar datos fiscales»** (botón arriba de todo en la app): lanza la corrida completa (lo mismo que
+  `fiscalos.ps1 correr`) con todas las fuentes de IVA, Ingresos Brutos y Ganancias, muestra qué está haciendo y, al
+  terminar, recarga lo guardado. Las fuentes que quedaron para después (autónomos/CCMA, planes de pago, Bienes Personales,
+  domicilio fiscal electrónico) solo corren con `--todos`. Si ARCA o SIFERE piden la clave fiscal, se escribe en la
+  ventana del navegador. Al principio de «Impuestos del mes» queda una tabla con IVA, IIBB y Ganancias: declarado,
+  pagado, saldo, documentos y lo que falta (un saldo sin verificar figura sin dato, con su motivo). El mismo resumen
+  sale al final de la corrida en la consola.
 - **Recolección automática (solo lectura), lo nuevo de la corrida:**
   - *SIFERE*: además de los listados, baja el «Reporte» (PDF) de cada CM03 presentada de los meses de la corrida y los
     seis anteriores, y lo lee como si lo hubieras subido. Solo hace clic en un control que se identifique sin dudas

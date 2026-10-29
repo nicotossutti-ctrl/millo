@@ -122,3 +122,5 @@ details > summary { cursor: pointer; }
 .aviso-pendientes li { margin-bottom: 10px; }
 .aviso-pendientes .carga { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
 .aviso-pendientes input { min-width: 0; flex: 1 1 180px; max-width: 260px; }
+
+pre.registro { white-space: pre-wrap; font-size: 12px; max-height: 260px; overflow: auto; background: var(--fondo, #f6f7f9); padding: 8px; border-radius: 8px; }

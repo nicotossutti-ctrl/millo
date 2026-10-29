@@ -399,7 +399,8 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
   assert.deepEqual(mesesHacia('2026-02', 3), ['2026-02', '2026-01', '2025-12']);
   // Instalación vacía: los seis meses aparecen (sin datos es justamente lo que más falta).
   const vacia = tmp();
-  const pv = pendientesDeCarga(vacia, '2026-10-28', { paramsFile: path.join(vacia, 'no.json') });
+  const pv = pendientesDeCarga(vacia, '2026-10-28', { paramsFile: path.join(vacia, 'no.json'), pospuestos: true });
+  assert.ok(!pendientesDeCarga(vacia, '2026-10-28', { paramsFile: path.join(vacia, 'no.json') }).some((x) => /autonomos|f931|sicore/.test(x.clave)), 'por defecto, solo IVA, IIBB y Ganancias');
   assert.deepEqual([...new Set(pv.map((x) => x.mes))], ['2026-09', '2026-08', '2026-07', '2026-06', '2026-05', '2026-04', '2025-12']);
   assert.deepEqual(pv.filter((x) => x.mes === '2026-06').map((x) => x.clave),
     ['comprobantes-emitidos:2026-06', 'comprobantes-recibidos:2026-06', 'iibb-declarado:2026-06', 'autonomos-cuota:2026-06']);
@@ -411,7 +412,7 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
     fs.writeFileSync(path.join(d, id, 'manifiesto.json'), JSON.stringify({ [`${tipo}:2026-09-01:2026-09-30`]: { ok: true, fecha: '2026-10-21', archivo: 'mc.csv' },
       [`${tipo}:2026-06-01:2026-06-30`]: { ok: true, fecha: '2026-07-21', archivo: 'mc.csv' } }));
   }
-  const op = { paramsFile: path.join(out, 'no.json') };
+  const op = { paramsFile: path.join(out, 'no.json'), pospuestos: true };
   const de = (mes, hoy = '2026-10-28') => pendientesDeCarga(out, hoy, op).filter((x) => x.mes === mes).map((x) => x.clave.split(':')[0]);
   assert.deepEqual(de('2026-09'), ['iibb-declarado', 'autonomos-cuota']);
   assert.deepEqual(de('2026-08'), ['comprobantes-emitidos', 'comprobantes-recibidos', 'iibb-declarado', 'autonomos-cuota'], 'mes intercalado sin datos');
@@ -440,7 +441,7 @@ test('pendientes: los últimos seis meses calendario cerrados, tengan datos o no
   assert.deepEqual(de('2025-12'), []);
   assert.ok(!mesesDisponibles(out, '2026-10-28').includes('2025-12'));
   assert.equal(panelMes(out, '2026-09', { hoy: '2026-10-28', ...op }).ganancias.djAnterior.valor, 5000000);
-  assert.match(pendientesDeCarga(out, '2026-10-28', op).find((x) => x.accion.tipo === 'arca').como, /fiscalos\.ps1 correr/);
+  assert.match(pendientesDeCarga(out, '2026-10-28', op).find((x) => x.accion.tipo === 'arca').como, /Actualizar datos fiscales/);
 });
 
 // ---------------- DJ presentadas (Cuentas Tributarias y SIFERE) ----------------
@@ -633,15 +634,15 @@ test('F.931 y SICORE: aparte de los impuestos propios; DJ presentada no es pagad
   // En la caja de octubre: el F.931 va como empleador, no como impuesto propio.
   const oct = panelMes(out, '2026-10', op);
   assert.equal(oct.pagos.propios, 7000); assert.equal(oct.pagos.comoEmpleador, 80000);
-  let claves = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-09').map((x) => x.clave);
+  let claves = pendientesDeCarga(out, '2026-10-28', { ...op, pospuestos: true }).filter((x) => x.mes === '2026-09').map((x) => x.clave);
   assert.ok(claves.includes('f931-declarado:2026-09') && claves.includes('sicore-declarado:2026-09'));
-  assert.ok(!pendientesDeCarga(out, '2026-10-28', op).some((x) => x.clave === 'f931-declarado:2026-08'), 'sin DJ presentada, no se pide');
+  assert.ok(!pendientesDeCarga(out, '2026-10-28', { ...op, pospuestos: true }).some((x) => x.clave === 'f931-declarado:2026-08'), 'sin DJ presentada, no se pide');
   guardarManual(out, { mes: '2026-09', concepto: 'f931-declarado', importe: 80000, fuente: 'acuse F.931' });
   guardarManual(out, { mes: '2026-09', concepto: 'sicore-declarado', importe: 12000, fuente: 'acuse F.744' });
   p = panelMes(out, '2026-09', op);
   assert.equal(p.terceros.find((o) => o.id === 'f931').estado, 'pagado verificado');
   assert.equal(p.terceros.find((o) => o.id === 'sicore').estado, 'pago no encontrado (sin cobertura)');
-  claves = pendientesDeCarga(out, '2026-10-28', op).filter((x) => x.mes === '2026-09').map((x) => x.clave);
+  claves = pendientesDeCarga(out, '2026-10-28', { ...op, pospuestos: true }).filter((x) => x.mes === '2026-09').map((x) => x.clave);
   assert.ok(claves.includes('sicore-pagado:2026-09') && !claves.includes('f931-pagado:2026-09'));
 });
 
@@ -716,4 +717,50 @@ test('pagos en la caja: Cuentas Tributarias de septiembre y una carga de octubre
   const oct2 = panelMes(out2, '2026-10', { ...op, paramsFile: path.join(out2, 'x.json') });
   assert.equal(oct2.pagos.filas.find((f) => f.clave === 'ganancias' && !f.computado)?.estadoConciliacion, 'sin conciliar');
   assert.equal(oct2.pagos.noSumados, 1);
+});
+
+test('resumen de IVA, IIBB y Ganancias: declarado, pagado, saldo, documentos y lo que falta, sin inventar el saldo', async () => {
+  const { resumenImpuestos } = await import('../src/app/resumenImpuestos.js');
+  const out = escenario();
+  const r = resumenImpuestos(out, { hoy: '2026-10-26', paramsFile: path.join(out, 'x.json') });
+  assert.equal(r.mes, '2026-09');
+  const iva = r.impuestos.find((x) => x.impuesto === 'IVA');
+  assert.equal(iva.declarado.valor, 8500); assert.equal(iva.declarado.nivel, 'verificado');
+  assert.equal(iva.vence, '2026-12-21');
+  assert.ok(iva.documentos.some((d) => /F\.2051/.test(d)));
+  const iibb = r.impuestos.find((x) => x.impuesto === 'Ingresos Brutos');
+  assert.equal(iibb.saldo.valor, null, 'sin la CM03 no hay saldo de IIBB');
+  assert.ok(iibb.falta.some((f) => /CM03/.test(f)));
+  assert.ok(r.impuestos.find((x) => /Ganancias/.test(x.impuesto)).falta.some((f) => /DJ anual 2025/.test(f)));
+  assert.match(r.texto.join('\n'), /== IVA, Ingresos Brutos y Ganancias · septiembre 2026/);
+});
+
+test('«Actualizar datos fiscales»: una sola corrida a la vez, con su avance; las fuentes pospuestas no van por defecto', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { SERVICIOS } = await import('../src/portal/servicios.js');
+  const porDefecto = SERVICIOS.filter((s) => !s.pospuesto).map((s) => s.id);
+  for (const id of ['comprobantes-emitidos', 'portal-iva', 'ct-pagos', 'ct-deudas', 'sifere-consultas', 'ddjj-y-pagos', 'mis-retenciones']) assert.ok(porDefecto.includes(id), id);
+  for (const id of ['ccma', 'mis-facilidades']) assert.ok(!porDefecto.includes(id), id);
+  let hijo; let argumentos;
+  const lanzar = (exe, args) => { argumentos = args; hijo = new EventEmitter(); hijo.stdout = new EventEmitter(); hijo.stderr = new EventEmitter(); return hijo; };
+  const out = tmp(); const puerto = 44000 + Math.floor(Math.random() * 1000);
+  const s = crearServidor({ outDir: out, hoy: '2026-10-29', puerto, paramsFile: path.join(out, 'x.json'), lanzarActualizacion: lanzar });
+  await new Promise((ok) => s.listen(puerto, '127.0.0.1', ok));
+  try {
+    const base = `http://127.0.0.1:${puerto}`;
+    const post = () => fetch(`${base}/api/actualizar`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: '{}' });
+    assert.equal((await post()).status, 202);
+    assert.deepEqual(argumentos.slice(1), [path.join('src', 'cli.js'), 'portal:todo', '--visible'], 'la misma corrida que fiscalos.ps1 correr, sin elegir fuentes');
+    assert.equal((await post()).status, 409, 'una sola a la vez');
+    hijo.stderr.emit('data', 'Servicio con CUIT 20999999991\n[ct-pagos] validado\n');
+    let st = await (await fetch(`${base}/api/actualizar`)).json();
+    assert.equal(st.corriendo, true);
+    assert.ok(st.lineas.includes('[ct-pagos] validado'));
+    assert.doesNotMatch(st.lineas.join('\n'), /99999999/, 'el avance se muestra saneado');
+    hijo.emit('close', 0);
+    st = await (await fetch(`${base}/api/actualizar`)).json();
+    assert.equal(st.corriendo, false); assert.equal(st.codigo, 0);
+    const resumen = await (await fetch(`${base}/api/resumen?mes=2026-09`)).json();
+    assert.equal(resumen.impuestos.length, 3);
+  } finally { await new Promise((ok) => s.close(ok)); }
 });

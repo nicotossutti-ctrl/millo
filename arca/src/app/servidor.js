@@ -13,6 +13,8 @@ import { guardarManual, eliminarManual } from './manuales.js';
 import { importarCm03, listarCm03, eliminarCm03 } from './cm03.js';
 import { importarDdjjGanancias, listarDdjjGanancias, eliminarDdjjGanancias } from './ddjjGanancias.js';
 import { importarPdfFiscal } from './pdfFiscal.js';
+import { iniciarActualizacion, estadoActualizacion } from './actualizar.js';
+import { resumenImpuestos } from './resumenImpuestos.js';
 import { analizarArchivo, vistaPendiente, simularImportacion, confirmarImportacion, eliminarImportacion, listarImportaciones, CONCEPTOS } from './importar.js';
 
 const PUBLICO = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -31,7 +33,8 @@ function leerCuerpo(req) {
 }
 
 /** Crea el servidor (sin escuchar). `opciones.hoy` permite fijar la fecha en pruebas. */
-export function crearServidor({ outDir = 'out', paramsFile = path.resolve('params/contribuyente.json'), hoy = null, puerto = 4321 } = {}) {
+export function crearServidor({ outDir = 'out', paramsFile = path.resolve('params/contribuyente.json'), hoy = null, puerto = 4321, lanzarActualizacion = undefined } = {}) {
+  const opcionesActualizar = { lanzar: lanzarActualizacion };
   const permitidos = new Set([`127.0.0.1:${puerto}`, `localhost:${puerto}`]);
   const origenes = new Set([...permitidos].map((h) => `http://${h}`));
   const json = (res, status, cuerpo) => {
@@ -67,6 +70,13 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
       }
       if (ruta === 'GET /api/pendientes') return json(res, 200, pendientesDeCarga(outDir, fecha, { paramsFile }));
       if (ruta === 'GET /api/conceptos') return json(res, 200, CONCEPTOS);
+      if (ruta === 'GET /api/actualizar') return json(res, 200, estadoActualizacion());
+      if (ruta === 'GET /api/resumen') {
+        const mes = url.searchParams.get('mes') || mesAnterior(fecha);
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { error: 'mes inválido' });
+        const { mes: m, impuestos } = resumenImpuestos(outDir, { hoy: fecha, mes, paramsFile });
+        return json(res, 200, { mes: m, impuestos });
+      }
       if (ruta === 'GET /api/pdf') return json(res, 200, [
         ...listarCm03(outDir).map((c) => ({ documento: 'cm03', id: c.id, archivo: c.archivo, cuando: c.cuando, periodo: c.periodo, version: c.rectificativa, estado: c.estado, motivos: c.motivos, determinado: c.impuestoDeterminadoTotal, aPagar: c.totalAPagarDeclarado })),
         ...listarDdjjGanancias(outDir).map((d) => ({ documento: 'ddjj-ganancias', id: d.id, archivo: d.archivo, cuando: d.cuando, periodo: d.anio, formulario: d.formulario, version: d.secuencia, estado: d.estado, motivos: d.motivos, determinado: d.impuestoDeterminado,
@@ -82,6 +92,7 @@ export function crearServidor({ outDir = 'out', paramsFile = path.resolve('param
         if (ruta === 'POST /api/manuales/guardar') return json(res, 200, guardarManual(outDir, cuerpo));
         if (ruta === 'POST /api/manuales/eliminar') return json(res, 200, eliminarManual(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/importar') return json(res, 200, await importarCm03(outDir, { nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null }));
+        if (ruta === 'POST /api/actualizar') return json(res, 202, iniciarActualizacion({ lanzar: opcionesActualizar.lanzar }));
         if (ruta === 'POST /api/pdf/importar') return json(res, 200, await importarPdfFiscal(outDir, { tipo: cuerpo.tipo || null, nombre: cuerpo.nombre, contenido: cuerpo.contenido, mes: cuerpo.mes || null, anio: cuerpo.anio || null }));
         if (ruta === 'POST /api/pdf/eliminar') return json(res, 200, cuerpo.documento === 'ddjj-ganancias' ? eliminarDdjjGanancias(outDir, String(cuerpo.id ?? '')) : eliminarCm03(outDir, String(cuerpo.id ?? '')));
         if (ruta === 'POST /api/cm03/eliminar') return json(res, 200, eliminarCm03(outDir, String(cuerpo.id ?? '')));

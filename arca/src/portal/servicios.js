@@ -191,16 +191,16 @@ export const SERVICIOS = [
   // Bienes Personales (F.762): la home muestra "Mis declaraciones juradas presentadas" (texto
   // confirmado) pero el botón CONSULTAR renderiza tarde y no se capturó. Intentamos abrir esa
   // sección por su texto (tarjeta/enlace) o por CONSULTAR; ambos opcionales. La grilla es async.
-  { id: 'bienes-personales', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
+  { id: 'bienes-personales', pospuesto: 'Bienes Personales: después de IVA, IIBB y Ganancias', nombre: 'BIENES PERSONALES WEB', terminos: ['BIENES PERSONALES WEB', 'BIENES PERSONALES'], fuente: 9, confirmado: false, extractor: 'generico',
     ruta: [{ texto: 'Mis declaraciones juradas presentadas', opcional: true }, { texto: 'CONSULTAR', opcional: true }] },
   // CCMA: lector propio (ccma.js) para sus tablas sin <th>; solo lee, sin completar campos ni tocar «Pagar» (Pag_Princ).
-  { id: 'ccma', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'ccma',
+  { id: 'ccma', pospuesto: 'autónomos: después de IVA, IIBB y Ganancias', nombre: 'CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS', terminos: ['CCMA', 'CUENTA CORRIENTE DE CONTRIBUYENTES'], fuente: 13, confirmado: false, extractor: 'ccma',
     columnasEsperadas: ['Periodo'] },
-  { id: 'mis-facilidades', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
+  { id: 'mis-facilidades', pospuesto: 'planes de pago: después de IVA, IIBB y Ganancias', nombre: 'MIS FACILIDADES', terminos: ['MIS FACILIDADES'], fuente: 15, confirmado: true, extractor: 'tabla',
     columnasEsperadas: ['Presentacion', 'Numero', 'Cuotas', 'Estado'] },
   // Ventanilla = Domicilio Fiscal Electrónico (nombre real del servicio en el portal).
   // Columnas reales (diagnóstico 19-49-58): Notificado / Asunto / Organismo / Representado / Clasificación / Recibido.
-  { id: 'ventanilla', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico',
+  { id: 'ventanilla', pospuesto: 'domicilio fiscal electrónico: después de IVA, IIBB y Ganancias', nombre: 'DOMICILIO FISCAL ELECTRÓNICO', terminos: ['DOMICILIO FISCAL ELECTRÓNICO', 'VENTANILLA'], fuente: 16, confirmado: false, extractor: 'generico',
     columnasEsperadas: ['Asunto', 'Organismo', 'Recibido'] },
   // Mis Retenciones VA ÚLTIMO a propósito (ver nota de ORDEN arriba): su consulta itera impuesto
   // por impuesto en mirequa-web /resultados (combo EJ2 #selectImpuestos, no <select> nativo; hay
