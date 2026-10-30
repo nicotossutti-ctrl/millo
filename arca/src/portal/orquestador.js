@@ -412,7 +412,7 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       if (g.navegar === 'consultas-pagos') {
         const r = await leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log });
         sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, finPaginacion: r.finPaginacion, consultas: r.consultas, exportaciones: r.exportaciones });
-        intentos.push({ id: idSub, dirIntento, clave: r.consultas.some((c) => c.estado === 'consultada') ? claveDe(r, periodo) : null, resultado: r });
+        intentos.push({ id: idSub, dirIntento, clave: r.consultas.some((c) => c.estado === 'consultada') ? r.clave : null, resultado: r });
         log(`  sifere/${g.id}: ${r.consultas.map((c) => `${c.jurisdiccion}: ${c.estado}${c.filas ? ` (${c.filas})` : ''}`).join(' · ') || r.motivo}`);
         continue;
       }
@@ -513,8 +513,15 @@ async function leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento,
     base.archivos.push(`${idSub}.csv`);
   }
   const confirmadas = res.consultas.every((c) => c.estado === 'consultada');
-  // filas = lo guardado (pagos + constancias de jurisdicciones consultadas sin pagos o sin confirmar); pagos, aparte.
-  const r = { ...base, filas: filas.length, pagos: res.rows.length, columnas, estado: filas.length ? 'extraido' : 'sin-datos', consultas: res.consultas, exportaciones: res.exportaciones,
+  // filas = lo guardado (pagos + constancias de jurisdicciones consultadas sin pagos o sin confirmar). Los PAGOS reales se
+  // cuentan aparte, por jurisdicción (registros/registrosPorGrupo): la conservación los compara para que una lectura nueva
+  // «sin pagos» nunca reemplace pagos guardados antes (conservacion.js > reduccionDeRegistros).
+  const registrosPorGrupo = Object.fromEntries(res.consultas.filter((c) => c.estado === 'consultada').map((c) => [c.jurisdiccion, c.filas ?? 0]));
+  // La clave es el ANTICIPO consultado (no la ventana de la corrida): una lectura de otro día del mismo anticipo se compara
+  // con la guardada en vez de sumarse aparte.
+  const [ya, ma] = mes.split('-').map(Number);
+  const clave = `${mes}-01_${new Date(Date.UTC(ya, ma, 0)).toISOString().slice(0, 10)}`;
+  const r = { ...base, clave, filas: filas.length, pagos: res.rows.length, registros: res.rows.length, registrosPorGrupo, columnas, estado: filas.length ? 'extraido' : 'sin-datos', consultas: res.consultas, exportaciones: res.exportaciones,
     rangoOk: true, rangoAplicado: { desde: `${mes}-01`, hasta: `${mes}-01` },
     finPaginacion: res.consultas.every((c) => c.paginas !== 'incompleta') ? 'sin-siguiente' : null,
     ceroConfirmado: !res.rows.length && confirmadas,
@@ -522,6 +529,10 @@ async function leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento,
   // El período consultado (el anticipo, como AAAA-MM-01) es la columna de fecha que se verifica contra la ventana.
   r.fechas = verificarFechas(columnas, filas, periodo.desde, periodo.hasta, 'Período consultado');
   r.calidad = evaluarCalidad({ id: idSub, columnasEsperadas: ['Jurisdicción consultada'] }, r, periodo);
+  // Una lectura con alguna jurisdicción sin consulta confirmada, o con la paginación incompleta, no es completa: queda
+  // como evidencia (nunca vigente), aunque las constancias formen una grilla «válida».
+  const faltas = [!confirmadas ? r.motivo : null, r.finPaginacion !== 'sin-siguiente' ? 'paginación incompleta en alguna jurisdicción' : null].filter(Boolean);
+  if (faltas.length) r.calidad = { ...r.calidad, nivel: r.filas ? 'obtenido' : 'sin-datos', validado: false, apto: false, exito: false, motivos: [...r.calidad.motivos, ...faltas] };
   return r;
 }
 

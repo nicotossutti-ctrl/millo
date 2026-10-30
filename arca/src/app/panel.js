@@ -244,10 +244,13 @@ export function volantePagado(estado) {
  * resultado ('consultada' o 'sin consulta confirmada', con su motivo), según las filas de constancia que se guardan.
  */
 export function pagosConsultasIibb(datosDir, mes) {
-  const out = []; const vistos = new Set(); let consultado = false; const consultas = new Map();
+  const out = []; const vistos = new Set(); let consultado = false; const consultas = new Map(); const avisos = [];
   const marcar = (cod, estado, motivo) => { if (cod && (consultas.get(cod)?.estado !== 'consultada')) consultas.set(cod, { estado, motivo }); };
   for (const v of vigentes(datosDir, 'sifere-consultas-web-pagos')) {
     consultado = true;
+    // Una lectura posterior con menos pagos no reemplazó a esta (conservación): se avisa, sin borrar ni sumar nada.
+    const pr = v.entrada.pendienteRevision;
+    if (pr?.grupos && v.clave.startsWith(`${mes}-`)) avisos.push(`La consulta del ${pr.cuando} trajo menos pagos (${pr.grupos.map((g) => `${g.grupo ?? 'total'}: ${g.antes} → ${g.ahora}`).join('; ')}); se conservan los pagos guardados el ${v.entrada.cuando}: revisar en SIFERE.`);
     for (const t of v.tablas) {
       const h = t.headers.map(norm);
       const idx = (re, no = null) => h.findIndex((x) => re.test(x) && !(no && no.test(x)));
@@ -276,7 +279,7 @@ export function pagosConsultasIibb(datosDir, mes) {
       }
     }
   }
-  return { pagos: out, consultado, consultas };
+  return { pagos: out, consultado, consultas, avisos };
 }
 
 export function volantesSifere(datosDir, mes) {
@@ -404,7 +407,7 @@ export function panelMes(outDir, mes, { hoy = new Date().toISOString().slice(0, 
       .map((x) => ({ importe: x.importe, fecha: x.fecha ?? null, jurisdiccion: null, comprobante: x.comprobante ?? null, verificado: x.nivel === 'verificado', manual: x.nivel !== 'verificado', nivel: x.nivel, fuente: x.fuente }));
     const sinConfirmar = [...ip.volantesSinPago.map((v) => ({ importe: v.importe, estado: v.estado, verificado: false, fuente: 'SIFERE: volante generado' })),
       ...ip.volantesInciertos.map((v) => ({ importe: v.importe, estado: `${v.estado} · posible mismo pago que uno de SIFERE Consultas`, comprobante: v.vep, verificado: false, fuente: v.fuente }))];
-    return conciliarIibb({ jurisdicciones: cmv.jurisdicciones, pagos: [...pc.pagos, ...otros, ...sinConfirmar], consultado: pc.consultado, consultas: pc.consultas });
+    return { ...conciliarIibb({ jurisdicciones: cmv.jurisdicciones, pagos: [...pc.pagos, ...otros, ...sinConfirmar], consultado: pc.consultado, consultas: pc.consultas }), avisos: pc.avisos };
   })() : null;
   const iibb = {
     impuesto: 'Ingresos Brutos', periodo: mes, declarado: iibbDeclarado, aPagar: iibbAPagar, estimado: iibbEstimado, pagos: iibbPagado,

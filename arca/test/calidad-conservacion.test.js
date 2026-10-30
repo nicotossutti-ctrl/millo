@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fechaIso, verificarFechas, resumenEstados, evaluarCalidad, columnasFaltantes, estadoInforme } from '../src/portal/calidad.js';
-import { rangoResultado, debeReemplazar, conservarIntento, verificarArchivos, leerVigente, leerIntentos, claveDe } from '../src/portal/conservacion.js';
+import { rangoResultado, debeReemplazar, evaluarReemplazo, reduccionDeRegistros, conservarIntento, verificarArchivos, leerVigente, leerIntentos, claveDe } from '../src/portal/conservacion.js';
 import { mesesCompletos, compactarMeses, generarMatrizCobertura } from '../src/portal/coberturaHistorica.js';
 import { enlaceDeConsultaValido, drillHaciaGrilla } from '../src/portal/navegar.js';
 import { ejecutarTodo, fuentesDe } from '../src/portal/orquestador.js';
@@ -761,4 +761,18 @@ test('el informe muestra como VALIDADO un cero por cartel (no como con-datos)', 
   assert.equal(r.filas, 0);
   assert.match(r.motivo, /cero confirmado por ARCA.*No registra deudas/);
   assert.equal(leerVigente(path.join(baseDir, 'datos'), servicio.id).acumulado.filas, 0);
+});
+
+test('conservación: con registros reales declarados, menos registros en un grupo no reemplaza aunque las filas sean iguales', () => {
+  const cal = { nivel: 'validado', validado: true, total: 'coincide' };
+  const vigente = { rango: 2, nivel: 'validado', filas: 3, registros: 2, registrosPorGrupo: { A: 1, B: 0, C: 1 } };
+  const sinRegistros = { calidad: cal, filas: 3, registros: 0, registrosPorGrupo: { A: 0, B: 0, C: 0 } };
+  const d = evaluarReemplazo(sinRegistros, vigente);
+  assert.equal(d.reemplaza, false, 'ni el total que coincide habilita borrar registros');
+  assert.deepEqual(d.reduccion.grupos, [{ grupo: 'A', antes: 1, ahora: 0 }, { grupo: 'C', antes: 1, ahora: 0 }]);
+  // Mismo total, pero repartido distinto: también baja en un grupo.
+  assert.equal(evaluarReemplazo({ calidad: cal, filas: 3, registros: 2, registrosPorGrupo: { A: 2, B: 0, C: 0 } }, vigente).reemplaza, false);
+  assert.equal(evaluarReemplazo({ calidad: cal, filas: 3, registros: 3, registrosPorGrupo: { A: 1, B: 1, C: 1 } }, vigente).reemplaza, true);
+  // Un vigente sin registros declarados (otras fuentes) se compara como siempre, por filas.
+  assert.equal(reduccionDeRegistros(sinRegistros, { filas: 3 }), null);
 });

@@ -74,7 +74,7 @@ async function conCm03(out) {
 }
 
 /** SIFERE Consultas SIMULADO como en la guía oficial: «SIFERE» > «Pagos» > período (mes/año desde-hasta) y jurisdicción > «Buscar». */
-function moduloSimulado(ctx, { conFiltros = true } = {}) {
+function moduloSimulado(ctx, { conFiltros = true, sinOpcion = null } = {}) {
   const H = 'https://consultas.comarb.gob.ar/consultas/';
   const menu = `<nav><a href="Inicio.do">INICIO</a> <a href="Padron.do">PADRON WEB</a> <button onclick="document.getElementById('m').style.display='block'">SIFERE</button>
     <div id="m" style="display:none"><a href="DDJJ.do">Mensuales</a> <a href="Pagos.do">Pagos</a> <a href="Resumen.do">Resumen de DDJJs y Pagos</a></div>
@@ -82,13 +82,13 @@ function moduloSimulado(ctx, { conFiltros = true } = {}) {
   const opciones = (xs) => xs.map((x) => `<option value="${x[0]}">${x[1]}</option>`).join('');
   const meses = opciones(Array.from({ length: 12 }, (_, i) => [String(i + 1).padStart(2, '0'), String(i + 1).padStart(2, '0')]));
   const anios = opciones([['2025', '2025'], ['2026', '2026']]);
-  const jur = opciones([['', 'Seleccione'], ['901', '901 - CABA'], ['902', '902 - Buenos Aires'], ['904', '904 - Córdoba'], ['921', '921 - Santa Fe']]);
+  const jur = opciones([['', 'Seleccione'], ['901', '901 - CABA'], ['902', '902 - Buenos Aires'], ['904', '904 - Córdoba'], ['921', '921 - Santa Fe']].filter((x) => x[0] !== sinOpcion));
   const form = conFiltros ? `<form action="Pagos.do"><table><tr><td>Anticipo desde</td><td><select name="md">${meses}</select> / <select name="ad">${anios}</select></td>
     <td>Anticipo hasta</td><td><select name="mh">${meses}</select> / <select name="ah">${anios}</select></td></tr>
     <tr><td>Jurisdicción</td><td><select name="j">${jur}</select></td></tr></table><button type="submit">Buscar</button></form>` : '<p>Seleccione los datos</p>';
-  const PAGOS = { 902: [['202609', '902 - Buenos Aires', '14/10/2026', '100,00', 'Pagado', '555000111']], 921: [['202609', '921 - Santa Fe', '15/10/2026', '300,00', 'Pagado', '555000113']] };
-  const pedidos = [];
-  return { H, pedidos, rutear: () => ctx.route(`${H}**`, (r) => {
+  const sim = { H, pedidos: [], pagos: { 902: [['202609', '902 - Buenos Aires', '14/10/2026', '100,00', 'Pagado', '555000111']], 921: [['202609', '921 - Santa Fe', '15/10/2026', '300,00', 'Pagado', '555000113']] } };
+  const pedidos = sim.pedidos;
+  sim.rutear = () => ctx.route(`${H}**`, (r) => {
     const u = new URL(r.request().url()); pedidos.push(u.pathname + u.search);
     const html = (cuerpo) => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: `<html><body>${menu}${cuerpo}</body></html>` });
     if (/Exportar\.do/.test(u.pathname)) return r.fulfill({ status: 200, headers: { 'content-type': 'application/vnd.ms-excel', 'content-disposition': `attachment; filename="pagos-${u.searchParams.get('j')}.xls"` }, body: `pagos ${u.searchParams.get('j')}` });
@@ -97,13 +97,14 @@ function moduloSimulado(ctx, { conFiltros = true } = {}) {
       if (!q.j) return html(form);
       // Solo responde con el período y la jurisdicción bien elegidos.
       if (q.md !== '09' || q.ad !== '2026' || q.mh !== '09' || q.ah !== '2026') return html(`${form}<p>Período inválido</p>`);
-      const filas = PAGOS[q.j];
+      const filas = sim.pagos[q.j];
       if (!filas) return html(`${form}<p>No se encontraron pagos para la consulta.</p>`);
       return html(`${form}<table><thead><tr><th>Anticipo</th><th>Jurisdicción</th><th>Fecha de Pago</th><th>Importe</th><th>Estado</th><th>Número VEP</th></tr></thead><tbody>
         ${filas.map((f) => `<tr>${f.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table><a href="Exportar.do?j=${q.j}">Exportar a Excel</a>`);
     }
     return html('<h1>SIFERE Web - Consultas</h1>');
-  }) };
+  });
+  return sim;
 }
 
 test('SIFERE Consultas (simulado): «SIFERE» > «Pagos», septiembre y una consulta por jurisdicción de la CM03; nunca «Pagar» ni «Generar VEP»', async (t) => {
@@ -179,5 +180,73 @@ test('SIFERE Consultas (simulado): sin una consulta de «Pagos» inequívoca no 
     assert.equal(r.filas, 0);
     assert.match(JSON.stringify(r.validaciones), /no se elige uno a ciegas/);
     assert.deepEqual(pedidos, ['https://consultas.comarb.gob.ar/consultas/Portada.do'], 'no se hizo ningún clic');
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+/** Una corrida de SIFERE Consultas sobre el módulo simulado, con la conservación real en out/datos. */
+async function correrConsultas(ctx, sim, out, nombre) {
+  const pg = await ctx.newPage(); await pg.goto(`${sim.H}Inicio.do`);
+  const r = await correrUno({ cfg: { outDir: out }, page: null, context: ctx, abrirServicio: async () => pg }, { ...SERVICIOS.find((s) => s.id === 'sifere-consultas-web') },
+    { baseDir: path.join(out, nombre), periodo: { desde: '2026-09-01', hasta: '2026-10-28' }, datosDir: path.join(out, 'datos') });
+  await pg.close();
+  return r;
+}
+
+test('SIFERE Consultas (simulado): una consulta nueva «sin pagos» en las tres jurisdicciones NO reemplaza los pagos guardados', async (t) => {
+  const b = await navegador(t); if (!b) return;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-c-'));
+  try {
+    if (!(await conCm03(out))) { t.skip('sin navegador para la CM03'); return; }
+    const ctx = await b.newContext({ acceptDownloads: true });
+    const sim = moduloSimulado(ctx); await sim.rutear();
+    const { pagosConsultasIibb, panelMes } = await import('../src/app/panel.js');
+    const datosDir = path.join(out, 'datos');
+    // 1.ª corrida: [pago Buenos Aires, sin pagos Córdoba, pago Santa Fe] = 3 filas guardadas, 2 pagos reales.
+    const r1 = await correrConsultas(ctx, sim, out, 'corrida1');
+    assert.ok(r1.conservacion.some((c) => c.promovido), JSON.stringify(r1.conservacion));
+    const vig = path.join(datosDir, 'sifere-consultas-web-pagos', 'vigente.json');
+    const antes = JSON.parse(fs.readFileSync(vig, 'utf8'));
+    assert.deepEqual(Object.keys(antes), ['2026-09-01_2026-09-30'], 'la clave es el anticipo consultado');
+    assert.equal(antes['2026-09-01_2026-09-30'].filas, 3);
+    assert.equal(antes['2026-09-01_2026-09-30'].registros, 2);
+    // 2.ª corrida: SIFERE responde «sin pagos» en las tres = también 3 filas, 0 pagos. Mismo nivel, mismas filas.
+    sim.pagos = {};
+    const r2 = await correrConsultas(ctx, sim, out, 'corrida2');
+    const c2 = r2.conservacion.find((c) => c.id === 'sifere-consultas-web-pagos');
+    assert.equal(c2.promovido, false, JSON.stringify(c2));
+    assert.match(c2.motivo, /Buenos Aires: 1 → 0; Santa Fe: 1 → 0/);
+    const despues = JSON.parse(fs.readFileSync(vig, 'utf8'))['2026-09-01_2026-09-30'];
+    assert.equal(despues.cuando, 'corrida1', 'el vigente sigue siendo la primera lectura');
+    assert.deepEqual(despues.pendienteRevision.grupos, [{ grupo: 'Buenos Aires', antes: 1, ahora: 0 }, { grupo: 'Santa Fe', antes: 1, ahora: 0 }]);
+    // La segunda lectura queda como evidencia (intento) y como aviso; los dos pagos siguen.
+    assert.ok(fs.existsSync(path.join(datosDir, 'sifere-consultas-web-pagos', 'intentos', 'corrida2', 'sifere-consultas-web-pagos.csv')));
+    assert.deepEqual(pagosConsultasIibb(datosDir, '2026-09').pagos.map((p) => [p.jurisdiccion, p.importe, p.verificado]), [['902 - Buenos Aires', 100, true], ['921 - Santa Fe', 300, true]]);
+    const c = panelMes(out, '2026-09', { hoy: '2026-10-29', paramsFile: path.join(out, 'x.json') }).iibb.conciliacion;
+    assert.deepEqual(c.filas.filter((f) => f.aPagar > 0).map((f) => [f.jurisdiccion, f.estado]), [['Buenos Aires', 'Pagado'], ['Córdoba', 'Sin pagos informados por SIFERE'], ['Santa Fe', 'Pagado']]);
+    assert.equal(c.avisos.length, 1); assert.match(c.avisos[0], /trajo menos pagos.*se conservan/);
+    // Una lectura con MÁS pagos (Córdoba aparece) sí reemplaza, sin perder los anteriores.
+    sim.pagos = { 902: [['202609', '902 - Buenos Aires', '14/10/2026', '100,00', 'Pagado', '555000111']], 904: [['202609', '904 - Córdoba', '16/10/2026', '200,00', 'Pagado', '555000112']],
+      921: [['202609', '921 - Santa Fe', '15/10/2026', '300,00', 'Pagado', '555000113']] };
+    const r3 = await correrConsultas(ctx, sim, out, 'corrida3');
+    assert.equal(r3.conservacion.find((x) => x.id === 'sifere-consultas-web-pagos').promovido, true);
+    assert.equal(pagosConsultasIibb(datosDir, '2026-09').pagos.length, 3);
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+test('SIFERE Consultas (simulado): con una jurisdicción sin consulta confirmada la lectura no queda validada ni vigente', async (t) => {
+  const b = await navegador(t); if (!b) return;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-c-'));
+  try {
+    if (!(await conCm03(out))) { t.skip('sin navegador para la CM03'); return; }
+    const ctx = await b.newContext({ acceptDownloads: true });
+    const sim = moduloSimulado(ctx, { sinOpcion: '921' }); await sim.rutear(); // Santa Fe no se puede elegir
+    const r = await correrConsultas(ctx, sim, out, 'corrida');
+    const sub = JSON.parse(fs.readFileSync(path.join(out, 'corrida', 'sifere-consultas-web', 'resultado.json'), 'utf8')).sub[0];
+    assert.deepEqual(sub.consultas.map((c) => [c.jurisdiccion, c.estado]), [['Buenos Aires', 'consultada'], ['Córdoba', 'consultada'], ['Santa Fe', 'sin consulta confirmada']]);
+    assert.equal(sub.calidad.validado, false); assert.equal(sub.calidad.nivel, 'obtenido');
+    assert.ok(sub.calidad.motivos.some((m) => /Santa Fe/.test(m)), JSON.stringify(sub.calidad.motivos));
+    assert.equal(r.conservacion.find((c) => c.id === 'sifere-consultas-web-pagos').promovido, false);
+    assert.ok(!fs.existsSync(path.join(out, 'datos', 'sifere-consultas-web-pagos', 'vigente.json')), 'nada vigente');
+    assert.ok(fs.existsSync(path.join(out, 'datos', 'sifere-consultas-web-pagos', 'intentos', 'corrida', 'sifere-consultas-web-pagos.csv')), 'queda como evidencia');
   } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
 });

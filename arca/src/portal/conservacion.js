@@ -8,6 +8,8 @@
  *   - un intento de igual nivel con MENOS filas no reemplaza, salvo que el total de ARCA confirme
  *     la reducción: queda pendiente de revisión (el organismo puede haber cambiado registros, o la
  *     corrida pudo perder cobertura sin detectarlo);
+ *   - si la fuente distingue registros reales de constancias (reduccionDeRegistros), una lectura con
+ *     menos registros en algún grupo no reemplaza nunca, aunque tenga las mismas filas;
  *   - la sustitución es segura: se copia a una carpeta temporal, se verifica, el vigente anterior
  *     pasa a respaldos/ y recién entonces la copia nueva ocupa su lugar. Si algo falla, el anterior
  *     queda intacto o se restaura; una interrupción a mitad se repara en la corrida siguiente.
@@ -62,6 +64,11 @@ export function evaluarReemplazo(nuevo, vigente) {
   if (!vigente) return { reemplaza: true };
   const b = vigente.rango ?? 0;
   if (a < b) return { reemplaza: false, motivo: `no es mejor que el vigente (nivel ${nuevo.calidad.nivel} < ${vigente.nivel ?? b})` };
+  const grupos = reduccionDeRegistros(nuevo, vigente);
+  if (grupos) {
+    return { reemplaza: false, reduccion: { antes: vigente.registros ?? null, ahora: nuevo.registros ?? 0, confirmada: false, grupos },
+      motivo: `trae menos registros reales que el vigente (${grupos.map((g) => `${g.grupo ?? 'total'}: ${g.antes} → ${g.ahora}`).join('; ')}): una lectura nueva sin esos registros no borra los guardados; queda pendiente de revisión` };
+  }
   const antes = vigente.filas ?? 0; const ahora = nuevo.filas ?? 0;
   if (ahora < antes) {
     if (nuevo.calidad?.total === 'coincide') return { reemplaza: true, reduccion: { antes, ahora, confirmada: true } };
@@ -69,6 +76,21 @@ export function evaluarReemplazo(nuevo, vigente) {
       motivo: `trae ${ahora} filas y el vigente ${antes}: una reducción sin el total de ARCA que la confirme no reemplaza datos; queda pendiente de revisión` };
   }
   return { reemplaza: true };
+}
+
+/**
+ * Fuentes cuyas filas guardadas mezclan REGISTROS reales con constancias de cobertura (p. ej. SIFERE Consultas: los pagos
+ * y una fila «sin pagos» por jurisdicción) declaran `registros` y `registrosPorGrupo`. Contar filas no alcanza: una
+ * constancia no prueba que la lectura nueva sea tan completa como la anterior. Devuelve los grupos en que la lectura nueva
+ * trae MENOS registros que el vigente, o null. Ninguna reducción se da por confirmada: no hay un total del organismo que
+ * pruebe que un pago dejó de existir (una anulación tendría que identificarse). Pura.
+ */
+export function reduccionDeRegistros(nuevo, vigente) {
+  if (vigente?.registros == null) return null;
+  const antes = vigente.registrosPorGrupo ?? {}; const ahora = nuevo?.registrosPorGrupo ?? {};
+  const grupos = Object.entries(antes).filter(([g, n]) => n > (ahora[g] ?? 0)).map(([grupo, n]) => ({ grupo, antes: n, ahora: ahora[grupo] ?? 0 }));
+  if (!grupos.length && vigente.registros > (nuevo?.registros ?? 0)) grupos.push({ grupo: null, antes: vigente.registros, ahora: nuevo?.registros ?? 0 });
+  return grupos.length ? grupos : null;
 }
 
 export function debeReemplazar(nuevo, vigente) { return evaluarReemplazo(nuevo, vigente).reemplaza; }
@@ -240,6 +262,7 @@ export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIn
       cuando, rango, nivel: resultado.calidad?.nivel ?? null, estado: resultado.estado, filas: resultado.filas ?? 0, informados: resultado.informados ?? null,
       desde: desde ?? null, hasta: hasta ?? null, acumulado: clave === 'acumulado', archivos: (resultado.archivos ?? []).map((f) => path.basename(f)),
       calidad: res.calidad ?? null, ceroConfirmado: resultado.ceroConfirmado ?? null,
+      ...(resultado.registros != null ? { registros: resultado.registros, registrosPorGrupo: resultado.registrosPorGrupo ?? null } : {}),
     };
     const sust = sustituirVigente({ base, clave, dirOrigen: dirI, archivos: entrada.archivos, filas: entrada.filas, meta: entrada, cuandoPrevio: previo?.cuando, ops });
     if (!sust.ok) {
@@ -258,7 +281,8 @@ export function conservarIntento({ datosDir, id, cuando, clave, resultado, dirIn
   }
   // Reducción sin confirmar: el vigente sigue, y el intento queda marcado para revisión.
   if (!promovido && decision.reduccion && !decision.reduccion.confirmada && previo) {
-    manif[clave] = { ...previo, pendienteRevision: { cuando, filas: resultado.filas ?? 0, nivel: resultado.calidad?.nivel ?? null, motivo: decision.motivo } };
+    manif[clave] = { ...previo, pendienteRevision: { cuando, filas: resultado.filas ?? 0, nivel: resultado.calidad?.nivel ?? null, motivo: decision.motivo,
+      ...(decision.reduccion.grupos ? { registros: resultado.registros ?? 0, grupos: decision.reduccion.grupos } : {}) } };
     escribirAtomico(manifFile, JSON.stringify(manif, null, 2));
   }
   const linea = { cuando, clave, estado: resultado?.estado ?? null, nivel: resultado?.calidad?.nivel ?? null, filas: resultado?.filas ?? 0, rango, promovido,

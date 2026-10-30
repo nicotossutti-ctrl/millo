@@ -279,7 +279,13 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
   reconocen por sus opciones (meses, años, jurisdicciones), se verifica que quedaron elegidos y solo se toca «Buscar»;
   nunca nada que diga pagar, VEP, generar o volante. Si un paso no es inequívoco, esa jurisdicción queda «sin consulta
   confirmada» y no se guarda como cero. Se guardan los pagos y una constancia por jurisdicción consultada sin pagos; la
-  exportación a Excel, si existe, en `out/importados/sifere-pagos/`. En el panel, «Pagos por jurisdicción»:
+  exportación a Excel, si existe, en `out/importados/sifere-pagos/`. Conservación, por anticipo:
+  - se guarda solo una lectura con TODAS las jurisdicciones consultadas y la paginación completa; si no, queda como
+    evidencia en `intentos/`;
+  - los pagos se cuentan aparte de las constancias, por jurisdicción: una lectura nueva con menos pagos en alguna (p. ej.
+    «sin pagos» donde antes había uno) no reemplaza lo guardado; queda pendiente de revisión, con un aviso en el panel.
+
+  En el panel, «Pagos por jurisdicción»:
   - un pago cuenta solo con evidencia positiva (estado pagado, o fecha de pago efectiva en la consulta de pagos); un VEP
     o volante generado, una fila pendiente o una carga a mano no se computan;
   - el volante pagado de SIFERE DDJJ y el pago de la consulta son el mismo si comparten número de VEP; con el mismo

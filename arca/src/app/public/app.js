@@ -385,6 +385,7 @@ function bloqueConciliacionIibb(c) {
       h('tr', {}, h('td', {}, h('strong', {}, 'Total')), h('td', { class: 'num' }, h('strong', {}, fmt(c.total.aPagar))),
         h('td', { class: 'num' }, c.total.pagadoVerificado == null ? '—' : fmt(c.total.pagadoVerificado)),
         h('td', { class: 'num', title: c.total.motivo ?? null }, c.total.saldo == null ? h('span', {}, c.total.saldoTexto ?? 'Sin verificar', c.total.motivo ? h('div', { class: 'nota' }, c.total.motivo) : null) : fmt(c.total.saldo))))),
+    ...(c.avisos ?? []).map((a) => h('div', { class: 'aviso' }, a)),
     c.sinImputar.length ? h('div', { class: 'aviso' }, `Pagos verificados pendientes de imputación (no dicen su jurisdicción; no se reparten): ${c.sinImputar.map((p) => `${fmt(p.importe)}${p.fecha ? ` el ${fecha(p.fecha)}` : ''} (${p.fuente})`).join(' · ')}`) : null,
     c.sinConfirmar.length ? h('p', { class: 'nota' }, `Sin confirmar, no se computan (un VEP o volante generado no es un pago): ${c.sinConfirmar.map((p) => `${fmt(p.importe)}${p.estado ? ` · ${p.estado}` : ''}${p.motivo ? ` · ${p.motivo}` : ''}`).join(' · ')}`) : null,
     c.manuales?.length ? h('p', { class: 'nota' }, `Cargados a mano (no verificados por el organismo, no se computan): ${c.manuales.map((p) => `${fmt(p.importe)}${p.fecha ? ` el ${fecha(p.fecha)}` : ''}`).join(' · ')}`) : null,

@@ -109,7 +109,7 @@ export function generarMatrizCobertura(datosDir, fuentes, { hoy = new Date().toI
     // Reducciones sin confirmar: el vigente se conservó y el intento nuevo espera revisión.
     const pendientes = regs.filter((r) => r.pendienteRevision).map((r) => ({ clave: r.clave, vigente: r.filas, ...r.pendienteRevision }));
     if (pendientes.length) {
-      nota += ` ⚠ Pendiente de revisión: ${pendientes.map((p) => `${p.clave}: el intento ${p.cuando} trajo ${p.filas} filas y el vigente tiene ${p.vigente} (no se reemplazó)`).join('; ')}.`;
+      nota += ` ⚠ Pendiente de revisión: ${pendientes.map((p) => `${p.clave}: el intento ${p.cuando} ${p.grupos ? `trajo menos registros (${p.grupos.map((g) => `${g.grupo ?? 'total'}: ${g.antes} → ${g.ahora}`).join('; ')})` : `trajo ${p.filas} filas y el vigente tiene ${p.vigente}`} (no se reemplazó)`).join('; ')}.`;
     }
     filas.push({
       id: f.id, nombre: f.nombre, tipo, pendientesRevision: pendientes,
