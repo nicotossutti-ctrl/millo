@@ -19,6 +19,7 @@ import { generarMatrizCobertura } from './coberturaHistorica.js';
 import { correrIvaDdjj } from './ivaDdjj.js';
 import { bajarReportesCm03 } from './sifereReporte.js';
 import { consultarPagosConsultas } from './sifereConsultas.js';
+import { seguirAcceso, clasificarAcceso, codigoDePaginaDeError, paginaDeLaAccion, urlSso } from './acceso.js';
 import { cm03DelPeriodo } from '../app/cm03.js';
 
 const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
@@ -333,58 +334,88 @@ async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
  * 'relevado' con la estructura capturada (acceso ≠ descarga).
  */
 async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
-  let pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
-  // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la
-  // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
-  // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
-  // inicial, no se tipea la clave: la pone la persona. Si no llega, queda 'relevado' honesto.
+  // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la entrada cae en el login de
+  // AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete en la ventana visible (hasta ~3 min) y aterrice en
+  // el módulo. Igual que el login inicial, no se tipea la clave: la pone la persona.
   const hostModulo = servicio.hostModulo ?? /sifereweb\.comarb\.gob\.ar/;
   const enModulo = (u) => hostModulo.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip|^chrome-error:/i.test(u);
-  // Corrida 2026-10-28T21-19-50: el acceso abrió una pestaña de COMARB que no cargó («No se puede acceder a este sitio
-  // web»). Eso no es un login pendiente: se dice así y no se esperan 3 minutos.
-  const sinConexion = async () => {
-    for (const p of sesion?.context?.pages?.() ?? [pagina]) {
-      if (/^chrome-error:/i.test(p.url()) && /comarb/i.test(await p.title().catch(() => ''))) return p;
+  // Solo cuentan las pestañas que abre ESTE acceso (acceso.js). Corrida 2026-10-28: la pestaña de error de
+  // app1.comarb.gob.ar que dejó SIFERE Consultas quedó abierta y se tomaba como fallo de los servicios siguientes.
+  const seg = seguirAcceso(sesion?.context);
+  const accesos = [];
+  const evaluar = async (a) => ({ via: a.via, ...(a.error ? { error: a.error } : {}),
+    ...clasificarAcceso({ url: a.p ? a.p.url() : null, eventos: seg.eventosDe(a.p), codigoPagina: await codigoDePaginaDeError(a.p), hostModulo, sistema: servicio.sistemaSso ?? null,
+      titulo: a.p ? await a.p.title().catch(() => '') : '' }) });
+  const abrir = async (via, objetivo) => {
+    let devuelta = null; let error = null;
+    try { devuelta = await sesion.abrirServicio(objetivo); } catch (e) {
+      if (e?.name === 'DesafioDeSeguridad') throw e;
+      error = sanitizarTexto(e?.message ?? String(e));
     }
-    return null;
+    const p = paginaDeLaAccion(devuelta, seg.paginas);
+    if (p) { seg.seguir(p); await p.waitForTimeout(2500).catch(() => {}); }
+    return { via, p, error };
   };
-  // Corrida 2026-10-22T19-49-58: waitForURL se resolvía con una URL de sifereweb de PASO, justo antes
-  // del redirect a SesionExpirada. Ahora exigimos que la URL quede en el módulo de forma ESTABLE (dos
-  // lecturas seguidas) y, si cae en SesionExpirada, reabrimos la entrada de login (hasta 2 veces).
-  await pagina.waitForTimeout(2500).catch(() => {});
-  let conexionFallida = !!(await sinConexion());
-  // Un solo reintento si COMARB no cargó (corrida del 28/10: fue un corte de conexión, no un login): se cierra la pestaña
-  // con error, se espera un momento y se vuelve a abrir el acceso. Si sigue sin cargar, se registra y se sigue.
-  if (conexionFallida) {
-    log('  SIFERE: COMARB no cargó; reintento una vez en unos segundos.');
-    for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
-    await new Promise((r) => setTimeout(r, servicio.esperaReintentoConexionMs ?? 10000));
-    try { pagina = await sesion.abrirServicio(servicio); await pagina.waitForTimeout(2500).catch(() => {}); conexionFallida = !!(await sinConexion()); } catch { /* sigue fallida */ }
-  }
-  if (!conexionFallida && !enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
-  const limite = Date.now() + 180000;
-  let estables = 0, reintentos = 0;
-  while (!conexionFallida && Date.now() < limite) {
-    if (await sinConexion()) { conexionFallida = true; break; }
-    const u = pagina.url();
-    if (enModulo(u)) {
-      if (++estables >= 2) break;
-    } else {
-      estables = 0;
-      if (/SesionExpirada/i.test(u) && reintentos < 2 && servicio.url) {
-        reintentos++;
-        log(`  SIFERE: sesión expirada, reabro la entrada de login (intento ${reintentos}/2).`);
-        await pagina.goto(servicio.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  // Espera a que la pestaña de la acción llegue al módulo de forma ESTABLE (dos lecturas seguidas; corrida 2026-10-22:
+  // una URL de paso justo antes de «Sesión expirada»). Un error de red o un acceso equivocado no se esperan.
+  const esperarModulo = async (a) => {
+    let est = await evaluar(a);
+    if (!a.p || ['error-red', 'acceso-equivocado', 'en-modulo', 'mantenimiento'].includes(est.estado)) return est;
+    log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
+    const limite = Date.now() + 180000;
+    let estables = 0, reintentos = 0;
+    while (Date.now() < limite && !a.p.isClosed?.()) {
+      // La pestaña nueva tardó más que la espera de la apertura y se devolvió la principal: se pasa a la nueva.
+      const tardia = a.p === sesion?.page ? paginaDeLaAccion(null, seg.paginas) : null;
+      if (tardia && tardia !== a.p) { a.p = tardia; seg.seguir(tardia); }
+      const u = a.p.url();
+      if (/^chrome-error:/i.test(u) || /mantenimiento/i.test(await a.p.title().catch(() => ''))) break;
+      if (enModulo(u)) { if (++estables >= 2) break; } else {
+        estables = 0;
+        if (/SesionExpirada/i.test(u) && reintentos < 2 && servicio.url) {
+          reintentos++;
+          log(`  SIFERE: sesión expirada, reabro la entrada de login (intento ${reintentos}/2).`);
+          await a.p.goto(servicio.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        }
       }
+      await a.p.waitForTimeout(1500).catch(() => {});
     }
-    await pagina.waitForTimeout(1500);
-  }
-  await pagina.waitForLoadState('networkidle').catch(() => {});
-  if (conexionFallida) log('  SIFERE: no se pudo conectar con COMARB (la página no cargó: «No se puede acceder a este sitio web»). No es un login: es el sitio o la red. Sigo con lo que haya.');
+    await a.p.waitForLoadState('networkidle').catch(() => {});
+    est = await evaluar(a);
+    return est;
+  };
+  // Primero el acceso del portal; si no llega (error de red, otro sistema, ninguna pestaña), UNA vez el acceso oficial
+  // de la Comisión Arbitral (SSO de clave fiscal del sistema del módulo) en la misma sesión, o el portal de nuevo.
+  const vias = [{ via: 'portal de ARCA', objetivo: servicio },
+    servicio.sistemaSso ? { via: 'acceso oficial (SSO)', objetivo: { nombre: servicio.nombre, url: urlSso(servicio.sistemaSso) } }
+      : { via: 'portal de ARCA (reintento)', objetivo: servicio, espera: servicio.esperaReintentoConexionMs ?? 10000 }];
+  let pagina = null; let ultimo = null; let errorApertura = null;
+  try {
+    for (const v of vias) {
+      if (v.espera) await new Promise((r) => setTimeout(r, v.espera));
+      const a = await abrir(v.via, v.objetivo);
+      ultimo = await esperarModulo(a);
+      accesos.push(ultimo);
+      const linea = `  SIFERE: acceso por ${v.via}: ${ultimo.detalle}${ultimo.cadena?.length ? ` · recorrido: ${ultimo.cadena.join(' → ')}` : ''}`;
+      log(a.error && !a.p ? `${linea} (${a.error})` : linea);
+      errorApertura = a.error;
+      // El servicio no se pudo abrir (p. ej. no está en el portal) y no hay otro acceso: como antes, sin esperar.
+      if (ultimo.estado === 'sin-pestana' && a.error && !servicio.sistemaSso) break;
+      if (!['error-red', 'acceso-equivocado', 'sin-pestana'].includes(ultimo.estado)) { pagina = a.p; break; }
+      // Solo se cierra la pestaña que abrió este acceso, nunca la principal ni otras.
+      if (a.p && a.p !== sesion?.page) await a.p.close().catch(() => {});
+    }
+  } finally { seg.detener(); }
+  // Sin ninguna pestaña y con un error al abrir (p. ej. el servicio no está en el portal): como antes, es un error.
+  if (!pagina && ultimo?.estado === 'sin-pestana' && errorApertura) throw new Error(errorApertura);
+  // En mantenimiento no se busca nada en la página (se dice lo que mostró el sitio), y la pestaña principal de ARCA nunca
+  // se trata como si fuera el módulo.
+  const accesoFallido = !pagina || ultimo.estado === 'mantenimiento' || (pagina === sesion?.page && ultimo.estado !== 'en-modulo');
+  if (accesoFallido) log(`  SIFERE: no se llegó al módulo (${ultimo.detalle}). No se afirma que el sitio esté caído; sigo con lo demás.`);
   else if (!enModulo(pagina.url())) log('  SIFERE: no se llegó al módulo (login no completado o sesión expirada); sigo con lo que haya.');
   else log(`  SIFERE: en el módulo (${sanitizarUrl(pagina.url()).replace(/^https?:\/\/[^/]+/, '')}).`);
   // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
-  try {
+  if (!accesoFallido) try {
     const sel = pagina.locator('select').first();
     if (await sel.count().catch(() => 0)) {
       const cuit = sesion?.cfg?.cuit ? String(sesion.cfg.cuit).replace(/\D/g, '') : null;
@@ -401,13 +432,13 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
 
   const outBase = sesion?.cfg?.outDir ?? 'out';
   const sub = []; const intentos = [];
-  const enSesion = enModulo(pagina.url());
+  const enSesion = !accesoFallido && enModulo(pagina.url());
   for (const g of servicio.grillas ?? []) {
     const idSub = `${servicio.id}-${g.id}`;
     const dirIntento = ctx.dirIntento?.(idSub) ?? null;
     try {
-      // Sin conexión con COMARB no se intenta nada: se registra y no se pisa lo guardado.
-      if (conexionFallida) throw new Error('no se pudo conectar con COMARB (el sitio no cargó)');
+      // Sin llegar al módulo no se intenta nada: se registra el motivo del acceso y no se pisa lo guardado.
+      if (accesoFallido) throw new Error(`no se llegó al módulo: ${ultimo.detalle}`);
       // SIFERE Consultas: pagos por jurisdicción con sus filtros (sifereConsultas.js); camino propio, sin la grilla genérica.
       if (g.navegar === 'consultas-pagos') {
         const r = await leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log });
@@ -448,12 +479,13 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
       for (const r of reportes.reportes) log(`  sifere/reporte ${r.anticipo}: ${r.decision}${r.estado ? ` (${r.estado})` : ''}${r.motivo ? ` · ${r.motivo}` : ''}`);
     } catch (e) { reportes = { error: sanitizarTexto(e?.message ?? String(e)), reportes: [] }; }
   }
-  const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+  const todas = await relevarTodasLasPaginas(sesion, pagina ?? sesion?.page).catch(() => []);
   escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
-  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes, conexionFallida }, null, 2));
-  if (pagina !== sesion.page) await pagina.close().catch(() => {});
-  // Pestañas de COMARB que no cargaron: se cierran para que no queden abiertas en el resto de la corrida.
-  for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
+  // El recorrido del acceso (solo origen y ruta de cada dirección, sin query ni cookies) queda en el resultado local.
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes, acceso: accesos }, null, 2));
+  if (pagina && pagina !== sesion.page) await pagina.close().catch(() => {});
+  // Las pestañas que abrió ESTE acceso y no cargaron: se cierran para que no queden abiertas en el resto de la corrida.
+  for (const p of seg.paginas) if (p !== sesion?.page && !p.isClosed?.() && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
 
   const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
   const archivos = sub.flatMap((s) => s.archivos ?? []);
@@ -462,12 +494,13 @@ async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
   return {
     estado,
     archivos, filas, intentos,
-    motivo: filas > 0 ? undefined : conexionFallida ? `SIFERE (${servicio.nombre}): no se pudo conectar con COMARB (el sitio no cargó); se conserva lo obtenido antes` : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
+    motivo: filas > 0 ? undefined : accesoFallido ? `SIFERE (${servicio.nombre}): no se llegó al módulo: ${accesos.map((x) => `${x.via}: ${x.detalle}`).join('; ')}; se conserva lo obtenido antes` : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
       : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
     validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
       motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
       finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
     ...(reportes ? { reportesCm03: reportes } : {}),
+    acceso: accesos.map(({ via, estado, tipo, codigo, detalle }) => ({ via, estado, tipo: tipo ?? null, codigo: codigo ?? null, detalle })),
   };
 }
 

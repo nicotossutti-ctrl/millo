@@ -57,11 +57,12 @@ export class Sesion {
 
   async abrir() {
     fs.mkdirSync(this.downloadsDir, { recursive: true });
-    // ARCA_CHROMIUM permite usar un Chromium ya instalado en vez del que baja Playwright.
+    // ARCA_CHROMIUM permite usar un Chromium ya instalado en vez del que baja Playwright; ARCA_CANAL=chrome, el Google
+    // Chrome instalado en la PC (para comparar con el navegador de todos los días si un sitio no carga en el de Playwright).
     // Ventana grande (1920) a propósito: varias pantallas de ARCA son RESPONSIVE y a ancho chico
     // colapsan el menú (p. ej. la barra lateral de Cuentas Tributarias esconde DJ/Pagos/Cuenta
     // Corriente/Compensaciones tras un hamburguesa). A 1920 renderizan expandidas, como en pantalla.
-    this.browser = await chromium.launch({ headless: !this.visible, slowMo: this.visible ? 50 : 0, args: ['--window-size=1920,1080'], executablePath: process.env.ARCA_CHROMIUM || undefined });
+    this.browser = await chromium.launch({ headless: !this.visible, slowMo: this.visible ? 50 : 0, args: ['--window-size=1920,1080'], executablePath: process.env.ARCA_CHROMIUM || undefined, channel: process.env.ARCA_CANAL || undefined });
     const sesion = archivoSesion(this.cfg);
     const opts = { acceptDownloads: true, locale: 'es-AR', timezoneId: 'America/Argentina/Buenos_Aires', viewport: { width: 1920, height: 1080 } };
     if (fs.existsSync(sesion)) {

@@ -53,7 +53,9 @@ test('SIFERE: si la pestaña de COMARB no carga, se informa como conexión (no c
     const r = await correrUno({ cfg: { outDir: out }, page: principal, context: ctx, abrirServicio }, { ...SERVICIOS.find((s) => s.id === 'sifere-consultas-web') },
       { baseDir: path.join(out, 'corrida'), periodo: { desde: '2026-09-01', hasta: '2026-09-30' }, datosDir: path.join(out, 'datos'), log: (m) => logs.push(m) });
     assert.ok(Date.now() - inicio < 60000, 'no esperó los 3 minutos del login');
-    assert.match(r.motivo, /no se pudo conectar con COMARB/);
+    assert.match(r.motivo, /no se llegó al módulo: portal de ARCA: el navegador no pudo cargar app1\.comarb\.invalid\/.*; acceso oficial \(SSO\): /);
+    assert.deepEqual(r.acceso.map((a) => [a.via, a.estado]), [['portal de ARCA', 'error-red'], ['acceso oficial (SSO)', 'error-red']]);
+    assert.ok(!/caíd|no funciona/i.test(r.motivo), 'no se afirma que el sitio esté caído');
     assert.ok(!logs.some((l) => /pide login/.test(l)), logs.join('\n'));
     assert.ok(!ctx.pages().some((p) => /^chrome-error:/.test(p.url())), 'la pestaña de error se cerró');
   } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
@@ -248,5 +250,116 @@ test('SIFERE Consultas (simulado): con una jurisdicción sin consulta confirmada
     assert.equal(r.conservacion.find((c) => c.id === 'sifere-consultas-web-pagos').promovido, false);
     assert.ok(!fs.existsSync(path.join(out, 'datos', 'sifere-consultas-web-pagos', 'vigente.json')), 'nada vigente');
     assert.ok(fs.existsSync(path.join(out, 'datos', 'sifere-consultas-web-pagos', 'intentos', 'corrida', 'sifere-consultas-web-pagos.csv')), 'queda como evidencia');
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+/**
+ * Portal de ARCA SIMULADO con la sesión REAL (Sesion._abrirServicio): un enlace «SIFERE WEB - CONSULTAS» que abre una
+ * pestaña nueva hacia el login de clave fiscal de ARCA (`href`), y el SSO, que redirige según `destinoSso(n)`.
+ */
+async function portalSimulado(b, out, { href, destinoSso }) {
+  const { Sesion, URL_PORTAL } = await import('../src/portal/sesion.js');
+  const ctx = await b.newContext({ acceptDownloads: true });
+  const s = new Sesion({ outDir: out }, {}); s.browser = b; s.context = ctx; s.page = await ctx.newPage(); s.esperaLoginMs = 1000;
+  // Primero (la de menor prioridad): nada de ARCA ni de COMARB sale a la red real; lo que no está simulado se corta.
+  await ctx.route(/(afip|comarb|ca)\.gob\.ar/, (r) => r.abort());
+  await ctx.route(URL_PORTAL, (r) => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8',
+    body: `<html><body><h1>Portal</h1><a href="https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_ddjj" target="_blank">SIFERE WEB - DDJJ</a>
+      <a href="${href}" target="_blank">SIFERE WEB - CONSULTAS</a></body></html>` }));
+  const sso = [];
+  // El SSO entrega el acceso con un formulario que se envía solo (POST al sistema). Una redirección 302 no serviría: la
+  // navegación redirigida no pasa por las rutas simuladas y saldría a la red real.
+  await ctx.route('https://auth.afip.gob.ar/**', (r) => { const u = new URL(r.request().url()); sso.push(u.searchParams.get('system'));
+    return r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8',
+      body: `<form method="post" action="${destinoSso(sso.length, u.searchParams.get('system'))}"><input type="hidden" name="token" value="simulado"></form><script>document.forms[0].submit()</script>` }); });
+  return { s, ctx, sso };
+}
+const SSO_CONSULTAS = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_consultas';
+
+test('acceso a SIFERE Consultas: clasificación por pestaña propia, sin query ni datos en el recorrido', async () => {
+  const { urlDeAcceso, tipoErrorRed, clasificarAcceso, paginaDeLaAccion } = await import('../src/portal/acceso.js');
+  assert.equal(urlDeAcceso(`${SSO_CONSULTAS}&token=abc#x`), 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?system=comarb_sifereweb_consultas');
+  assert.equal(urlDeAcceso('https://app1.comarb.gob.ar/consultas/Pagos.do?cuit=20999999991&sign=xyz'), 'https://app1.comarb.gob.ar/consultas/Pagos.do');
+  assert.equal(urlDeAcceso('chrome-error://chromewebdata/'), 'chrome-error');
+  assert.deepEqual(['net::ERR_NAME_NOT_RESOLVED', 'net::ERR_CONNECTION_TIMED_OUT', 'net::ERR_CERT_AUTHORITY_INVALID', 'net::ERR_CONNECTION_RESET', 'net::ERR_FOO', null].map(tipoErrorRed),
+    ['dns', 'tiempo agotado', 'certificado', 'conexión', 'otro', 'desconocido']);
+  const host = /^https?:\/\/(?!www\.)[^/]+\.comarb\.gob\.ar\//i; const sistema = 'comarb_sifereweb_consultas';
+  const ev = (url) => ({ tipo: 'respuesta', url });
+  // El sistema de DDJJ cuando se pidió Consultas: acceso equivocado. Un sistema desconocido no se juzga.
+  assert.equal(clasificarAcceso({ url: 'https://sifereweb.comarb.gob.ar/sifereweb/Inicio.do', eventos: [ev('https://auth.afip.gob.ar/contribuyente_/login.xhtml?system=comarb_sifereweb_ddjj')], hostModulo: host, sistema }).estado, 'acceso-equivocado');
+  assert.equal(clasificarAcceso({ url: 'https://app1.comarb.gob.ar/c/Inicio.do', eventos: [ev('https://auth.afip.gob.ar/contribuyente_/login.xhtml?system=otro_nombre')], hostModulo: host, sistema }).estado, 'en-modulo');
+  const e = clasificarAcceso({ url: 'chrome-error://chromewebdata/', eventos: [ev('https://auth.afip.gob.ar/contribuyente_/login.xhtml?system=comarb_sifereweb_consultas'),
+    { tipo: 'fallo', url: 'https://app1.comarb.gob.ar/consultas/Login.do', metodo: 'POST', error: 'net::ERR_CONNECTION_TIMED_OUT' }], hostModulo: host, sistema });
+  assert.deepEqual([e.estado, e.tipo, e.host, e.metodo], ['error-red', 'tiempo agotado', 'app1.comarb.gob.ar', 'POST']);
+  assert.match(e.detalle, /app1\.comarb\.gob\.ar\/consultas\/Login\.do \(ERR_CONNECTION_TIMED_OUT: tiempo agotado\)/);
+  assert.equal(clasificarAcceso({ url: 'https://auth.afip.gob.ar/contribuyente_/login.xhtml', hostModulo: host, sistema }).estado, 'login-pendiente');
+  assert.equal(clasificarAcceso({ url: 'https://www.ca.gob.ar/', hostModulo: host, sistema }).estado, 'fuera-del-modulo', 'el sitio institucional no es el módulo');
+  assert.equal(clasificarAcceso({ url: null, hostModulo: host, sistema }).estado, 'sin-pestana');
+  assert.equal(clasificarAcceso({ url: 'https://app1.comarb.gob.ar/c/Inicio.do', hostModulo: host, sistema, titulo: 'SIFERE - Mantenimiento' }).estado, 'mantenimiento');
+  // La pestaña de la acción: nunca una que ya estaba abierta.
+  const vieja = { isClosed: () => false }; const nueva = { isClosed: () => false }; const portal = {};
+  assert.equal(paginaDeLaAccion(portal, [nueva]), nueva, 'la pestaña nueva tardó y se devolvió la del portal');
+  assert.equal(paginaDeLaAccion(nueva, [nueva]), nueva);
+  assert.equal(paginaDeLaAccion(portal, []), portal, 'sin pestaña nueva: la que devolvió la apertura');
+  assert.notEqual(paginaDeLaAccion(portal, [nueva]), vieja);
+});
+
+test('SIFERE Consultas (portal simulado): una pestaña de error AJENA (de antes) no hace fallar al servicio; se sigue el SSO de Consultas', async (t) => {
+  const b = await navegador(t); if (!b) return;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-a-'));
+  try {
+    if (!(await conCm03(out))) { t.skip('sin navegador para la CM03'); return; }
+    const { s, ctx, sso } = await portalSimulado(b, out, { href: SSO_CONSULTAS, destinoSso: () => 'https://consultas.comarb.gob.ar/consultas/Inicio.do' });
+    const sim = moduloSimulado(ctx); await sim.rutear();
+    // Una pestaña de COMARB que no cargó, abierta ANTES (como la que quedó de la corrida del 28/10).
+    const vieja = await ctx.newPage(); await vieja.goto('http://app1.comarb.invalid/', { timeout: 15000 }).catch(() => {});
+    await vieja.waitForURL(/^chrome-error:/, { timeout: 10000 }).catch(() => {});
+    assert.match(vieja.url(), /^chrome-error:/);
+    const logs = [];
+    const r = await correrUno(s, { ...SERVICIOS.find((x) => x.id === 'sifere-consultas-web') },
+      { baseDir: path.join(out, 'corrida'), periodo: { desde: '2026-09-01', hasta: '2026-10-28' }, datosDir: path.join(out, 'datos'), log: (m) => logs.push(m) });
+    assert.deepEqual(sso, ['comarb_sifereweb_consultas'], 'se pidió el sistema de Consultas, no el de DDJJ');
+    assert.deepEqual(r.acceso.map((a) => [a.via, a.estado]), [['portal de ARCA', 'en-modulo']], logs.join('\n'));
+    const res = JSON.parse(fs.readFileSync(path.join(out, 'corrida', 'sifere-consultas-web', 'resultado.json'), 'utf8'));
+    assert.deepEqual(res.acceso[0].cadena, ['https://auth.afip.gob.ar/contribuyente_/login.xhtml?system=comarb_sifereweb_consultas', 'https://consultas.comarb.gob.ar/consultas/Inicio.do']);
+    assert.ok(r.conservacion.some((c) => c.promovido), JSON.stringify(r.validaciones));
+    assert.ok(!vieja.isClosed(), 'la pestaña ajena no se toca');
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+test('SIFERE Consultas (portal simulado): si el acceso del portal no carga, se prueba UNA vez el acceso oficial (SSO) y se informa el error de red', async (t) => {
+  const b = await navegador(t); if (!b) return;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-a-'));
+  try {
+    if (!(await conCm03(out))) { t.skip('sin navegador para la CM03'); return; }
+    // La primera redirección del SSO va a un host que no carga; la segunda, al módulo.
+    const { s, ctx, sso } = await portalSimulado(b, out, { href: SSO_CONSULTAS,
+      destinoSso: (n) => (n === 1 ? 'https://app1.comarb.invalid/consultas/Login.do' : 'https://consultas.comarb.gob.ar/consultas/Inicio.do') });
+    const sim = moduloSimulado(ctx); await sim.rutear();
+    const r = await correrUno(s, { ...SERVICIOS.find((x) => x.id === 'sifere-consultas-web') },
+      { baseDir: path.join(out, 'corrida'), periodo: { desde: '2026-09-01', hasta: '2026-10-28' }, datosDir: path.join(out, 'datos') });
+    assert.deepEqual(sso, ['comarb_sifereweb_consultas', 'comarb_sifereweb_consultas']);
+    assert.deepEqual(r.acceso.map((a) => [a.via, a.estado]), [['portal de ARCA', 'error-red'], ['acceso oficial (SSO)', 'en-modulo']]);
+    assert.match(r.acceso[0].detalle, /app1\.comarb\.invalid\/consultas\/Login\.do \(ERR_/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'corrida', 'sifere-consultas-web', 'resultado.json'), 'utf8')).acceso[0].metodo, 'POST');
+    assert.ok(r.conservacion.some((c) => c.promovido));
+    assert.ok(!ctx.pages().some((p) => /^chrome-error:/.test(p.url())), 'la pestaña con error de ESTE acceso se cerró');
+  } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+test('SIFERE Consultas (portal simulado): un acceso que pide el sistema de DDJJ es un acceso equivocado; se usa el de Consultas', async (t) => {
+  const b = await navegador(t); if (!b) return;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'arca-sifere-a-'));
+  try {
+    if (!(await conCm03(out))) { t.skip('sin navegador para la CM03'); return; }
+    const { s, ctx, sso } = await portalSimulado(b, out, { href: 'https://auth.afip.gob.ar/contribuyente_/login.xhtml?action=SYSTEM&system=comarb_sifereweb_ddjj',
+      destinoSso: (n, sistema) => (sistema === 'comarb_sifereweb_ddjj' ? 'https://sifereweb.comarb.gob.ar/sifereweb/Inicio.do' : 'https://consultas.comarb.gob.ar/consultas/Inicio.do') });
+    await ctx.route('https://sifereweb.comarb.gob.ar/**', (r) => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: '<h1>SIFERE WEB - DDJJ</h1>' }));
+    const sim = moduloSimulado(ctx); await sim.rutear();
+    const r = await correrUno(s, { ...SERVICIOS.find((x) => x.id === 'sifere-consultas-web') },
+      { baseDir: path.join(out, 'corrida'), periodo: { desde: '2026-09-01', hasta: '2026-10-28' }, datosDir: path.join(out, 'datos') });
+    assert.deepEqual(sso, ['comarb_sifereweb_ddjj', 'comarb_sifereweb_consultas']);
+    assert.deepEqual(r.acceso.map((a) => [a.via, a.estado]), [['portal de ARCA', 'acceso-equivocado'], ['acceso oficial (SSO)', 'en-modulo']]);
+    assert.ok(r.conservacion.some((c) => c.promovido));
   } finally { await b.close(); fs.rmSync(out, { recursive: true, force: true }); }
 });

@@ -292,7 +292,17 @@ en `out/importados`. `fiscalos.ps1 acceso-directo` crea un ícono "FiscalOS" en 
     importe y sin número, «incierto» (no se suma ni se descarta);
   - un pago sin jurisdicción queda pendiente de imputación (no se reparte); las provincias no se compensan entre sí;
   - el total solo se afirma si cada jurisdicción con importe a pagar está conciliada; si no, «Sin verificar».
-  Si COMARB no carga, se reintenta una vez y se sigue con lo demás.
+  Acceso (`src/portal/acceso.js`): SIFERE WEB – Consultas y SIFERE WEB – DDJJ son sistemas distintos, cada uno con su
+  acceso de clave fiscal (https://www.ca.gob.ar/sifere: `system=comarb_sifereweb_consultas` y `comarb_sifereweb_ddjj`).
+  - Se sigue SOLO la pestaña que abre el acceso, con sus redirecciones (origen y ruta, sin query, cookies ni token); una
+    pestaña con error que ya estaba abierta no hace fallar al servicio.
+  - Cada intento queda clasificado en el `resultado.json` local: en el módulo, acceso equivocado (pidió el sistema de
+    DDJJ), error de red (DNS, tiempo agotado, certificado, conexión, con el código de Chromium y la dirección), login
+    pendiente, sesión expirada, mantenimiento o fuera del módulo. No se afirma que el sitio esté caído.
+  - Si el acceso del portal no llega, se prueba UNA vez el acceso oficial (SSO de Consultas) en la misma sesión y se
+    sigue con lo demás.
+  - Para comparar con el Chrome de todos los días: `ARCA_CANAL=chrome` usa el Google Chrome instalado en vez del
+    Chromium de Playwright.
 - **Pruebas con datos reales, solo privadas**: las pruebas del repositorio usan cifras inventadas.
   `test/ganancias-privada.test.js` compara el cálculo de Ganancias con las DJ que importaste en la app (leídas de
   `out/importados/ganancias/`, que Git ignora), al centavo; sin ninguna DJ importada, se saltea.

@@ -84,7 +84,11 @@ export const SERVICIOS = [
   // Pagos realizados de IIBB (documentación de la Comisión Arbitral: «SIFERE» > «Pagos» > período y jurisdicción >
   // «Buscar»). La pantalla interna no se vio en una corrida: rótulos, opciones de los filtros y columnas (sifereConsultas.js).
   { id: 'sifere-consultas-web', nombre: 'SIFERE (Consultas)', terminos: ['SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL – SIFERE WEB - CONSULTAS', 'CONVENIO MULTILATERAL - SIFERE WEB - CONSULTAS'],
-    fuente: '5-consultas', confirmado: false, extractor: 'sifere', hostModulo: /(comarb|ca)\.gob\.ar/,
+    fuente: '5-consultas', confirmado: false, extractor: 'sifere',
+    // El módulo está en un host de COMARB (corrida 2026-10-28: app1.comarb.gob.ar), nunca en el sitio institucional
+    // (www.ca.gob.ar, al que redirige la raíz de app1). Acceso oficial (https://www.ca.gob.ar/sifere, «SIFERE CONSULTAS –
+    // INGRESAR»): el login de clave fiscal de ARCA con system=comarb_sifereweb_consultas; el de DDJJ es otro sistema.
+    hostModulo: /^https?:\/\/(?!www\.)[^/]+\.comarb\.gob\.ar\//i, sistemaSso: 'comarb_sifereweb_consultas',
     // Una consulta por jurisdicción de la CM03 con importe a pagar, con período y jurisdicción elegidos (guía oficial).
     grillas: [{ id: 'pagos', navegar: 'consultas-pagos' }] },
   { id: 'comprobantes-recibidos', nombre: 'Mis Comprobantes', terminos: ['MIS COMPROBANTES'], fuente: 2, confirmado: true, extractor: 'mis-comprobantes', tipo: 'recibidos' },
