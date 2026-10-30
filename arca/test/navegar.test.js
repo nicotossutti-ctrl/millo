@@ -1,0 +1,211 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { esPasoSeguro, grillaLista, drillHaciaGrilla } from '../src/portal/navegar.js';
+
+test('esPasoSeguro bloquea controles de trámite/pago y permite navegación de lectura', () => {
+  for (const t of ['Presentar DDJJ', 'Generar VEP', 'Pagar', 'Confirmar', 'Anular']) {
+    assert.equal(esPasoSeguro(t), false, t);
+  }
+  for (const t of ['Ingresar al servicio', 'Consultar', 'Ver declaraciones', 'Continuar']) {
+    assert.equal(esPasoSeguro(t), true, t);
+  }
+});
+
+test('grillaLista detecta grilla con datos, grilla esperada y filtros de fecha', () => {
+  const conDatos = { frames: [{ tablas: [{ visible: true, filas: 5, encabezados: ['X'] }], inputs: [] }] };
+  assert.equal(grillaLista(conDatos).hayGrillaConDatos, true);
+  assert.equal(grillaLista(conDatos).lista, true);
+
+  const esperada = { frames: [{ tablas: [{ visible: true, filas: 0, encabezados: ['Impuesto', 'Concepto', 'Periodo'] }], inputs: [] }] };
+  const g = grillaLista(esperada, ['impuesto', 'concepto', 'periodo']);
+  assert.equal(g.hayGrillaEsperada, true);
+  assert.equal(g.hayGrillaConDatos, false);
+
+  const filtros = { frames: [{ tablas: [], inputs: [{ placeholder: 'dd/mm/aaaa' }] }] };
+  assert.equal(grillaLista(filtros).hayFiltroFecha, true);
+
+  const nada = { frames: [{ tablas: [], inputs: [{ placeholder: 'texto' }] }] };
+  assert.equal(grillaLista(nada).lista, false);
+
+  // Una grilla de componente (tipo 'componente', p. ej. e-grid) cuenta igual que una <table>.
+  const comp = { frames: [{ tablas: [{ visible: true, tipo: 'componente', filas: 3, encabezados: ['Periodo', 'Formulario'] }], inputs: [] }] };
+  assert.equal(grillaLista(comp, ['periodo', 'formulario']).hayGrillaEsperada, true);
+  assert.equal(grillaLista(comp).hayGrillaConDatos, true);
+});
+
+test('drillHaciaGrilla NO clickea nada si el servicio no tiene ruta (no adivina por palabras)', async () => {
+  // Hub con botones genéricos del portal: sin ruta, el drill no debe tocar nada.
+  const relevar = async () => ({ frames: [{ botones: [{ text: 'Envianos tu consulta', visible: true }, { text: 'CONSULTAR', visible: true }], tablas: [], inputs: [] }] });
+  let clicks = 0;
+  const pagina = { frames: () => { clicks++; return []; }, waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [], relevar });
+  assert.equal(r.lista, false);
+  assert.equal(r.pasos, 0);
+  assert.match(r.motivo, /sin ruta/);
+  assert.equal(clicks, 0); // nunca iteró frames para clickear
+});
+
+test('drillHaciaGrilla sin ruta no navega si ya hay grilla', async () => {
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
+  const pagina = { frames: () => [], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 0);
+});
+
+test('drillHaciaGrilla CON ruta la ejecuta aunque ya haya grilla inicial (no se queda en la primera)', async () => {
+  // La grilla inicial (p. ej. Vencimientos) no es la buscada: con ruta hay que navegar igual.
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['A'] }], inputs: [] }] });
+  const control = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => {} };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Pagos' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
+// Locator falso estilo Playwright: soporta .filter() (devuelve sí mismo), .count() y .first().
+function locatorFalso({ present, control }) {
+  const self = { filter: () => self, count: async () => (present ? 1 : 0), first: () => control, nth: () => control };
+  return self;
+}
+
+test('drillHaciaGrilla sigue la ruta explícita hasta la grilla', async () => {
+  // Nivel 0: hub sin grilla. Tras el paso "Ingresar", nivel 1: aparece la grilla.
+  let nivel = 0;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 4, encabezados: ['Periodo', 'Importe'] }], inputs: [] }] });
+  const control = { isVisible: async () => true, innerText: async () => 'Ingresar', click: async () => { nivel = 1; } };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['periodo', 'importe'], ruta: [{ texto: 'Ingresar' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
+test('drillHaciaGrilla espera el render tardío de la grilla tras navegar (no da por fallida enseguida)', async () => {
+  let llamadas = 0;
+  const relevar = async () => {
+    llamadas++;
+    // 1: hub sin grilla. 2: tras el click, todavía cargando. 3: ya con grilla.
+    return llamadas >= 3
+      ? { frames: [{ tablas: [{ visible: true, filas: 2, encabezados: ['A'] }], inputs: [] }] }
+      : { frames: [{ tablas: [], inputs: [] }] };
+  };
+  const control = { isVisible: async () => true, innerText: async () => 'Ver', click: async () => {} };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Ver' }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
+test('drillHaciaGrilla con paso oculto clickea el enlace de menú colapsado por DOM (no exige visible)', async () => {
+  // Menú de Cuentas Tributarias: el <a> "Pagos" existe pero está oculto (visible:false). Con
+  // `oculto` hay que tomarlo igual y disparar su clic real del DOM (el.click()), no loc.click().
+  let nivel = 0;
+  let viaEvaluate = false, viaClick = false;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 6, encabezados: ['Fecha', 'Importe'] }], inputs: [] }] });
+  const control = {
+    isVisible: async () => false,                 // oculto: el menú no está desplegado
+    innerText: async () => '',                    // oculto no rinde texto; se usa paso.texto
+    click: async () => { viaClick = true; },      // NO debe usarse para ocultos
+    evaluate: async () => { viaEvaluate = true; nivel = 1; }, // el.click() del DOM
+  };
+  const pagina = {
+    frames: () => [{ locator: () => locatorFalso({ present: true, control }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['fecha', 'importe'], ruta: [{ texto: 'Pagos', oculto: true }], relevar });
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+  assert.equal(viaEvaluate, true);
+  assert.equal(viaClick, false);
+});
+
+test('drillHaciaGrilla con paso `continuar` NO se detiene en la grilla inicial y sigue al menú', async () => {
+  // Caso Cuentas Tributarias: la home ya muestra la grilla de Vencimientos. El paso que abre la
+  // barra lateral lleva `continuar`, así el drill no corta ahí y sí clickea el ítem del menú.
+  let abrioBarra = false, clickItem = false;
+  const relevar = async () => ({ frames: [{ tablas: [{ visible: true, filas: 5, encabezados: ['Impuesto', 'Vencimiento'] }], inputs: [] }] });
+  const ctrlBarra = { isVisible: async () => true, innerText: async () => '', click: async () => { abrioBarra = true; } };
+  const ctrlItem = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => { clickItem = true; } };
+  const pagina = {
+    frames: () => [{ locator: (sel) => locatorFalso({ present: true, control: sel === 'a.menu-a' ? ctrlBarra : ctrlItem }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, {
+    expected: [], relevar,
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true }, { texto: 'Pagos' }],
+  });
+  assert.equal(abrioBarra, true, 'abrió la barra lateral');
+  assert.equal(clickItem, true, 'y SIGUIÓ hasta clickear el ítem del menú (no se frenó en Vencimientos)');
+  assert.equal(r.pasos, 2);
+});
+
+test('drillHaciaGrilla ejecuta un paso de hash (SPA Angular como Portal IVA) navegando la ruta interna', async () => {
+  // Portal IVA salta a la lista de DDJJ presentadas con #/declaraciones.anteriores.
+  let hashSet = null, nivel = 0;
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [{ visible: true, filas: 3, encabezados: ['Periodo', 'Formulario', 'Secuencia'] }], inputs: [] }] });
+  const pagina = {
+    frames: () => [],
+    evaluate: async (_fn, h) => { hashSet = h; nivel = 1; },
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  const r = await drillHaciaGrilla(pagina, { expected: ['periodo', 'formulario'], ruta: [{ hash: '#/declaraciones.anteriores' }], relevar });
+  assert.equal(hashSet, '#/declaraciones.anteriores');
+  assert.equal(r.lista, true);
+  assert.equal(r.pasos, 1);
+});
+
+test('drillHaciaGrilla elige el elemento VISIBLE aunque el primero que coincide esté oculto (NavBar dynarch)', async () => {
+  // El NavBar guarda el menú como <a> ocultos y dibuja aparte el ítem visible: hay 2 coincidencias,
+  // la primera oculta (fuente) y la segunda visible (dibujada). Hay que clickear la visible.
+  let nivel = 0, clickOculto = false, clickVisible = false;
+  const oculto = { isVisible: async () => false, innerText: async () => '', click: async () => { clickOculto = true; } };
+  const visible = { isVisible: async () => true, innerText: async () => 'DECLARACIONES JURADAS (DJ)', click: async () => { clickVisible = true; nivel = 1; } };
+  const loc = { filter: () => loc, count: async () => 2, first: () => oculto, nth: (i) => (i === 0 ? oculto : visible) };
+  const relevar = async () => (nivel === 0
+    ? { frames: [{ tablas: [], inputs: [] }] }
+    : { frames: [{ tablas: [], inputs: [{ placeholder: 'dd/mm/aaaa' }] }] });
+  const pagina = { frames: () => [{ locator: () => loc }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'Declaraciones Juradas (DJ)' }], relevar });
+  assert.equal(clickVisible, true, 'clickeó el ítem visible');
+  assert.equal(clickOculto, false, 'no se quedó con el <a> oculto');
+  assert.equal(r.lista, true);
+});
+
+test('drillHaciaGrilla con siNoVisible omite el paso preparatorio si el ítem ya está a la vista', async () => {
+  // Barra lateral ya abierta: no hay que tocar el hamburguesa (es toggle y la cerraría).
+  let clickBarra = false, clickItem = false;
+  const ctrlBarra = { isVisible: async () => true, innerText: async () => '', click: async () => { clickBarra = true; } };
+  const ctrlItem = { isVisible: async () => true, innerText: async () => 'Pagos', click: async () => { clickItem = true; } };
+  const relevar = async () => ({ frames: [{ tablas: [], inputs: [{ placeholder: 'dd/mm/aaaa' }] }] });
+  const pagina = {
+    frames: () => [{ locator: (sel) => locatorFalso({ present: true, control: sel === 'a.menu-a' ? ctrlBarra : ctrlItem }) }],
+    waitForLoadState: async () => {}, waitForTimeout: async () => {},
+  };
+  await drillHaciaGrilla(pagina, { expected: [], relevar,
+    ruta: [{ selector: 'a.menu-a', opcional: true, continuar: true, siNoVisible: 'Pagos' }, { texto: 'Pagos' }] });
+  assert.equal(clickBarra, false, 'no tocó el hamburguesa porque Pagos ya se veía');
+  assert.equal(clickItem, true, 'clickeó Pagos directo');
+});
+
+test('drillHaciaGrilla informa si un paso de la ruta no se encuentra', async () => {
+  const relevar = async () => ({ frames: [{ tablas: [], inputs: [] }] });
+  const pagina = { frames: () => [{ locator: () => locatorFalso({ present: false }) }], waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  const r = await drillHaciaGrilla(pagina, { expected: [], ruta: [{ texto: 'No existe' }], relevar });
+  assert.equal(r.lista, false);
+  assert.match(r.motivo, /no se encontró el paso/);
+});

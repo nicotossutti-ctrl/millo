@@ -1,0 +1,27 @@
+{
+  "name": "arca-conciliacion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cliente de los web services de ARCA (WSAA + WSFEv1) para exportar comprobantes emitidos y conciliar.",
+  "type": "module",
+  "bin": {
+    "arca": "./src/cli.js"
+  },
+  "scripts": {
+    "arca": "node --env-file-if-exists=.env src/cli.js",
+    "test": "node --test test/*.test.js",
+    "test:cov": "node --test --experimental-test-coverage test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2",
+    "pdfjs-dist": "4.10.38",
+    "pg": "8.16.3",
+    "playwright": "^1.64.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.7"
+  }
+}

@@ -1,0 +1,792 @@
+/**
+ * Orquestador: recorre todos los servicios autorizados en una sola corrida, en modo lectura.
+ * Un servicio que falla no detiene a los demás. Cada corrida se guarda en
+ * out/corridas/<timestamp>/ y se resume en un informe de cobertura (JSON + texto).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { relevarPagina, relevarTodasLasPaginas, resumenRelevamiento, sanear } from './relevar.js';
+import { sanitizarHtml, sanitizarTexto, sanitizarUrl } from './diagnostico.js';
+import { candidatos, consultar, resumenResultados, validarArchivo, irAPantalla, descargarMisComprobantes } from './misComprobantes.js';
+import { extraerTabla, extraerTablaEnPagina, extraerTablasEnDocumento, norm } from './extractor.js';
+import { leerCcma, calcularDeudaCcma } from './ccma.js';
+import { toCsv } from '../csv.js';
+import { drillHaciaGrilla, navegarPorEnlace } from './navegar.js';
+import { slug } from './servicios.js';
+import { evaluarCalidad, esGrillaAjena, estadoInforme, verificarFechas } from './calidad.js';
+import { conservarIntento, registrarIntento, claveDe } from './conservacion.js';
+import { generarMatrizCobertura } from './coberturaHistorica.js';
+import { correrIvaDdjj } from './ivaDdjj.js';
+import { bajarReportesCm03 } from './sifereReporte.js';
+import { consultarPagosConsultas } from './sifereConsultas.js';
+import { cm03DelPeriodo } from '../app/cm03.js';
+
+const ESTADOS = ['validado', 'descargado', 'con-datos', 'relevado', 'sin-acceso', 'desafio', 'error'];
+
+function escribir(file, contenido) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, contenido, { mode: 0o600 });
+}
+
+function selectorDe(x) {
+  if (!x) return null;
+  if (x.id) return `#${x.id.replace(/([^\w-])/g, '\\$1')}`;
+  if (x.name) return `${x.tag}[name="${x.name}"]`;
+  return null;
+}
+
+/**
+ * ¿La grilla leída es una que este servicio NO busca? Pura. true si TODOS los términos de
+ * `rechazar` aparecen en los encabezados (p. ej. la grilla de Vencimientos de la home de Cuentas
+ * Tributarias, que aparece cuando la ruta no llegó a DJ/Pagos/Cuenta Corriente).
+ */
+export function esGrillaRechazada(columnas, rechazar) {
+  return esGrillaAjena(columnas, rechazar);
+}
+
+/**
+ * Corre EN EL NAVEGADOR (frame.evaluate): devuelve los elementos más profundos que contienen el
+ * texto (sin mayúsculas), con etiqueta, clase, tamaño, visibilidad y si parecen clickeables. Solo
+ * lee el DOM. Autocontenida: no puede usar nada de este módulo.
+ */
+export function buscarElementosConTexto(texto) {
+  const t = String(texto).toLowerCase().trim();
+  const out = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!txt || txt.length > 120 || !txt.toLowerCase().includes(t)) continue;
+    // Solo el más profundo: si un hijo también contiene el texto, se saltea el padre.
+    if ([...el.children].some((c) => (c.textContent || '').toLowerCase().includes(t))) continue;
+    const r = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    const p = el.parentElement;
+    out.push({
+      tag: el.tagName.toLowerCase(), id: el.id || null, cls: String(el.className || '').slice(0, 80) || null,
+      text: txt, w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y),
+      display: cs.display, visibility: cs.visibility, cursor: cs.cursor,
+      onclick: el.hasAttribute('onclick') || typeof el.onclick === 'function',
+      href: el.getAttribute('href') ? el.getAttribute('href').slice(0, 120) : null,
+      parent: p ? `${p.tagName.toLowerCase()}${p.id ? `#${p.id}` : ''}${p.className ? `.${String(p.className).split(/\s+/)[0]}` : ''}` : null,
+      html: el.outerHTML.slice(0, 200),
+    });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+/** Espera (hasta `ms`) a que exista un frame cuya URL contenga `fragmento` y cuyo documento haya cargado. */
+export async function esperarFrame(pagina, fragmento, ms = 20000) {
+  const limite = Date.now() + ms;
+  while (Date.now() < limite) {
+    for (const f of pagina.frames()) {
+      if (!String(f.url?.() ?? '').includes(fragmento)) continue;
+      const listo = await f.evaluate(() => document.readyState === 'complete' && !!document.body && document.body.children.length > 0).catch(() => false);
+      if (listo) return f;
+    }
+    await pagina.waitForTimeout(1000);
+  }
+  return null;
+}
+
+/** ¿Hay en la página del sistema algún elemento propio de su interfaz (menú, enlaces del menú, iframes)? */
+async function interfazPresente(frame, selectores) {
+  return frame.evaluate((sels) => sels.some((s) => !!document.querySelector(s)), selectores).catch(() => false);
+}
+
+/** Espera (hasta `ms`) a que el frame `fragmento` muestre su interfaz (alguno de `selectores`). */
+export async function esperarInterfaz(pagina, fragmento, selectores, ms = 20000) {
+  const limite = Date.now() + ms;
+  for (;;) {
+    for (const f of pagina.frames()) {
+      if (String(f.url?.() ?? '').includes(fragmento) && (await interfazPresente(f, selectores))) return f;
+    }
+    if (Date.now() >= limite) return null;
+    await pagina.waitForTimeout(1000);
+  }
+}
+
+/**
+ * Abre el servicio y comprueba que se llegó de verdad al sistema antes de navegar por su menú.
+ * Corrida 2026-10-24T19-39-01: Cuentas Tributarias quedó en el login de ARCA y se leyó esa pantalla
+ * (0 filas que parecían un cero). Corrida 2026-10-26T20-04-19: quedó en .../contribuyente/externo
+ * con la página VACÍA (sin título, 5 elementos, sin menú, enlaces, botones ni iframes). Por eso:
+ *  - requiereFrame: el frame de la pantalla de entrada tiene que existir y haber cargado;
+ *  - interfazCargada: además tiene que mostrar algún elemento propio del sistema. Si no aparece, se
+ *    espera, se cierra esa pestaña y se reintenta el acceso UNA vez (solo navegación de lectura).
+ * Si sigue sin cargar: "servicio no cargado" (sin-acceso). No se lee nada y el vigente no se toca.
+ */
+async function abrirSistema(sesion, servicio, dir, log) {
+  for (let intento = 1; ; intento++) {
+    const pagina = await sesion.abrirServicio(servicio);
+    // Damos tiempo a que la SPA cargue sus controles (p. ej. las tarjetas de Ganancias renderizan tarde).
+    await pagina.waitForTimeout(3500);
+    if (!servicio.requiereFrame) return pagina;
+    const diagnostico = async () => {
+      const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+      escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+      const donde = sanitizarTexto(pagina.url());
+      if (pagina !== sesion.page) await pagina.close().catch(() => {});
+      return donde;
+    };
+    if (!(await esperarFrame(pagina, servicio.requiereFrame, servicio.esperaFrameMs ?? 20000))) {
+      const donde = await diagnostico();
+      throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de ${servicio.nombre} (no cargó ${servicio.requiereFrame}; la página quedó en ${donde}). Es un fallo de navegación, no un cero.`);
+    }
+    const interfaz = servicio.interfazCargada;
+    if (!interfaz?.selectores?.length
+      || (await esperarInterfaz(pagina, interfaz.frame ?? servicio.requiereFrame, interfaz.selectores, servicio.esperaInterfazMs ?? 20000))) return pagina;
+    const donde = await diagnostico();
+    if (intento >= 2) {
+      throw new Error(`no pude abrir el servicio: servicio no cargado (${servicio.nombre}: la página ${donde} quedó vacía o incompleta, sin el menú del sistema, también tras un reintento). Se conservan los datos anteriores.`);
+    }
+    log('  la interfaz del sistema no cargó (página vacía o incompleta): espero y reintento el acceso una vez.');
+    await new Promise((r) => setTimeout(r, servicio.esperaReintentoMs ?? 5000));
+  }
+}
+
+/**
+ * Clasifica lo que se encontró en un servicio genérico a partir del relevamiento, sin descargar.
+ * Devuelve estado y los elementos candidatos para escribir después el extractor confirmado.
+ */
+export function clasificarRelevamiento(rel) {
+  const frames = rel?.frames ?? [{}];
+  const cand = candidatos(rel ?? { frames: [{}] });
+  const tablas = frames.flatMap((f) => f.tablas ?? []).filter((t) => t.visible);
+  const paginacionTxt = frames.flatMap((f) => f.paginacion ?? []).map((p) => p.text).filter(Boolean);
+  const filas = tablas.reduce((n, t) => n + (t.filas ?? 0), 0);
+  const hayExport = cand.exportar.length > 0;
+  const hayFiltroFecha = cand.fecha.length > 0;
+  const hayConsulta = cand.buscar.length > 0;
+  let estado = 'relevado';
+  if (filas > 0 || hayExport) estado = 'con-datos';
+  return {
+    estado,
+    filas,
+    tablas: tablas.map((t) => ({ id: t.id, filas: t.filas, columnas: t.encabezados })),
+    exportacion: cand.exportar.map((x) => ({ texto: x.text, selector: selectorDe(x), href: x.href })),
+    filtroFecha: cand.fecha.map((x) => ({ selector: selectorDe(x), placeholder: x.placeholder })),
+    botonConsulta: cand.buscar.map((x) => ({ texto: x.text, selector: selectorDe(x) })),
+    paginacion: paginacionTxt,
+    listoParaExtractor: hayFiltroFecha && hayConsulta,
+  };
+}
+
+/**
+ * Servicio genérico / hub: lo abre, lo atraviesa en SOLO LECTURA hasta una grilla o sus filtros
+ * (drill), y si llega a la grilla intenta extraerla acá mismo. Siempre guarda el relevamiento
+ * saneado del nivel alcanzado para escribir el extractor real si todavía no se pudo.
+ */
+async function correrGenerico(sesion, servicio, dir, periodo, log, ctx = {}) {
+  const pagina = await abrirSistema(sesion, servicio, dir, log);
+  // Pantalla de inicio del sistema (p. ej. la home de Cuentas Tributarias con sus pestañas). El
+  // sistema puede reabrir en la última pantalla visitada: se vuelve por el enlace "Inicio" del menú.
+  if (servicio.frameInicio && !(await esperarFrame(pagina, servicio.frameInicio, servicio.esperaFrameMs ?? 8000))) {
+    log('  el sistema abrió en otra pantalla: vuelvo al inicio por el menú.');
+    const fue = await navegarPorEnlace(pagina, 'Inicio', log).catch(() => null);
+    if (!fue || !(await esperarFrame(pagina, servicio.frameInicio, servicio.esperaFrameMs ?? 20000))) {
+      const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+      escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+      if (pagina !== sesion.page) await pagina.close().catch(() => {});
+      throw new Error(`no pude abrir el servicio: no se llegó a la pantalla de inicio de ${servicio.nombre} (${fue ? 'tras volver por "Inicio" no cargó' : 'no se encontró el enlace "Inicio"'} ${servicio.frameInicio}). Es un fallo de navegación, no un cero.`);
+    }
+  }
+  const expected = (servicio.columnasEsperadas ?? []).map(norm);
+  // El drill solo navega por RUTA explícita del servicio; sin ruta no clickea (no adivina).
+  // Puede terminar en una pestaña nueva: trabajamos sobre drill.pagina.
+  const drill = await drillHaciaGrilla(pagina, { expected, ruta: servicio.ruta ?? [], log });
+  const paginaDatos = drill.pagina ?? pagina;
+
+  // Si el drill llegó a una grilla (o a sus filtros), intentamos extraer en esa página.
+  let extraccion = null;
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
+  if (drill.lista && periodo) {
+    const outBase = sesion?.cfg?.outDir ?? 'out';
+    extraccion = await extraerTablaEnPagina(paginaDatos, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log })
+      .catch((e) => ({ error: sanitizarTexto(e.message), filas: 0 }));
+  }
+  // Grilla que NO es la buscada (p. ej. Vencimientos de la home de Cuentas Tributarias cuando la
+  // ruta no llegó a la sección): no se cuenta como dato de esta fuente.
+  const grillaAjena = extraccion && !extraccion.error && extraccion.filas > 0 && esGrillaRechazada(extraccion.columnas, servicio.rechazarSiColumnas);
+  // Llegar a una pantalla no es éxito: la extracción se juzga contra lo que la sección declara.
+  if (extraccion) {
+    extraccion.calidad = evaluarCalidad(servicio, extraccion, { desde: periodo?.desde, hasta: periodo?.hasta, rechazada: !!grillaAjena });
+    escribir(path.join(dir, 'resultado.json'), JSON.stringify(extraccion, null, 2));
+  }
+
+  // Paso de ruta no encontrado: relevamos TODO elemento que contenga los textos de la ruta (etiqueta,
+  // clase, tamaño, si es clickeable) y sacamos captura, para ver cómo dibuja la pantalla ese menú.
+  let diagnosticoPaso = null;
+  if (/no se encontró el paso/.test(drill.motivo ?? '') || grillaAjena) {
+    const textos = [...new Set((servicio.ruta ?? []).flatMap((p) => [p.texto, p.siNoVisible]).filter(Boolean))];
+    diagnosticoPaso = { motivo: drill.motivo ?? 'grilla ajena', textos, frames: [] };
+    for (const frame of paginaDatos.frames()) {
+      const candidatos = {};
+      for (const t of textos) candidatos[t] = await frame.evaluate(buscarElementosConTexto, t).catch(() => []);
+      diagnosticoPaso.frames.push({ url: frame.url(), candidatos });
+    }
+    // Todo el bloque, saneado como la muestra: href y url sin query ni fragmento (también las relativas), el HTML
+    // cortado sin manejadores ni parámetros, y sin importes ni números largos en el texto.
+    diagnosticoPaso = sanear(diagnosticoPaso, { enmascarar: true });
+    await paginaDatos.screenshot({ path: path.join(dir, 'paso-no-encontrado.png'), fullPage: true }).catch(() => {});
+  }
+
+  // Capturamos TODAS las pestañas abiertas (la grilla puede estar en una pestaña nueva).
+  const todas = await relevarTodasLasPaginas(sesion, paginaDatos);
+  if (diagnosticoPaso) todas.push({ diagnosticoPaso });
+  const rel = todas.find((t) => t.principal) ?? todas[0] ?? { frames: [] };
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'pagina.html'), sanitizarHtml(await paginaDatos.content().catch(() => '')));
+  const clas = clasificarRelevamiento(rel);
+  const lineas = [...resumenRelevamiento(rel), '',
+    `== Drill (solo lectura, ruta explícita): pasos ${drill.pasos}, lista=${drill.lista}${drill.motivo ? `, ${drill.motivo}` : ''}`,
+    '', '== Clasificación', JSON.stringify(clas, null, 2)];
+  escribir(path.join(dir, 'resumen.txt'), lineas.join('\n'));
+  // Cerrar las pestañas abiertas por este servicio (la del servicio y la que haya abierto el drill).
+  if (paginaDatos !== sesion.page && paginaDatos !== pagina) await paginaDatos.close().catch(() => {});
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+
+  const drillInfo = { pasos: drill.pasos, lista: drill.lista, motivo: drill.motivo, recorrido: drill.recorrido };
+  // Todo intento se registra (también los que no llegaron a extraer): la conservación decide si
+  // reemplaza al vigente; uno malo nunca pisa uno bueno.
+  const intentos = [{ id: servicio.id, dirIntento, clave: extraccion ? claveDe(extraccion, periodo) : null,
+    resultado: extraccion ?? { estado: 'sin-extraccion', filas: 0, error: sanitizarTexto(drill.motivo ?? 'no se llegó a una grilla') } }];
+  if (grillaAjena) {
+    return { ...clas, url: rel.url, drill: drillInfo, estado: 'con-datos', calidad: extraccion.calidad, intentos,
+      motivo: 'la ruta no llegó a la sección: se leyó la grilla de la home (Vencimientos), no se cuenta como dato de esta fuente; diagnóstico del menú capturado' };
+  }
+  if (extraccion && !extraccion.error && extraccion.filas > 0) {
+    const c = extraccion.calidad;
+    const validacion = { desde: periodo.desde, hasta: periodo.hasta, filas: extraccion.filas, informados: extraccion.informados,
+      ok: c.validado, nivel: c.nivel, cantidadVerificada: c.total === 'coincide', estadoExtractor: extraccion.estado,
+      conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, paginas: extraccion.paginas,
+      finPaginacion: extraccion.finPaginacion, calidad: c, resumenEstados: extraccion.resumenEstados };
+    // validado: dato de la fuente. descargado: filas de la sección con algún control fallido.
+    // con-datos: filas que no se probó que sean de esta sección. Solo lo validado llega a vigente.
+    const estado = estadoInforme(c, extraccion.filas);
+    if (estado !== 'con-datos') {
+      return { estado, archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos, validaciones: [validacion],
+        motivo: c.motivos.length ? sanitizarTexto(c.motivos.join('; ')) : extraccion.motivo };
+    }
+    return { ...clas, url: rel.url, estado, archivos: extraccion.archivos, filas: extraccion.filas, drill: drillInfo, calidad: c, intentos,
+      validaciones: [validacion],
+      // Los encabezados reales van al informe: con ellos se confirman las columnas propias de la sección.
+      motivo: sanitizarTexto(`${extraccion.filas} filas leídas, sin validar: ${c.motivos.join('; ')}`) };
+  }
+  // Cero VALIDADO (grilla propia vacía o cartel declarado de la sección en su pantalla): es un dato.
+  if (extraccion && !extraccion.error && !extraccion.filas && extraccion.calidad?.validado) {
+    const c = extraccion.calidad;
+    return { estado: 'validado', archivos: [], filas: 0, drill: drillInfo, calidad: c, intentos, ceroConfirmado: true,
+      motivo: extraccion.ceroPorCartel ? `cero confirmado por ARCA en la pantalla de la sección: "${extraccion.ceroPorCartel}"` : 'cero confirmado: grilla propia presente y vacía',
+      validaciones: [{ desde: periodo.desde, hasta: periodo.hasta, filas: 0, ok: true, nivel: c.nivel, estadoExtractor: extraccion.estado,
+        conFiltroPeriodo: extraccion.conFiltroPeriodo, rangoAplicado: extraccion.rangoAplicado, calidad: c, ceroConfirmado: true }] };
+  }
+  // No se extrajo: queda el relevamiento. Explicitamos por qué (acceso ≠ descarga).
+  const motivo = extraccion?.error
+    ? `grilla alcanzada pero la extracción falló: ${extraccion.error}`
+    : drill.lista ? 'grilla/filtros alcanzados pero sin filas: falta confirmar columnas/consulta'
+    : (servicio.ruta?.length
+      ? `la ruta de navegación no llegó a la grilla (${drill.motivo ?? 'sin detalle'}); estructura capturada`
+      : 'sin ruta de navegación confirmada: estructura capturada para definir la ruta real');
+  return { ...clas, url: rel.url, drill: drillInfo, motivo, intentos };
+}
+
+/** Extractor de tabla (solo lectura): Mis Retenciones, Cuentas Tributarias, Mis Facilidades. */
+async function correrTabla(sesion, servicio, dir, periodo, log, ctx = {}) {
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
+  const r = await extraerTabla(sesion, servicio, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
+  r.calidad = evaluarCalidad(servicio, r, { desde: periodo.desde, hasta: periodo.hasta });
+  // La estructura (DOM de todas las pestañas) va a su propio archivo para el diagnóstico integral.
+  const { estructura, ...rSinEstructura } = r;
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify(rSinEstructura, null, 2));
+  if (estructura) escribir(path.join(dir, 'estructura.json'), JSON.stringify(estructura, null, 2));
+  // extractor: validado | extraido | parcial | sin-datos  ->  categorías del informe.
+  // Solo cuenta como "descargado" si realmente trajo filas; 0 filas (cero confirmado o ausencia
+  // incierta) va a "relevado", nunca a "descargado sin validar".
+  // El estado del informe sale de la validación final (calidad.js): columnas reales, paginación,
+  // total, período y fechas. Un cero solo es 'validado' si la grilla propia estaba presente y vacía.
+  const estado = estadoInforme(r.calidad, r.filas) ?? 'relevado';
+  const motivo = r.motivo ?? (r.calidad.motivos.length ? r.calidad.motivos.join('; ') : undefined);
+  return {
+    estado,
+    archivos: r.archivos,
+    filas: r.filas,
+    motivo,
+    ceroConfirmado: r.ceroConfirmado,
+    calidad: r.calidad,
+    intentos: [{ id: servicio.id, dirIntento, clave: claveDe(r, periodo), resultado: rSinEstructura }],
+    validaciones: [{
+      desde: periodo.desde, hasta: periodo.hasta, filas: r.filas, informados: r.informados,
+      ok: r.calidad.validado, nivel: r.calidad.nivel, cantidadVerificada: r.calidad.total === 'coincide',
+      estadoExtractor: r.estado, conFiltroPeriodo: r.conFiltroPeriodo, rangoAplicado: r.rangoAplicado,
+      paginas: r.paginas, finPaginacion: r.finPaginacion, motivo, ceroConfirmado: r.ceroConfirmado,
+      calidad: r.calidad, resumenEstados: r.resumenEstados,
+    }],
+  };
+}
+
+/**
+ * SIFERE (Convenio Multilateral, dominio COMARB). Entra por URL directa, selecciona el CUIT y baja
+ * los LISTADOS de SOLO LECTURA (DDJJ mensuales, DDJJ anuales): grillas DataTables reales con la
+ * historia de presentaciones. No toca "Nueva DJ" ni nada de presentación/pago. La sesión de clave
+ * fiscal federa a COMARB; si COMARB pidiera completar el login, el listado no traerá filas y queda
+ * 'relevado' con la estructura capturada (acceso ≠ descarga).
+ */
+async function correrSifere(sesion, servicio, dir, periodo, log, ctx = {}) {
+  let pagina = await sesion.abrirServicio(servicio); // login de clave fiscal -> SIFERE
+  // SIFERE/COMARB tiene su PROPIO login de clave fiscal (la sesión de ARCA no alcanza). Si la
+  // entrada cae en el login de AFIP o en "Sesión Expirada", esperamos a que el usuario lo complete
+  // en la ventana visible (hasta ~3 min) y aterrice en el módulo de SIFERE. Igual que el login
+  // inicial, no se tipea la clave: la pone la persona. Si no llega, queda 'relevado' honesto.
+  const hostModulo = servicio.hostModulo ?? /sifereweb\.comarb\.gob\.ar/;
+  const enModulo = (u) => hostModulo.test(u) && !/SesionExpirada|login\.xhtml|auth\.afip|^chrome-error:/i.test(u);
+  // Corrida 2026-10-28T21-19-50: el acceso abrió una pestaña de COMARB que no cargó («No se puede acceder a este sitio
+  // web»). Eso no es un login pendiente: se dice así y no se esperan 3 minutos.
+  const sinConexion = async () => {
+    for (const p of sesion?.context?.pages?.() ?? [pagina]) {
+      if (/^chrome-error:/i.test(p.url()) && /comarb/i.test(await p.title().catch(() => ''))) return p;
+    }
+    return null;
+  };
+  // Corrida 2026-10-22T19-49-58: waitForURL se resolvía con una URL de sifereweb de PASO, justo antes
+  // del redirect a SesionExpirada. Ahora exigimos que la URL quede en el módulo de forma ESTABLE (dos
+  // lecturas seguidas) y, si cae en SesionExpirada, reabrimos la entrada de login (hasta 2 veces).
+  await pagina.waitForTimeout(2500).catch(() => {});
+  let conexionFallida = !!(await sinConexion());
+  // Un solo reintento si COMARB no cargó (corrida del 28/10: fue un corte de conexión, no un login): se cierra la pestaña
+  // con error, se espera un momento y se vuelve a abrir el acceso. Si sigue sin cargar, se registra y se sigue.
+  if (conexionFallida) {
+    log('  SIFERE: COMARB no cargó; reintento una vez en unos segundos.');
+    for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
+    await new Promise((r) => setTimeout(r, servicio.esperaReintentoConexionMs ?? 10000));
+    try { pagina = await sesion.abrirServicio(servicio); await pagina.waitForTimeout(2500).catch(() => {}); conexionFallida = !!(await sinConexion()); } catch { /* sigue fallida */ }
+  }
+  if (!conexionFallida && !enModulo(pagina.url())) log('  SIFERE pide login de clave fiscal (COMARB): completalo en la ventana visible. Espero hasta 3 minutos.');
+  const limite = Date.now() + 180000;
+  let estables = 0, reintentos = 0;
+  while (!conexionFallida && Date.now() < limite) {
+    if (await sinConexion()) { conexionFallida = true; break; }
+    const u = pagina.url();
+    if (enModulo(u)) {
+      if (++estables >= 2) break;
+    } else {
+      estables = 0;
+      if (/SesionExpirada/i.test(u) && reintentos < 2 && servicio.url) {
+        reintentos++;
+        log(`  SIFERE: sesión expirada, reabro la entrada de login (intento ${reintentos}/2).`);
+        await pagina.goto(servicio.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    }
+    await pagina.waitForTimeout(1500);
+  }
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  if (conexionFallida) log('  SIFERE: no se pudo conectar con COMARB (la página no cargó: «No se puede acceder a este sitio web»). No es un login: es el sitio o la red. Sigo con lo que haya.');
+  else if (!enModulo(pagina.url())) log('  SIFERE: no se llegó al módulo (login no completado o sesión expirada); sigo con lo que haya.');
+  else log(`  SIFERE: en el módulo (${sanitizarUrl(pagina.url()).replace(/^https?:\/\/[^/]+/, '')}).`);
+  // Pantalla "Seleccionar CUIT": elegimos el CUIT (si hay combo) y confirmamos. Solo navegación.
+  try {
+    const sel = pagina.locator('select').first();
+    if (await sel.count().catch(() => 0)) {
+      const cuit = sesion?.cfg?.cuit ? String(sesion.cfg.cuit).replace(/\D/g, '') : null;
+      if (cuit) await sel.selectOption({ label: new RegExp(cuit) }).catch(() => {});
+    }
+    let btn = pagina.locator('input[value*="eleccionar" i]');
+    if (!(await btn.count().catch(() => 0))) btn = pagina.locator('button, a, [role=button]').filter({ hasText: /^\s*seleccionar\s*$/i });
+    if (await btn.count().catch(() => 0)) {
+      await btn.first().click().catch(() => {});
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2000);
+    }
+  } catch { /* si no aparece la pantalla de CUIT, seguimos a los listados */ }
+
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const sub = []; const intentos = [];
+  const enSesion = enModulo(pagina.url());
+  for (const g of servicio.grillas ?? []) {
+    const idSub = `${servicio.id}-${g.id}`;
+    const dirIntento = ctx.dirIntento?.(idSub) ?? null;
+    try {
+      // Sin conexión con COMARB no se intenta nada: se registra y no se pisa lo guardado.
+      if (conexionFallida) throw new Error('no se pudo conectar con COMARB (el sitio no cargó)');
+      // SIFERE Consultas: pagos por jurisdicción con sus filtros (sifereConsultas.js); camino propio, sin la grilla genérica.
+      if (g.navegar === 'consultas-pagos') {
+        const r = await leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log });
+        sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, finPaginacion: r.finPaginacion, consultas: r.consultas, exportaciones: r.exportaciones });
+        intentos.push({ id: idSub, dirIntento, clave: r.consultas.some((c) => c.estado === 'consultada') ? r.clave : null, resultado: r });
+        log(`  sifere/${g.id}: ${r.consultas.map((c) => `${c.jurisdiccion}: ${c.estado}${c.filas ? ` (${c.filas})` : ''}`).join(' · ') || r.motivo}`);
+        continue;
+      }
+      const via = await irAListado(pagina, g.url);
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2500);
+      log(`  sifere/${g.id}: abierto por ${via}`);
+      // Si COMARB nos manda a "Sesión Expirada", el listado NO se lee (y no pisa lo conservado).
+      if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al abrir el listado (no se completó el login)');
+      const servSub = { id: idSub, columnasEsperadas: g.columnasEsperadas };
+      const r = await extraerTablaEnPagina(pagina, servSub, { desde: periodo.desde, hasta: periodo.hasta, outDir: path.join(outBase, 'datos'), dirSalida: dirIntento, log });
+      r.calidad = evaluarCalidad(servSub, r, { desde: periodo.desde, hasta: periodo.hasta });
+      sub.push({ sub: g.id, filas: r.filas, estado: r.estado, archivos: r.archivos, motivo: r.motivo, calidad: r.calidad, resumenEstados: r.resumenEstados, finPaginacion: r.finPaginacion });
+      intentos.push({ id: idSub, dirIntento, clave: claveDe(r, periodo), resultado: r });
+      log(`  sifere/${g.id}: ${r.estado} · ${r.filas} filas${r.resumenEstados ? ` · ${JSON.stringify(r.resumenEstados)}` : ''}`);
+    } catch (e) {
+      const error = sanitizarTexto(e?.message ?? String(e));
+      log(`  sifere/${g.id}: error · ${error}`); // el motivo también en la consola, no solo en resultado.json
+      sub.push({ sub: g.id, filas: 0, estado: 'error', error });
+      intentos.push({ id: idSub, dirIntento, clave: null, resultado: { estado: 'error', filas: 0, error } });
+    }
+  }
+  // Reporte (PDF) de cada CM03 presentada de los meses de la corrida y los seis anteriores: se baja y se lee. Solo si el
+  // listado se pudo abrir con sesión, y sin tocar ningún control que no sea inequívocamente «Reporte».
+  let reportes = null;
+  if (servicio.reportesCm03 && enSesion && periodo) {
+    try {
+      await irAListado(pagina, servicio.reportesCm03);
+      await pagina.waitForLoadState('networkidle').catch(() => {});
+      await pagina.waitForTimeout(2000);
+      if (/SesionExpirada/i.test(pagina.url())) throw new Error('COMARB: sesión expirada al volver al listado');
+      reportes = await bajarReportesCm03(pagina, { meses: mesesDeLaCorrida(periodo, 6), outDir: outBase, log });
+      for (const r of reportes.reportes) log(`  sifere/reporte ${r.anticipo}: ${r.decision}${r.estado ? ` (${r.estado})` : ''}${r.motivo ? ` · ${r.motivo}` : ''}`);
+    } catch (e) { reportes = { error: sanitizarTexto(e?.message ?? String(e)), reportes: [] }; }
+  }
+  const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ sub, reportes, conexionFallida }, null, 2));
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  // Pestañas de COMARB que no cargaron: se cierran para que no queden abiertas en el resto de la corrida.
+  for (const p of sesion?.context?.pages?.() ?? []) if (p !== sesion.page && /^chrome-error:/i.test(p.url())) await p.close().catch(() => {});
+
+  const filas = sub.reduce((n, s) => n + (s.filas ?? 0), 0);
+  const archivos = sub.flatMap((s) => s.archivos ?? []);
+  // Validado solo si TODOS los listados se validaron; con filas pero sin validar, descargado.
+  const estado = sub.length && sub.every((x) => x.calidad?.validado) ? 'validado' : filas > 0 ? 'descargado' : 'relevado';
+  return {
+    estado,
+    archivos, filas, intentos,
+    motivo: filas > 0 ? undefined : conexionFallida ? `SIFERE (${servicio.nombre}): no se pudo conectar con COMARB (el sitio no cargó); se conserva lo obtenido antes` : servicio.soloRelevamiento ? `SIFERE (${servicio.nombre}): solo relevamiento, sin clics; estructura en estructura.json${enSesion ? '' : ' (COMARB no quedó con sesión)'}`
+      : `SIFERE: no se obtuvieron filas de los listados${enSesion ? '' : ' (COMARB no quedó con sesión: completá el login en la ventana visible)'}; se conserva lo obtenido antes`,
+    validaciones: sub.map((s) => ({ sub: s.sub, filas: s.filas, estadoExtractor: s.estado, nivel: s.calidad?.nivel ?? null, ok: !!s.calidad?.validado,
+      motivo: s.calidad?.motivos?.length ? s.calidad.motivos.join('; ') : (s.motivo ?? s.error), calidad: s.calidad,
+      finPaginacion: s.finPaginacion, resumenEstados: s.resumenEstados })),
+    ...(reportes ? { reportesCm03: reportes } : {}),
+  };
+}
+
+/**
+ * Abre un listado de SIFERE con el enlace de su propio menú (como lo hace la persona), que conserva la sesión del
+ * módulo; si el enlace no está en la página, por la dirección. Los controladores son de listado (solo lectura).
+ */
+async function irAListado(pagina, url) {
+  const controlador = url.split('/').pop();
+  const enlace = pagina.locator(`a[href$="${controlador}"]`).first();
+  if (await enlace.count().catch(() => 0)) {
+    // Los ítems del menú desplegable están ocultos: clic del DOM sobre ese mismo enlace.
+    await Promise.all([pagina.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}), enlace.evaluate((el) => el.click())]);
+    return 'el menú de SIFERE';
+  }
+  await pagina.goto(url, { waitUntil: 'domcontentloaded' });
+  return 'la dirección';
+}
+
+/**
+ * Pagos de SIFERE Consultas del anticipo de la corrida, una consulta por jurisdicción de la CM03 con importe a pagar. Se
+ * guarda un CSV con los pagos y, además, una fila de constancia por cada jurisdicción consultada sin pagos o sin consulta
+ * confirmada (columna «Resultado de la consulta»): así el panel distingue «SIFERE no informa pagos» de «no se pudo
+ * consultar» y de «no se consultó». Sin CM03 leída no se consulta (no se sabe qué jurisdicciones).
+ */
+async function leerPagosConsultas(pagina, { idSub, periodo, outBase, dirIntento, log }) {
+  const mes = periodo.desde.slice(0, 7);
+  const cm = cm03DelPeriodo(outBase, mes).vigente;
+  const base = { id: idSub, archivos: [], filas: 0, columnas: [], conFiltroPeriodo: true, consultas: [], exportaciones: [] };
+  if (!cm) return { ...base, estado: 'sin-datos', motivo: `no hay CM03 de ${mes} leída: no se sabe qué jurisdicciones consultar`, calidad: evaluarCalidad({ id: idSub }, base, periodo) };
+  const jur = cm.jurisdicciones.filter((j) => j.aPagar > 0);
+  if (!jur.length) return { ...base, estado: 'sin-datos', motivo: `la CM03 de ${mes} no deja importe a pagar en ninguna jurisdicción`, calidad: evaluarCalidad({ id: idSub }, base, periodo) };
+  const res = await consultarPagosConsultas(pagina, { mes, jurisdicciones: jur, outDir: outBase, log });
+  const headers = res.headers.length ? res.headers : ['Jurisdicción consultada', 'Período consultado'];
+  const filas = res.rows.map((f) => [...f, 'pago']);
+  for (const c of res.consultas.filter((x) => !x.filas)) {
+    const f = headers.map(() => ''); f[headers.length - 2] = c.jurisdiccion; f[headers.length - 1] = `${mes}-01`;
+    filas.push([...f, c.estado === 'consultada' ? 'sin pagos informados por SIFERE' : `sin consulta confirmada: ${c.motivo}`]);
+  }
+  const columnas = [...headers, 'Resultado de la consulta'];
+  if (dirIntento && filas.length) {
+    escribir(path.join(dirIntento, `${idSub}.csv`), toCsv(filas, columnas.map((h, i) => ({ header: h, value: (x) => x[i] ?? '' }))));
+    base.archivos.push(`${idSub}.csv`);
+  }
+  const confirmadas = res.consultas.every((c) => c.estado === 'consultada');
+  // filas = lo guardado (pagos + constancias de jurisdicciones consultadas sin pagos o sin confirmar). Los PAGOS reales se
+  // cuentan aparte, por jurisdicción (registros/registrosPorGrupo): la conservación los compara para que una lectura nueva
+  // «sin pagos» nunca reemplace pagos guardados antes (conservacion.js > reduccionDeRegistros).
+  const registrosPorGrupo = Object.fromEntries(res.consultas.filter((c) => c.estado === 'consultada').map((c) => [c.jurisdiccion, c.filas ?? 0]));
+  // La clave es el ANTICIPO consultado (no la ventana de la corrida): una lectura de otro día del mismo anticipo se compara
+  // con la guardada en vez de sumarse aparte.
+  const [ya, ma] = mes.split('-').map(Number);
+  const clave = `${mes}-01_${new Date(Date.UTC(ya, ma, 0)).toISOString().slice(0, 10)}`;
+  const r = { ...base, clave, filas: filas.length, pagos: res.rows.length, registros: res.rows.length, registrosPorGrupo, columnas, estado: filas.length ? 'extraido' : 'sin-datos', consultas: res.consultas, exportaciones: res.exportaciones,
+    rangoOk: true, rangoAplicado: { desde: `${mes}-01`, hasta: `${mes}-01` },
+    finPaginacion: res.consultas.every((c) => c.paginas !== 'incompleta') ? 'sin-siguiente' : null,
+    ceroConfirmado: !res.rows.length && confirmadas,
+    motivo: confirmadas ? undefined : `consultas sin confirmar: ${res.consultas.filter((c) => c.estado !== 'consultada').map((c) => `${c.jurisdiccion} (${c.motivo})`).join('; ')}` };
+  // El período consultado (el anticipo, como AAAA-MM-01) es la columna de fecha que se verifica contra la ventana.
+  r.fechas = verificarFechas(columnas, filas, periodo.desde, periodo.hasta, 'Período consultado');
+  r.calidad = evaluarCalidad({ id: idSub, columnasEsperadas: ['Jurisdicción consultada'] }, r, periodo);
+  // Una lectura con alguna jurisdicción sin consulta confirmada, o con la paginación incompleta, no es completa: queda
+  // como evidencia (nunca vigente), aunque las constancias formen una grilla «válida».
+  const faltas = [!confirmadas ? r.motivo : null, r.finPaginacion !== 'sin-siguiente' ? 'paginación incompleta en alguna jurisdicción' : null].filter(Boolean);
+  if (faltas.length) r.calidad = { ...r.calidad, nivel: r.filas ? 'obtenido' : 'sin-datos', validado: false, apto: false, exito: false, motivos: [...r.calidad.motivos, ...faltas] };
+  return r;
+}
+
+/** Meses ('AAAA-MM') del período de la corrida, más los `antes` meses anteriores a su inicio. Pura. */
+export function mesesDeLaCorrida(periodo, antes = 0) {
+  const [y0, m0] = periodo.desde.slice(0, 7).split('-').map(Number); const fin = periodo.hasta.slice(0, 7);
+  let y = y0, m = m0 - antes; while (m < 1) { m += 12; y -= 1; }
+  const out = [];
+  for (let i = 0; i < 240; i++) {
+    const k = `${y}-${String(m).padStart(2, '0')}`;
+    if (k > fin) break;
+    out.push(k); m += 1; if (m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+
+/**
+ * CCMA (autónomos): abre la cuenta corriente y LEE las tablas que muestra (ccma.js), sin completar campos ni hacer clic
+ * (nunca «Pagar»). La grilla se reconoce por su fila de encabezados; sin una reconocible, queda 'relevado' con la
+ * estructura y la muestra de filas para escribir la regla con evidencia.
+ */
+async function correrCcma(sesion, servicio, dir, periodo, log, ctx = {}) {
+  const pagina = await abrirSistema(sesion, servicio, dir, log);
+  await pagina.waitForLoadState('networkidle').catch(() => {});
+  // Al abrir solo está el formulario: se consulta la deuda de los últimos doce meses (nunca «Pagar»).
+  const consulta = periodo ? await calcularDeudaCcma(pagina, periodo, { log }).catch((e) => ({ consultado: false, motivo: sanitizarTexto(e.message) })) : null;
+  if (consulta && !consulta.consultado) log(`  ccma: no se consultó: ${consulta.motivo}`);
+  const tablas = [];
+  for (const f of pagina.frames()) tablas.push(...await f.evaluate(extraerTablasEnDocumento).catch(() => []));
+  const g = leerCcma(tablas);
+  const dirIntento = ctx.dirIntento?.(servicio.id) ?? null;
+  const r = { id: servicio.id, archivos: [], filas: g?.rows.length ?? 0, columnas: g?.headers ?? [], estado: g ? 'extraido' : 'sin-datos', conFiltroPeriodo: false,
+    finPaginacion: g ? 'sin-siguiente' : null, totales: g?.totales.length ?? 0, consulta,
+    motivo: g ? undefined : `CCMA: ninguna tabla tiene una fila de encabezados reconocible (período, importe, saldo…)${consulta?.consultado ? ' después de «Calcular deuda»' : ''}; estructura y muestra en estructura.json` };
+  if (g && g.rows.length && dirIntento) {
+    const archivo = 'ccma-cuenta-corriente.csv';
+    escribir(path.join(dirIntento, archivo), toCsv(g.rows, g.headers.map((h, i) => ({ header: h || `Columna ${i + 1}`, value: (x) => x[i] ?? '' }))));
+    r.archivos.push(archivo);
+  }
+  r.calidad = evaluarCalidad(servicio, r, { desde: periodo?.desde, hasta: periodo?.hasta });
+  const todas = await relevarTodasLasPaginas(sesion, pagina).catch(() => []);
+  escribir(path.join(dir, 'estructura.json'), JSON.stringify(todas, null, 2));
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify(r, null, 2));
+  if (pagina !== sesion.page) await pagina.close().catch(() => {});
+  log(`  ccma: ${r.filas} fila(s) de ${tablas.length} tabla(s) leída(s)${g ? ` · columnas: ${g.headers.filter(Boolean).slice(0, 8).join(' / ')}` : ''}`);
+  return { estado: estadoInforme(r.calidad, r.filas) ?? (r.filas ? 'descargado' : 'relevado'), archivos: r.archivos, filas: r.filas, motivo: r.motivo ?? (r.calidad.motivos.join('; ') || undefined),
+    calidad: r.calidad, intentos: [{ id: servicio.id, dirIntento, clave: g ? claveDe(r, periodo) : null, resultado: r }] };
+}
+
+/**
+ * Mis Comprobantes: descarga real con el extractor dedicado (validado). Los archivos y el
+ * manifiesto van a una carpeta PERSISTENTE (out/datos/<id>), compartida entre corridas, para
+ * reutilizar descargas históricas. La carpeta de la corrida solo guarda el resumen.
+ */
+async function correrMisComprobantes(sesion, servicio, dir, periodo, log) {
+  const outBase = sesion?.cfg?.outDir ?? 'out';
+  const datosDir = path.join(outBase, 'datos', servicio.id);
+  const r = await descargarMisComprobantes(sesion, { tipo: servicio.tipo, desde: periodo.desde, hasta: periodo.hasta, outDir: datosDir, rehacer: periodo.rehacer, log });
+  escribir(path.join(dir, 'resultado.json'), JSON.stringify({ datosDir, ...r }, null, 2));
+  const estado = r.verificado ? 'validado' : (r.archivos.length ? 'descargado' : 'con-datos');
+  return { estado, archivos: r.archivos.map((a) => path.basename(a)), validaciones: r.validaciones };
+}
+
+/**
+ * Corre un servicio aislado: cualquier error se captura y se devuelve como estado 'error' o
+ * 'desafio', sin propagarse. `correrServicio` se puede inyectar para los tests.
+ */
+export async function correrUno(sesion, servicio, { baseDir, periodo, log = () => {}, runner, datosDir = null } = {}) {
+  const dir = path.join(baseDir, slug(servicio.id));
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const inicio = Date.now();
+  // Conservación: los archivos de cada intento van a out/datos/<fuente>/intentos/<corrida>/ y solo
+  // se promueven a vigente si son al menos tan buenos como lo conservado. En los tests con runner
+  // inyectado no se toca disco fuera de baseDir salvo que se pase datosDir.
+  const cuando = path.basename(baseDir);
+  const datos = datosDir ?? (runner ? null : path.join(sesion?.cfg?.outDir ?? 'out', 'datos'));
+  const ctx = { dirIntento: datos ? (id) => path.join(datos, id, 'intentos', cuando) : () => null };
+  const conservar = (r) => {
+    if (!datos) return r;
+    const { intentos, ...resto } = r;
+    try {
+      if (intentos?.length) {
+        resto.conservacion = intentos.map((it) => ({ id: it.id, ...conservarIntento({ datosDir: datos, id: it.id, cuando, clave: it.clave,
+          resultado: it.resultado, dirIntento: it.dirIntento, desde: periodo?.desde, hasta: periodo?.hasta }) }));
+      } else {
+        registrarIntento({ datosDir: datos, id: servicio.id, cuando, resultado: resto });
+      }
+    } catch (e) { log(`[${servicio.id}] no se pudo registrar el intento: ${sanitizarTexto(e?.message ?? String(e))}`); }
+    return resto;
+  };
+  // Servicio con bloqueo conocido (p. ej. no adherido a la clave fiscal): se reporta, no se abre.
+  if (servicio.bloqueo && !runner) {
+    const msg = sanitizarTexto(servicio.bloqueo);
+    escribir(path.join(dir, 'bloqueo.txt'), msg);
+    log(`[${servicio.id}] sin-acceso (bloqueo): ${msg}`);
+    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado: 'sin-acceso', error: msg };
+  }
+  const run = runner ?? (async () => {
+    if (servicio.extractor === 'mis-comprobantes') return correrMisComprobantes(sesion, servicio, dir, periodo, log);
+    if (servicio.extractor === 'tabla') return correrTabla(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'sifere') return correrSifere(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'iva-ddjj') return correrIvaDdjj(sesion, servicio, dir, periodo, log, ctx);
+    if (servicio.extractor === 'ccma') return correrCcma(sesion, servicio, dir, periodo, log, ctx);
+    return correrGenerico(sesion, servicio, dir, periodo, log, ctx);
+  });
+  try {
+    log(`[${servicio.id}] abriendo ${servicio.nombre}`);
+    const r = conservar(await run());
+    log(`[${servicio.id}] ${r.estado}${(r.conservacion ?? []).map((c) => ` · ${c.id}: ${c.motivo}`).join('')}`);
+    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, ...r };
+  } catch (e) {
+    const estado = e?.name === 'DesafioDeSeguridad' ? 'desafio' : (/no encontré|no pude abrir|timeout/i.test(e.message) ? 'sin-acceso' : 'error');
+    // El mensaje y el stack pueden contener texto de la pantalla: se sanean antes de guardar o devolver.
+    const msg = sanitizarTexto(e.message);
+    log(`[${servicio.id}] ${estado}: ${msg}`);
+    escribir(path.join(dir, 'error.txt'), sanitizarTexto(`${e.name}: ${e.message}\n${e.stack ?? ''}`));
+    // El intento fallido también queda registrado (y no toca lo conservado).
+    if (datos) {
+      const subs = servicio.extractor === 'sifere' ? (servicio.grillas ?? []).map((g) => `${servicio.id}-${g.id}`) : [servicio.id];
+      for (const id of subs) { try { conservarIntento({ datosDir: datos, id, cuando, clave: null, resultado: { estado, filas: 0, error: msg } }); } catch { /* best-effort */ } }
+    }
+    return { id: servicio.id, nombre: servicio.nombre, fuente: servicio.fuente, confirmado: servicio.confirmado, ms: Date.now() - inicio, estado, error: msg };
+  }
+}
+
+/** Genera el informe de cobertura (objeto + texto) a partir de los resultados de la corrida. */
+export function generarCobertura(resultados, { cuit, cuando } = {}) {
+  const orden = { validado: 0, descargado: 1, 'con-datos': 2, relevado: 3, 'sin-acceso': 4, desafio: 5, error: 6 };
+  const filas = [...resultados].sort((a, b) => (orden[a.estado] ?? 9) - (orden[b.estado] ?? 9));
+  const conteo = {};
+  for (const r of resultados) conteo[r.estado] = (conteo[r.estado] ?? 0) + 1;
+  const detalleDe = (r) => {
+    if (r.estado === 'validado' || r.estado === 'descargado') {
+      const vals = r.validaciones ?? [];
+      const totFilas = vals.map((v) => v.filas ?? 0).reduce((a, b) => a + b, 0);
+      const dup = vals.map((v) => v.duplicados ?? 0).reduce((a, b) => a + b, 0);
+      const reut = vals.filter((v) => v.reutilizado).length;
+      const sinVerif = vals.filter((v) => v.cantidadVerificada === false).length;
+      return `${vals.length} período(s)${reut ? `, ${reut} reutilizado(s)` : ''}; ${totFilas} filas; ${dup} duplicados${sinVerif ? `; ${sinVerif} con cantidad no verificada` : ''}`;
+    }
+    if (r.estado === 'con-datos' || r.estado === 'relevado') {
+      // Resultado de un extractor de tabla con 0 filas: mostrar si es cero confirmado o incierto.
+      if (r.motivo) return r.motivo;
+      return `${r.filas ?? 0} filas en pantalla; export: ${r.exportacion?.length ? r.exportacion.map((e) => e.texto).join('/') : 'no visible'}; ${r.listoParaExtractor ? 'listo para extractor' : 'faltan filtros/consulta'}`;
+    }
+    if (r.error) return r.error.slice(0, 120);
+    return '';
+  };
+  // Evidencia extra por fila: por qué no se validó, cómo se navegó y qué se conservó.
+  const extras = (r) => {
+    const x = [];
+    const nivelTxt = { apto: 'APTO para cálculos', validado: 'validado, sin total de ARCA: no apto para cálculos', obtenido: 'obtenido sin validar (evidencia)' };
+    if (r.calidad?.nivel && nivelTxt[r.calidad.nivel]) x.push(nivelTxt[r.calidad.nivel]);
+    for (const v of r.validaciones ?? []) if (v.sub && v.nivel) x.push(`${v.sub}: ${nivelTxt[v.nivel] ?? v.nivel}`);
+    // Por qué no llegó a "apto"/"validado": el detalle de descargado/validado no muestra el motivo.
+    if ((r.estado === 'descargado' || r.estado === 'validado') && r.calidad?.motivos?.length) x.push(`motivo: ${r.calidad.motivos.join('; ')}`);
+    else if (r.estado === 'validado' && r.ceroConfirmado && r.motivo) x.push(r.motivo);
+    if (r.drill?.recorrido?.length) x.push(`ruta: ${r.drill.recorrido.map((p) => `${p.paso}=${p.via}`).join(', ')}`);
+    for (const c of r.conservacion ?? []) if (!c.promovido && c.vigente) x.push(`${c.id}: ${c.motivo}`);
+    return x.length ? ` · ${x.join(' · ')}` : '';
+  };
+  const fila = (r) => `| ${r.nombre} | ${r.fuente} | **${r.estado}** | ${String(detalleDe(r) + extras(r)).replace(/\|/g, '/')} |`;
+  // Las cuatro categorías que pide la issue #1.
+  const secciones = [
+    ['Descargado y validado', (r) => r.estado === 'validado'],
+    ['Descargado sin validar', (r) => r.estado === 'descargado'],
+    ['Solo relevado (inspeccionado, sin descarga)', (r) => r.estado === 'con-datos' || r.estado === 'relevado'],
+    ['Sin acceso o bloqueo', (r) => ['sin-acceso', 'desafio', 'error'].includes(r.estado)],
+  ];
+
+  const cuitMask = cuit ? String(cuit).replace(/^(\d{2})\d{6,8}(\d)$/, '$1-XXXXXXXX-$2') : null;
+  const txt = [];
+  txt.push(`# Cobertura FiscalOS${cuitMask ? ` · CUIT ${cuitMask}` : ''}${cuando ? ` · ${cuando}` : ''}`);
+  txt.push('');
+  txt.push('Resumen: ' + ESTADOS.filter((e) => conteo[e]).map((e) => `${conteo[e]} ${e}`).join(', '));
+  txt.push('', 'Esta tabla es solo ESTA corrida. Qué períodos están cubiertos (con lo conservado de corridas anteriores) está en `cobertura-historica.md`.');
+  for (const [titulo, filtro] of secciones) {
+    const grupo = filas.filter(filtro);
+    txt.push('', `## ${titulo}`);
+    if (!grupo.length) { txt.push('_(ninguno)_'); continue; }
+    txt.push('| Servicio | Fuente | Estado | Detalle |', '|---|---|---|---|');
+    for (const r of grupo) txt.push(fila(r));
+  }
+  const porCategoria = Object.fromEntries(secciones.map(([t, f]) => [t, filas.filter(f).map((r) => r.id)]));
+  return { objeto: { cuando, cuit, conteo, categorias: porCategoria, servicios: filas }, texto: txt.join('\n') };
+}
+
+/**
+ * Escribe/actualiza los informes de la corrida (cobertura + diagnóstico integral) con lo que haya
+ * hasta el momento. Se llama DESPUÉS DE CADA servicio (no solo al final), para que si la corrida se
+ * corta en el último servicio (el más frágil, p. ej. Retenciones), igual queden los informes de
+ * todo lo anterior. Es barato (son ~16 servicios) y hace la corrida tolerante a fallos duros.
+ */
+/** Fuentes de la matriz histórica: cada servicio, y los listados de SIFERE como fuentes propias. */
+export function fuentesDe(servicios) {
+  return servicios.filter((s) => !s.soloRelevamiento).flatMap((s) => (s.extractor === 'sifere' && s.grillas?.length
+    ? s.grillas.map((g) => ({ id: `${s.id}-${g.id}`, nombre: `SIFERE · ${g.id}` }))
+    : [{ id: s.id, nombre: s.nombre }]));
+}
+
+function escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando, { datosDir = null, historicoDesde = null } = {}) {
+  const cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
+  // Cobertura HISTÓRICA (lo conservado entre corridas, no solo esta): en out/datos y en la corrida.
+  if (datosDir) {
+    const matriz = generarMatrizCobertura(datosDir, fuentesDe(servicios), { historicoDesde });
+    escribir(path.join(datosDir, 'cobertura-historica.json'), JSON.stringify(matriz.objeto, null, 2));
+    escribir(path.join(datosDir, 'cobertura-historica.md'), matriz.texto);
+    escribir(path.join(baseDir, 'cobertura-historica.md'), matriz.texto);
+  }
+  escribir(path.join(baseDir, 'cobertura.json'), JSON.stringify(cobertura.objeto, null, 2));
+  escribir(path.join(baseDir, 'cobertura.md'), cobertura.texto);
+  // Diagnóstico INTEGRAL en un solo archivo: el DOM saneado de cada servicio (todas sus pestañas).
+  // Es lo único que hace falta mandar para escribir todos los extractores sin más corridas a ciegas. Se vuelve a
+  // sanear al juntarlo (cada estructura.json ya lo está): así ningún bloque que se agregue después queda afuera.
+  const integral = {};
+  for (const s of servicios) {
+    const f = path.join(baseDir, slug(s.id), 'estructura.json');
+    if (fs.existsSync(f)) { try { integral[s.id] = sanear(JSON.parse(fs.readFileSync(f, 'utf8'))); } catch { /* ignore */ } }
+  }
+  escribir(path.join(baseDir, 'diagnostico-integral.json'), JSON.stringify(integral, null, 2));
+  escribir(path.join(outDir, 'ultima.txt'), baseDir); // puntero a la última corrida
+  return cobertura;
+}
+
+/** Recorre todos los servicios, aislando fallos, y persiste la corrida. */
+export async function ejecutarTodo(sesion, { servicios, periodo, outDir = 'out/corridas', log = () => {}, runner, datosDir = null,
+  historicoDesde = process.env.FISCALOS_HISTORICO_DESDE || null, periodoDe = null } = {}) {
+  const cuando = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const baseDir = path.join(outDir, cuando);
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+  // Datos conservados entre corridas. Con runner inyectado (tests) solo si se pasa datosDir explícito.
+  const datos = datosDir ?? (runner ? null : path.join(sesion?.cfg?.outDir ?? path.dirname(outDir), 'datos'));
+  const resultados = [];
+  let cobertura = generarCobertura(resultados, { cuit: sesion?.cfg?.cuit, cuando });
+  for (const s of servicios) {
+    // Doble red: correrUno ya aísla sus errores, pero por las dudas envolvemos igual para que NADA
+    // (ni un error inesperado al abrir el servicio) corte la corrida antes de escribir los informes.
+    try {
+      // Si una pantalla anterior cerró la pestaña principal (o el navegador), se recupera antes de seguir.
+      if (typeof sesion?.asegurarVivo === 'function') {
+        try { await sesion.asegurarVivo(); } catch (e) { log(`[${s.id}] no se pudo recuperar el navegador: ${sanitizarTexto(e?.message ?? String(e))}`); }
+      }
+      // `periodoDe`: cada fuente con su ventana (p. ej. los pagos hasta ayer, la DJ solo del mes).
+      const per = periodoDe?.(s) ?? periodo;
+      resultados.push(await correrUno(sesion, s, { baseDir, periodo: per, log, datosDir: datos, runner: runner ? () => runner(s, per) : undefined }));
+    } catch (e) {
+      const error = sanitizarTexto(e?.message ?? String(e));
+      log(`[${s.id}] error aislado en el orquestador: ${error}`);
+      resultados.push({ id: s.id, nombre: s.nombre, fuente: s.fuente, confirmado: s.confirmado, estado: 'error', error });
+    }
+    // Persistimos los informes tras CADA servicio: si lo que viene después se cuelga, no se pierde
+    // nada de lo ya recorrido. Un fallo al escribir no corta la corrida.
+    try { cobertura = escribirInformes(baseDir, outDir, resultados, servicios, sesion, cuando, { datosDir: datos, historicoDesde }); }
+    catch (e) { log(`[informes] no se pudieron actualizar: ${sanitizarTexto(e?.message ?? String(e))}`); }
+  }
+  return { baseDir, resultados, cobertura };
+}

@@ -1,0 +1,13 @@
+{
+  "_doc": "Copiar a params/contribuyente.json. Datos propios del contribuyente que el modelo necesita y no salen de ARCA.",
+  "deduccionEspecial": "ap1",
+  "cargasFamilia": { "conyuge": 0, "hijos": 0 },
+  "deduccionesGeneralesAnuales": 0,
+  "_deduccionesGeneralesAnuales": "Aportes de autónomos, obra social, etc. que el contador computa.",
+  "autonomosMensual": 0,
+  "_autonomosMensual": "Cuota mensual de autónomos de la categoría vigente.",
+  "ingresosBrutos": [
+    { "jurisdiccion": "Ejemplo CABA", "coeficiente": 0.5, "alicuota": 0.03 }
+  ],
+  "_ingresosBrutos": "Convenio Multilateral: coeficiente unificado del CM05 vigente y alícuota de la actividad en cada jurisdicción. La suma de coeficientes debe dar 1."
+}
